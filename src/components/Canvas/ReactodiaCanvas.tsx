@@ -14,7 +14,7 @@ import { RdfMetadataProvider } from '@/providers/RdfMetadataProvider';
 import { RdfValidationProvider } from '@/providers/RdfValidationProvider';
 import { workerQuadsToRdf, type WorkerQuad as ConverterQuad } from '@/providers/quadConverter';
 import type { WorkerQuad } from '@/utils/rdfSerialization';
-import { setWorkspaceContext, registerReasoningCallback, registerSetViewMode } from '@/mcp/workspaceContext';
+import { setWorkspaceContext, registerReasoningCallback, registerClearInferredCallback, registerSetViewMode } from '@/mcp/workspaceContext';
 import { TopBar } from './TopBar';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import { LeftSidebar } from './LeftSidebar';
@@ -1022,6 +1022,7 @@ export default function ReactodiaCanvas() {
     dataProvider.clearInferred();
     rdfManager.removeGraph('urn:vg:inferred');
     setCurrentReasoning(null);
+    void rdfManager.emitAllSubjects('urn:vg:data');
   }, []);
 
   const handleRunReasoning = React.useCallback(async () => {
@@ -1076,6 +1077,10 @@ export default function ReactodiaCanvas() {
   React.useEffect(() => {
     registerReasoningCallback(handleRunReasoning);
   }, [handleRunReasoning]);
+
+  React.useEffect(() => {
+    registerClearInferredCallback(handleClearInferred);
+  }, [handleClearInferred]);
 
   React.useEffect(() => {
     registerSetViewMode(actions.setViewMode);

@@ -55,8 +55,12 @@ const clearInferred: McpTool = {
   },
   async handler(): Promise<McpResult> {
     try {
-      const { dataProvider } = getWorkspaceRefs();
-      await dataProvider.clearInferred();
+      const refs = getWorkspaceRefs();
+      if (refs.clearInferred) {
+        refs.clearInferred();
+      } else {
+        await refs.dataProvider.clearInferred();
+      }
       return { success: true, data: { cleared: true } };
     } catch (e) {
       return { success: false, error: String(e) };
