@@ -435,6 +435,22 @@ test('openwebui-socratic: Socratic pizza ontology — live qwen3:4b via OWUI rel
   await caption(page, 'Model familiarising with MCP tools — calling help()…');
   await waitQuiet(chatFrame, 15_000, 180_000);
   demoLog('step 6: help() cycle done — 15 s silent or 3 min elapsed');
+
+  // Sanity check: the relay must have dispatched at least one tool call during
+  // the help() cycle (the model should have called help() to get the manifest).
+  // If no relay result messages exist in the chat, the model failed to load or
+  // ignored the starter — abort now instead of recording 11 empty turns.
+  // Relay results are injected back as user messages containing "[Ontosphere →".
+  const relayResultCount = await chatFrame.evaluate(() =>
+    [...document.querySelectorAll('#chat-stream [data-message-author-role="user"], #chat-stream .msg-user')]
+      .filter(el => el.textContent?.includes('[Ontosphere')).length
+  );
+  if (relayResultCount === 0) {
+    demoLog('step 6: ABORT — no relay results after help() cycle (model failed to load or ignored starter)');
+    throw new Error('Model did not call any tools during help() cycle — likely failed to load. Re-run after checking OWUI model availability.');
+  }
+  demoLog(`step 6: help() cycle OK — ${relayResultCount} relay result(s) in chat`);
+
   // Brief pause so viewers see the model's response before Socratic turns begin.
   await sleep(3_000);
   await clearCaption(page);
