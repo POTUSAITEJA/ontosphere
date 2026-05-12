@@ -412,9 +412,11 @@ test('openwebui-socratic: Socratic pizza ontology — live qwen3:4b via OWUI rel
   await appFrame.evaluate(() => {
     const log = (window as any).__demoLog__ as (msg: string) => void;
     const tools = (window as any).__mcpTools as Record<string, (p: unknown) => Promise<unknown>>;
+    (window as any).__demoMcpCallCount__ = 0;
     for (const name of Object.keys(tools)) {
       const orig = tools[name];
       tools[name] = async (params: unknown) => {
+        (window as any).__demoMcpCallCount__++;
         const argStr = JSON.stringify(params ?? {});
         log(`[MCP→] ${name} ${argStr.length > 600 ? argStr.slice(0, 600) + '…' : argStr}`);
         const result = await orig(params);
@@ -440,16 +442,12 @@ test('openwebui-socratic: Socratic pizza ontology — live qwen3:4b via OWUI rel
   // the help() cycle (the model should have called help() to get the manifest).
   // If no relay result messages exist in the chat, the model failed to load or
   // ignored the starter — abort now instead of recording 11 empty turns.
-  // Relay results are injected back as user messages containing "[Ontosphere →".
-  const relayResultCount = await chatFrame.evaluate(() =>
-    [...document.querySelectorAll('#chat-stream [data-message-author-role="user"], #chat-stream .msg-user')]
-      .filter(el => el.textContent?.includes('[Ontosphere')).length
-  );
-  if (relayResultCount === 0) {
-    demoLog('step 6: ABORT — no relay results after help() cycle (model failed to load or ignored starter)');
+  const mcpCallCount = await appFrame.evaluate(() => (window as any).__demoMcpCallCount__ ?? 0);
+  if (mcpCallCount === 0) {
+    demoLog('step 6: ABORT — no MCP tool calls during help() cycle (model failed to load or ignored starter)');
     throw new Error('Model did not call any tools during help() cycle — likely failed to load. Re-run after checking OWUI model availability.');
   }
-  demoLog(`step 6: help() cycle OK — ${relayResultCount} relay result(s) in chat`);
+  demoLog(`step 6: help() cycle OK — ${mcpCallCount} MCP call(s) dispatched`);
 
   // Brief pause so viewers see the model's response before Socratic turns begin.
   await sleep(3_000);
