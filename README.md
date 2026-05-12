@@ -114,12 +114,14 @@ The API key is sent only with the RDF fetch request. CORS: the server must allow
 
 ### Ontology pre-loading
 
-| Parameter   | Alias        | Description |
-|-------------|--------------|-------------|
-| `ontology`  | `ontologies` | Comma-separated list of ontologies to load on startup, in addition to any configured autoload and `owl:imports` discovery. Each value is either a well-known short name (see table below) or an arbitrary HTTPS/HTTP URI. |
+| Parameter    | Description |
+|--------------|-------------|
+| `ontologies` | Comma-separated list of ontologies that **replaces** the configured autoload list entirely. Each value is a well-known short name (see table below) or a full HTTPS/HTTP URI. Use `?ontologies=owl,rdf,rdfs` to load only the W3C core vocabs. |
+| `ontology`   | Comma-separated list of ontologies to load **in addition to** the configured autoload list. |
 
 ```text
-?ontology=bfo,dcat
+?ontologies=owl,rdf,rdfs           # replace defaults — load only W3C core vocabs
+?ontology=bfo,dcat                 # add on top of configured autoload list
 ?ontology=bfo2020,https://example.org/myontology.ttl
 ```
 
@@ -476,7 +478,7 @@ The **AI Relay Bridge** connects any AI chat tab to Ontosphere with no server, e
 **Starter prompt** (paste into your AI chat after clicking the bookmarklet):
 
 ```text
-You are connected to Ontosphere via a relay. A script in this tab intercepts your tool calls, runs them in Ontosphere, and injects results back as a user message.
+You are connected to Ontosphere via a relay. A script in this tab intercepts your tool calls, runs them in Ontosphere, and injects results back as a user message. If a tool call returns success:false, read the error, fix the argument, and retry the same call immediately — never skip a failed call. Ask the user what they would like to build.
 
 Output format — one JSON-RPC 2.0 call per line, backtick-wrapped:
 `{"jsonrpc":"2.0","id":<N>,"method":"tools/call","params":{"name":"<toolName>","arguments":{...}}}`
