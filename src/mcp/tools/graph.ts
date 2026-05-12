@@ -7,6 +7,8 @@ import { mcpManifest, mcpServerDescription } from '@/mcp/manifest';
 import { Parser as SparqlParser, Generator as SparqlGenerator } from 'sparqljs';
 import { resolveOntologyLoadUrl, searchWellKnownOntologies, searchOntologyPacks } from '@/utils/wellKnownOntologies';
 import { useOntologyStore } from '@/stores/ontologyStore';
+import { LOAD_RDF_PROPAGATION_DELAY_MS } from '@/utils/canvasConstants';
+import { BUILTIN_PREFIXES } from '@/mcp/tools/iriUtils';
 
 /** Fix PREFIX declarations where the IRI is bare (no angle brackets): PREFIX rdf: http://... → PREFIX rdf: <http://...> */
 function normalizePrefixIris(sparql: string): string {
@@ -19,12 +21,24 @@ function normalizePrefixIris(sparql: string): string {
 /** Prepend PREFIX declarations from the namespace map for any prefix not already declared in the query. */
 function injectPrefixes(sparql: string): string {
   const normalized = normalizePrefixIris(sparql);
-  const namespaces = rdfManager.getNamespaces();
+  const dynamicNamespaces = rdfManager.getNamespaces();
   const declared = new Set<string>();
   for (const m of normalized.matchAll(/(?:PREFIX|BASE)\s+(\S+)\s*:/gi)) declared.add(m[1].toLowerCase());
-  const lines = namespaces
-    .filter(ns => ns.prefix && ns.uri && !declared.has(ns.prefix.toLowerCase()))
-    .map(ns => `PREFIX ${ns.prefix}: <${ns.uri}>`);
+  // Merge built-in prefixes (e.g. ex:, owl:) with dynamic registry, dynamic takes precedence.
+  const builtinEntries = Object.entries(BUILTIN_PREFIXES).map(([k, v]) => ({
+    prefix: k.replace(/:$/, ''),
+    uri: v,
+  }));
+  const merged = [...builtinEntries, ...dynamicNamespaces];
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const ns of merged) {
+    if (!ns.prefix || !ns.uri) continue;
+    const key = ns.prefix.toLowerCase();
+    if (seen.has(key) || declared.has(key)) continue;
+    seen.add(key);
+    lines.push(`PREFIX ${ns.prefix}: <${ns.uri}>`);
+  }
   return lines.length ? `${lines.join('\n')}\n${normalized}` : normalized;
 }
 
@@ -45,14 +59,50 @@ function getCanvasIris(): string[] {
 // ---------------------------------------------------------------------------
 // loadRdf
 // ---------------------------------------------------------------------------
+
+/**
+ * Check the inline Turtle for common model-output mistakes and return a
+ * descriptive error string, or null if the snippet looks plausible.
+ * Does NOT attempt to parse Turtle — only catches obvious patterns before N3.js runs.
+ */
+function validateTurtleSnippet(turtle: string): string | null {
+  // Detect @prefix declarations whose IRI is missing (e.g. "@prefix owl: .")
+  for (const m of turtle.matchAll(/@prefix\s+(\w*)\s*:\s*\./g)) {
+    const pfx = m[1];
+    const builtin = BUILTIN_PREFIXES[pfx + ':'];
+    const hint = builtin
+      ? ` Either use '@prefix ${pfx}: <${builtin}> .' or omit @prefix lines entirely — ${pfx}:, owl:, rdf:, rdfs:, ex:, xsd: are auto-injected.`
+      : ` IRI is required: '@prefix ${pfx}: <https://...> .'`;
+    return `Invalid @prefix declaration '@prefix ${pfx}: .' — the namespace IRI is missing.${hint}`;
+  }
+  // Detect bare full IRIs used as subjects (http://... without angle brackets)
+  for (const m of turtle.matchAll(/^(https?:\/\/\S+)/mg)) {
+    const bare = m[1];
+    const exMatch = bare.match(/^https?:\/\/example\.org\/(.+)/);
+    const altHint = exMatch ? ` — or use prefix notation 'ex:${exMatch[1]}'` : '';
+    return `Bare IRI '${bare}' is not valid Turtle. Full IRIs must be wrapped in angle brackets: '<${bare}>'${altHint}.`;
+  }
+  return null;
+}
+
+/** Prepend BUILTIN_PREFIXES for any prefix not already declared in the turtle. */
+function injectTurtlePrefixes(turtle: string): string {
+  const declared = new Set<string>();
+  for (const m of turtle.matchAll(/@prefix\s+(\w*)\s*:/g)) declared.add(m[1]);
+  const missing = Object.entries(BUILTIN_PREFIXES)
+    .filter(([k]) => !declared.has(k.replace(/:$/, '')))
+    .map(([k, v]) => `@prefix ${k.replace(/:$/, '')}: <${v}> .`);
+  return missing.length > 0 ? missing.join('\n') + '\n' + turtle : turtle;
+}
+
 const loadRdf: McpTool = {
   name: 'loadRdf',
-  description: 'Load RDF data into the graph from a URL or inline Turtle text.',
+  description: 'Load RDF data into the graph from a URL or inline Turtle text. Common prefixes (owl:, rdf:, rdfs:, ex:, xsd:) are auto-injected — you do not need to include @prefix declarations.',
   inputSchema: {
     type: 'object',
     properties: {
       url: { type: 'string', description: 'URL of an RDF document to fetch and load.' },
-      turtle: { type: 'string', description: 'Inline Turtle text to load.' },
+      turtle: { type: 'string', description: 'Inline Turtle text to load. @prefix declarations are optional — owl:, rdf:, rdfs:, ex:, xsd: are available automatically.' },
     },
     oneOf: [{ required: ['url'] }, { required: ['turtle'] }],
   },
@@ -64,10 +114,13 @@ const loadRdf: McpTool = {
         return { success: true, data: { loaded: p.url } };
       }
       if (p.turtle) {
+        const snippetError = validateTurtleSnippet(p.turtle);
+        if (snippetError) return { success: false, error: snippetError };
         const canvasBefore = getCanvasIris();
-        await rdfManager.loadRDFIntoGraph(p.turtle, 'urn:vg:data', 'text/turtle');
+        const normalizedTurtle = injectTurtlePrefixes(p.turtle);
+        await rdfManager.loadRDFIntoGraph(normalizedTurtle, 'urn:vg:data', 'text/turtle');
         // Wait for the RDF worker change event to propagate to dataProvider.allSubjects
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, LOAD_RDF_PROPAGATION_DELAY_MS));
         const { dataProvider } = getWorkspaceRefs();
         const allItems = await dataProvider.lookupAll();
         const canvasBeforeSet = new Set(canvasBefore);
@@ -459,39 +512,84 @@ const help: McpTool = {
       return { success: true, data: { content: JSON.stringify({ name: entry.name, description: entry.description, inputSchema: entry.inputSchema }) } };
     }
     const instructions = [
+      '⚠️  RELAY INTERCEPTION — READ FIRST',
+      'This relay ONLY intercepts JSON-RPC 2.0 wrapped in single backticks (see format below).',
+      'ALL other formats are SILENTLY IGNORED — no response, no error, nothing:',
+      '  • OpenAI function_call / tool_calls',
+      '  • Claude tool_use blocks',
+      '  • Gemini functionCall',
+      '  • {"tool":"x","input":{}} style',
+      '  • {"jsonrpc":"2.0","method":"toolName",...}  ← method must be "tools/call", not a tool name',
+      '  • <tool_call> XML tags',
+      '  • Plain prose describing a tool call',
+      'If you do not use the exact format below, your call will never be executed.',
+      '',
       'RELAY FORMAT',
       'Single backtick per JSON-RPC object. Up to 5 calls per message — they run in order.',
       '`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"TOOLNAME","arguments":ARGS}}`',
       '',
       'Example — layout + fit + export in one message:',
-      '`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-lr"}}}`',
+      '`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"runLayout","arguments":{}}}`',
       '`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fitCanvas","arguments":{}}}`',
       '`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"exportImage","arguments":{"format":"svg"}}}`',
       '',
       'CRITICAL RULES',
       '1. Single ` not triple ```. Increment id per call. Never output a call you don\'t intend to run.',
+      '   ⚠️  EXAMPLE CALLS ARE EXECUTED: any backtick-wrapped JSON-RPC in your message is run immediately.',
+      '   In explanatory text to the user, describe actions in plain prose — never show a sample call.',
       '2. Batch up to 5 non-dependent calls (mutations, layout, export). Send discovery calls (getNodes, queryGraph) alone and wait for the result before continuing.',
-      '3. addLink: both nodes must exist first — call addNode for each endpoint in a prior batch or earlier in the same batch.',
-      '4. 5+ individuals: loadRdf(turtle=...) not repeated addNode — one round-trip.',
-      '5. Pre-loaded prefixes: foaf rdf rdfs owl xsd skos dc ex — use short form (foaf:Person, owl:Class).',
-      '6. Tool failed? Call help({tool:"toolname"}) to get the exact parameter schema.',
+      '3. addTriple (IRI-object edges): both nodes must exist first — call addNode for each endpoint before or in the same batch as addTriple.',
+      '4. addTriple (literal object): annotation property — visible on canvas after expandNode.',
+      '5. 5+ individuals: loadRdf(turtle=...) not repeated addNode — one round-trip.',
+      '6. Pre-loaded prefixes: foaf rdf rdfs owl xsd skos dc ex — use short form (foaf:Person, owl:Class).',
+      '7. Tool failed? READ THE ERROR and retry immediately with the corrected call. Never skip a failed call — keep retrying until success or you have exhausted the fix options, then report what failed and why.',
+      '8. GUIDED SESSION: if the user is asking one question at a time, execute ONLY what was asked, then STOP. Do not execute additional tools based on relay results. Wait for the next user question.',
+      '   Skip suggestOntologiesForTask and loadOntology unless explicitly requested — guided sessions provide all context through questions.',
       '',
       'COMMON MISTAKES',
-      'WRONG: addLink({s:"ex:A", p:"foaf:knows", o:"ex:B"})',
-      'RIGHT: addLink({subjectIri:"ex:A", predicateIri:"foaf:knows", objectIri:"ex:B"})',
+      'WRONG: addLink({...})  ← this tool does not exist; use addTriple for all RDF edges',
+      'RIGHT: addTriple({subjectIri:"ex:A", predicateIri:"rdfs:subClassOf", objectIri:"ex:B"})',
+      '',
+      'WRONG: addTriple({s:"ex:A", p:"rdfs:subClassOf", o:"ex:B"})',
+      'RIGHT: addTriple({subjectIri:"ex:A", predicateIri:"rdfs:subClassOf", objectIri:"ex:B"})',
+      '',
+      'WRONG: addTriple for a brand-new entity  ← use addNode to create, then addTriple to link',
+      'RIGHT: addNode({iri:"ex:MyClass", typeIri:"owl:Class", label:"MyClass"}) then addTriple({subjectIri:"ex:MyClass",...})',
       '',
       'WRONG: loadOntology({url:"calendar"})  ← searches by prefix name, not use-case',
       'RIGHT: loadOntology({query:"calendar"}) then loadOntology({url:"ical"}) to load',
       '',
+      'WRONG: queryGraph({query:"SELECT * WHERE {?s ?p ?o}"})',
+      'RIGHT: queryGraph({sparql:"SELECT * WHERE {?s ?p ?o}"})  ← param is "sparql", not "query"',
+      '',
+      'WRONG: setViewMode({viewMode:"abox"})',
+      'RIGHT: setViewMode({mode:"abox"})  ← param is "mode", not "viewMode"',
+      '',
+      'WRONG: setLayout({...}), layout({...}), hierarchical({...})  ← these tools do not exist',
+      'RIGHT: runLayout({})  ← the only layout tool; call it after adding nodes',
+      '',
+      'WRONG (silently ignored): {"tool":"addNode","input":{"iri":"ex:MyClass"}}',
+      'WRONG (silently ignored): any native tool/function-call syntax your model normally uses',
+      'WRONG (silently ignored): {"jsonrpc":"2.0","method":"addNode","params":{"iri":"ex:MyClass"},"id":1}  ← method must be "tools/call", NOT the tool name',
+      'RIGHT: `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"addNode","arguments":{"iri":"ex:MyClass","typeIri":"owl:Class"}}}`',
+      '',
       'SPARQL: prefixes registered via loadOntology/setNamespace are auto-injected — no PREFIX declarations needed for them.',
       'Only declare a PREFIX if it is not in your namespace registry.',
+      '',
+      'CANVAS — PROACTIVE RULES (do these automatically, without being asked)',
+      '• addNode auto-navigates to the new node — no separate focusNode call needed.',
+      '• After adding any nodes: call runLayout({}) — without it nodes pile at (0,0).',
+      '• runLayout is view-specific — only arranges the currently active view.',
+      '  After setViewMode, call runLayout({}) again to arrange the new view.',
+      '• Batch pattern: addNode(s) + addTriple(s) in one message, then runLayout({}) in the next.',
+      '• Annotation literals: call expandNode({iri:"..."}) after addTriple to reveal them on the node card.',
       '',
       'WORKFLOW (minimal working session)',
       '1. suggestOntologiesForTask({task:"..."}) → pick prefixes',
       '2. loadOntology({url:"<prefix>"}) × N  [batch these]',
-      '3. setViewMode({mode:"abox"})',
-      '4. loadRdf({turtle:"..."}) OR addNode × N + addLink × N  [batch builds; discovery alone]',
-      '5. runLayout({algorithm:"dagre-lr"}) + fitCanvas() + exportImage({format:"svg"})  [batch these]',
+      '3. addNode × N + addTriple × N  [batch builds; discovery alone]',
+      '4. runLayout({}) + fitCanvas() + exportImage({format:"svg"})  [batch these]',
+      '   Use setViewMode({mode:"abox"}) only when explicitly working with individuals.',
       '',
       'READING RESULTS',
       'Relay injects [Ontosphere — N tools ✓] with one backtick-wrapped JSON-RPC response per call.',
