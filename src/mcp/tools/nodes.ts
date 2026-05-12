@@ -34,7 +34,8 @@ const addNode: McpTool = {
   },
   handler: async (params) => {
     try {
-      const raw = params as { iri?: string; typeIri?: string; type?: string; label?: string };
+      const raw = params as { iri?: string; subjectIri?: string; typeIri?: string; type?: string; label?: string };
+      if (!raw.iri && raw.subjectIri) raw.iri = raw.subjectIri;
       if (!raw.iri) return { success: false, error: 'iri is required' };
       const iri = expandIri(raw.iri);
       if (iri.startsWith('Unknown prefix:')) return { success: false, error: iri };
