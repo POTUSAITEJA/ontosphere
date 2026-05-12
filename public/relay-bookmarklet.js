@@ -722,28 +722,39 @@
   }
 
   /* ── Fire-on-idle poll ─────────────────────────────────────────────────── */
-  // Polls every 500 ms. getPageText() excludes input field content so typed
-  // or pasted text never triggers dispatch.
-  // Requires 2 consecutive idle ticks (1 s) before extracting tool calls.
-  // This prevents user-message examples from being dispatched in the brief
-  // window between user submit and the model starting to stream.
+  // Polls every 500 ms. Fires only when page text has been stable for 12 s
+  // (24 consecutive ticks with identical content-length) AND relay is not busy.
+  // Resets counter on any content change, so qwen3 thinking pauses never
+  // trigger early dispatch. isAiStreaming() is intentionally NOT used here —
+  // it gives false negatives for qwen3 (send button stays enabled during
+  // generation), which was the root cause of multiple partial dispatches per turn.
   var idlePollTimer = null;
   var idleConsecutive = 0;
+  var idleLastLen = -1;
 
   function idlePoll() {
     if (window.__vgRelayInstanceId !== instanceId) return; // stale instance
-    if (!isAiStreaming() && !isProcessing && callQueue.length === 0) {
-      idleConsecutive++;
-      if (idleConsecutive >= 2) {
-        var calls = extractAllToolCalls(getPageText(), dispatchedSigs);
-        if (calls.length > 0) {
-          idleConsecutive = 0;
-          callQueue = callQueue.concat(calls);
-          processNextInQueue();
+    if (!isProcessing && callQueue.length === 0) {
+      var text = getPageText();
+      var len = text.length;
+      if (len !== idleLastLen) {
+        idleLastLen = len;
+        idleConsecutive = 0;
+      } else {
+        idleConsecutive++;
+        if (idleConsecutive >= 24) { // 24 × 500 ms = 12 s stable
+          var calls = extractAllToolCalls(text, dispatchedSigs);
+          if (calls.length > 0) {
+            idleConsecutive = 0;
+            idleLastLen = -1;
+            callQueue = callQueue.concat(calls);
+            processNextInQueue();
+          }
         }
       }
     } else {
       idleConsecutive = 0;
+      idleLastLen = -1;
     }
     idlePollTimer = setTimeout(idlePoll, 500);
   }
