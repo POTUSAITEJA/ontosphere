@@ -62,7 +62,10 @@ for (const name of specNames) {
     // Shorten idle blocks and produce mp4 in one step.
     // Samples at 0.5fps so cursor blinks/CSS animations don't break detection.
     // Only blocks longer than 8s (viewer ingest wait) are shortened to 10s.
+    // no_cut_last=1 for the OWUI demo: its final freeze block is the model's
+    // classification response — cutting it would remove the payoff of the demo.
     const mp4 = path.join(OUTPUT_DIR, `${name}.mp4`);
+    const noCutLast = name === 'openwebui-socratic' ? '1' : '0';
     let mp4ok = false;
     try {
       execFileSync('python3', [
@@ -73,6 +76,7 @@ for (const name of specNames) {
         '8.0',         // min idle duration to shorten
         '0.5',         // sample fps (1 frame / 2s — ignores sub-2s animations)
         '-30',         // noise floor dB
+        noCutLast,     // 1 = keep last freeze block at full length
       ], { stdio: 'inherit' });
       const mp4size = (fs.statSync(mp4).size / 1024).toFixed(0);
       console.log(`✓ docs/demo-videos/${name}.mp4   (${mp4size} KB)`);

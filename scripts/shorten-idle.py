@@ -18,10 +18,12 @@ Usage:
                  0.5 = one frame every 2 s — ignores sub-2s animations
   noise_db       Freeze noise floor in dB                  (default: -30)
                  Higher (e.g. -20) = more tolerant of minor pixel changes
+  no_cut_last    1 = keep the last freeze block at full length (default: 0)
+                 Prevents the final response / end card from being cut away.
 
 Example:
   python3 scripts/shorten-idle.py docs/demo-videos/openwebui-socratic.webm \\
-    docs/demo-videos/openwebui-socratic.mp4
+    docs/demo-videos/openwebui-socratic.mp4 10.0 8.0 0.5 -30 1
 """
 
 import re
@@ -79,13 +81,16 @@ def build_keep_segments(
     freezes: list[tuple[float, float, float]],
     total: float,
     digest: float,
+    no_cut_last: bool = False,
 ) -> list[tuple[float, float]]:
     segments: list[tuple[float, float]] = []
     pos = 0.0
-    for freeze_start, freeze_end, _ in sorted(freezes):
+    sorted_freezes = sorted(freezes)
+    for idx, (freeze_start, freeze_end, _) in enumerate(sorted_freezes):
         if freeze_start > pos:
             segments.append((pos, freeze_start))
-        keep_end = min(freeze_start + digest, freeze_end)
+        is_last = (idx == len(sorted_freezes) - 1)
+        keep_end = freeze_end if (no_cut_last and is_last) else min(freeze_start + digest, freeze_end)
         segments.append((freeze_start, keep_end))
         pos = freeze_end
     if pos < total:
@@ -164,6 +169,7 @@ def main() -> None:
     min_freeze  = float(args[3]) if len(args) > 3 else 8.0
     sample_fps  = float(args[4]) if len(args) > 4 else 0.5
     noise_db    = float(args[5]) if len(args) > 5 else -30.0
+    no_cut_last = bool(int(args[6])) if len(args) > 6 else False
 
     if not input_path.exists():
         print(f"Error: {input_path} not found")
@@ -190,7 +196,7 @@ def main() -> None:
     print(f"\nTime saved: {saved:.1f}s  ({saved / total_dur * 100:.0f}%)")
     print(f"Output duration: ~{total_dur - saved:.1f}s")
 
-    segments = build_keep_segments(freezes, total_dur, digest_sec)
+    segments = build_keep_segments(freezes, total_dur, digest_sec, no_cut_last)
     print(f"Segments to keep: {len(segments)}")
 
     cmd = build_ffmpeg_cmd(input_path, output_path, segments)
