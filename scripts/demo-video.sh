@@ -25,6 +25,29 @@ for i in $(seq 1 60); do
   sleep 0.5
 done
 
+# Warm up Vite's dep-optimization cache with a headless page load.
+# Vite triggers dep pre-bundling on the first browser page load (causing a reload);
+# by warming up here we ensure that reload happens before the recording tests start.
+echo "Warming up Vite dep cache..."
+node -e "
+const { chromium } = require('@playwright/test');
+(async () => {
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  const page = await browser.newPage();
+  try {
+    await page.goto('http://localhost:8080');
+    await page.waitForFunction(
+      () => !!(window).__mcpTools && typeof (window).__mcpTools.addNode === 'function',
+      { timeout: 60000 }
+    );
+    console.log('Warmup: MCP tools ready.');
+  } catch (e) {
+    console.log('Warmup timeout — dep cache should be warm enough to proceed.');
+  }
+  await browser.close();
+})().catch(e => { console.error('Warmup error:', e.message); process.exit(0); });
+" 2>&1
+
 xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' \
   npx playwright test --config=playwright.demo.config.ts \
   && node scripts/collect-demo-videos.mjs

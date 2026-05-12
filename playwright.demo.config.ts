@@ -5,6 +5,7 @@ export default defineConfig({
   testMatch: /demo-(?!openwebui-socratic).*\.spec\.ts$/,
   outputDir: 'test-results/demo',
   timeout: 600_000,
+  workers: 1,
   fullyParallel: false,
   projects: [
     {
