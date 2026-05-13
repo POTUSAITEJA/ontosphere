@@ -5,6 +5,7 @@ import { rdfManager } from '@/utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import { focusElementOnCanvas } from './layout';
 import { expandIri } from './iriUtils';
+import { abbreviateIri } from './graph';
 import { ADD_NODE_PIPELINE_DELAY_MS } from '@/utils/canvasConstants';
 
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
@@ -266,7 +267,13 @@ const getNodeDetails: McpTool = {
       const { navigateToIri } = getWorkspaceRefs();
       navigateToIri?.(iri);
 
-      return { success: true, data: { iri, label, types: [...typeSet], properties } };
+      const abbrevTypes = [...typeSet].map(abbreviateIri);
+      const abbrevProps = properties.map(p => ({
+        ...p,
+        predicate: abbreviateIri(p.predicate),
+        object: p.objectType === 'iri' || p.objectType === 'bnode' ? abbreviateIri(p.object) : p.object,
+      }));
+      return { success: true, data: { iri: abbreviateIri(iri), label, types: abbrevTypes, properties: abbrevProps } };
     } catch (e) {
       return { success: false, error: String(e) };
     }

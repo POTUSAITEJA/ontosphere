@@ -45,7 +45,7 @@ function injectPrefixes(sparql: string): string {
 const RDFS_LABEL = 'http://www.w3.org/2000/01/rdf-schema#label';
 
 /** Shorten an IRI using registered prefixes. Blank-node skolem IRIs → "_:bnode". */
-function abbreviateIri(iri: string): string {
+export function abbreviateIri(iri: string): string {
   if (typeof iri !== 'string') return iri;
   if (iri.startsWith('urn:vg:bnode:')) return '_:bnode';
   const dynamicNamespaces = rdfManager.getNamespaces();
