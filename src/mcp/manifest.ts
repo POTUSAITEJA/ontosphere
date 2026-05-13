@@ -32,8 +32,9 @@ export const mcpManifest: McpToolManifestEntry[] = [
     name: 'loadRdf',
     description:
       'Load ABox instance data — subjects appear as canvas nodes. Use for individual/data triples. To load a schema or ontology without adding canvas nodes, use loadOntology instead. ' +
-      'OWL RESTRICTIONS: loadRdf is the only way to assert axioms that require blank nodes, such as owl:someValuesFrom / owl:allValuesFrom / owl:hasValue restrictions and owl:equivalentClass with anonymous class expressions. ' +
+      'OWL RESTRICTIONS: loadRdf is the simplest way to assert axioms with blank nodes — all triples created atomically. ' +
       'Pattern (Turtle): `:MyClass owl:equivalentClass [ a owl:Restriction ; owl:onProperty :hasP ; owl:someValuesFrom :C ] .` ' +
+      'Alternatively use addTriple with blank-node labels (see addTriple description). ' +
       'The blank-node restriction individual appears in the TBox canvas view after loading.',
     inputSchema: {
       type: 'object',

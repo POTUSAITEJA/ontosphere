@@ -83,13 +83,12 @@ const TURNS = [
   // T3 — named pizza subclasses: SalamiPizza, HawaiianPizza, MargheritaPizza
   'There are many specific kinds of pizza. Add three named pizza classes: ex:SalamiPizza, ex:HawaiianPizza, and ex:MargheritaPizza. Each is a subclass of ex:Pizza — add all three nodes and all three rdfs:subClassOf ex:Pizza edges. Then arrange the hierarchy. Wait for my next question.',
 
-  // T4 — owl:equivalentClass + owl:Restriction triples, fully wired.
+  // T4 — owl:equivalentClass + owl:Restriction (defined classes).
+  // Concept-led question — model uses the restriction pattern it read from help() at startup.
+  // Both addTriple-with-blank-node-labels and loadRdf-with-Turtle are valid paths.
   // Characteristic toppings: Salami → SalamiTopping, Hawaiian → PineappleTopping,
   // Margherita → TomatoTopping. Must match ABox individuals added in T7/T8.
-  // Explicit triple list required — qwen3:4b creates restriction nodes but skips
-  // owl:onProperty + owl:someValuesFrom without concrete guidance; without those two
-  // triples OWL-RL cls-svf1 never fires and pizza individuals stay unclassified.
-  'In OWL a pizza class is defined by a necessary-and-sufficient condition: an owl:Restriction that says "this pizza MUST have at least one part of a specific type". For each of the three pizza classes, create a named restriction node and add exactly these triples using addTriple — all of them are required for the reasoner to work:\n\nFor SalamiPizza:\n  ex:SalamiPizza owl:equivalentClass ex:SalamiPizzaRestriction\n  ex:SalamiPizzaRestriction rdf:type owl:Restriction\n  ex:SalamiPizzaRestriction owl:onProperty ex:hasPart\n  ex:SalamiPizzaRestriction owl:someValuesFrom ex:SalamiTopping\n\nFor HawaiianPizza:\n  ex:HawaiianPizza owl:equivalentClass ex:HawaiianPizzaRestriction\n  ex:HawaiianPizzaRestriction rdf:type owl:Restriction\n  ex:HawaiianPizzaRestriction owl:onProperty ex:hasPart\n  ex:HawaiianPizzaRestriction owl:someValuesFrom ex:PineappleTopping\n\nFor MargheritaPizza:\n  ex:MargheritaPizza owl:equivalentClass ex:MargheritaPizzaRestriction\n  ex:MargheritaPizzaRestriction rdf:type owl:Restriction\n  ex:MargheritaPizzaRestriction owl:onProperty ex:hasPart\n  ex:MargheritaPizzaRestriction owl:someValuesFrom ex:TomatoTopping\n\nAll twelve triples are required. Without owl:onProperty and owl:someValuesFrom the reasoner cannot classify pizza individuals. Wait for my next question.',
+  'In OWL a class can be defined by what it must contain — not just named, but provably equivalent to a restriction on its parts. SalamiPizza IS the class of things that necessarily have a SalamiTopping as a part; HawaiianPizza IS the class of things that necessarily have a PineappleTopping; MargheritaPizza necessarily has a TomatoTopping. Express each of the three pizza classes as an owl:equivalentClass restriction on ex:hasPart — use the restriction pattern from the tool description you read at startup. Do all three pizza classes. Wait for my next question.',
 
   // T5 — expandNode all + runLayout
   'Expand all class nodes on the canvas to reveal their asserted properties, then arrange. Wait for my next question.',
