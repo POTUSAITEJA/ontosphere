@@ -10,7 +10,7 @@ export const mcpServerDescription =
   '• Ontology discovery first: loadOntology(query="use case") → loadOntology(url="<prefix>") × N → setNamespace × N. foaf: is pre-loaded. OWL/RDFS/RDF/XSD always available.\n' +
   '• Prefer domain ontologies over schema.org: foaf:Person, ical:Vevent, org:Organization, bot:Building.\n' +
   '• For 5+ individuals use loadRdf(turtle=...) instead of N×addNode — one round-trip.\n' +
-  '• addTriple blank-node limit: use loadRdf for owl:someValuesFrom/equivalentClass restrictions.\n' +
+  '• OWL restrictions: use loadRdf(turtle=...) OR addTriple with blank-node labels (_:b0, _:b1…) — both paths work.\n' +
   '• Batch up to 5 non-dependent calls per relay message. Send discovery (getNodes, queryGraph) alone.\n' +
   '• Tool failed? Call help({tool:"<name>"}) for the exact parameter schema.\n\n' +
   'GRAPH ARCHITECTURE\n' +
@@ -33,7 +33,8 @@ export const mcpManifest: McpToolManifestEntry[] = [
     description:
       'Load ABox instance data — subjects appear as canvas nodes. Use for individual/data triples. To load a schema or ontology without adding canvas nodes, use loadOntology instead. ' +
       'OWL RESTRICTIONS: loadRdf is the simplest way to assert axioms with blank nodes — all triples created atomically. ' +
-      'Pattern (Turtle): `:MyClass owl:equivalentClass [ a owl:Restriction ; owl:onProperty :hasP ; owl:someValuesFrom :C ] .` ' +
+      'Prefixes ex: owl: rdf: rdfs: xsd: are pre-loaded — do NOT include @prefix lines for them. ' +
+      'Pattern (no @prefix needed): `ex:SalamiPizza owl:equivalentClass [ a owl:Restriction ; owl:onProperty ex:hasPart ; owl:someValuesFrom ex:SalamiTopping ] .` ' +
       'Alternatively use addTriple with blank-node labels (see addTriple description). ' +
       'The blank-node restriction individual appears in the TBox canvas view after loading.',
     inputSchema: {
@@ -206,7 +207,13 @@ export const mcpManifest: McpToolManifestEntry[] = [
       'IRI object → object-property edge, renders on canvas immediately (both nodes must already exist — call addNode first if needed). ' +
       'Literal object → annotation property (rdfs:comment, skos:definition, etc.), visible after expandNode. ' +
       'Use addNode (not addTriple) when creating an entity for the first time — addNode writes type+label atomically and navigates to the new node. ' +
-      'BLANK NODE LIMITATION: addTriple cannot express OWL axioms requiring blank nodes (owl:someValuesFrom, owl:allValuesFrom, owl:hasValue restrictions, owl:intersectionOf, owl:unionOf). Use loadRdf with inline Turtle instead.',
+      'OWL RESTRICTIONS via blank-node labels — 4 addTriple calls per restriction (use a DISTINCT label per restriction: _:b0, _:b1, _:b2 …): ' +
+      'addTriple("_:b0","rdf:type","owl:Restriction") [MUST be owl:Restriction, NOT owl:Class] + ' +
+      'addTriple("_:b0","owl:onProperty","ex:hasPart") + ' +
+      'addTriple("_:b0","owl:someValuesFrom","ex:SalamiTopping") + ' +
+      'addTriple("ex:SalamiPizza","owl:equivalentClass","_:b0"). ' +
+      'Same label → same IRI → restrictions collapse — always use a distinct label per restriction. ' +
+      'Alternatively use loadRdf with Turtle blank-node syntax (see loadRdf description).',
     inputSchema: {
       type: 'object',
       properties: {

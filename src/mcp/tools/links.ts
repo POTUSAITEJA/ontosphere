@@ -55,7 +55,7 @@ export const linkTools: McpTool[] = [
           const blankNodeHint = /^\s+:/.test(badIri)
             ? ` You passed "${badIri}" — this is a blank-node label with leading spaces instead of underscore. Use "_:${badIri.trim().slice(1)}" (must start with "_:", not spaces).`
             : ` You passed "${badIri}".`;
-          return { success: false as const, error: `IRI contains spaces and is not valid.${blankNodeHint} For OWL restrictions prefer loadRdf with Turtle: loadRdf({turtle:"@prefix ex: <http://example.org/> . @prefix owl: <http://www.w3.org/2002/07/owl#> . ex:SalamiPizza owl:equivalentClass [ a owl:Restriction ; owl:onProperty ex:hasPart ; owl:someValuesFrom ex:SalamiTopping ] ."})` };
+          return { success: false as const, error: `IRI contains spaces and is not valid.${blankNodeHint} For OWL restrictions prefer loadRdf with Turtle (no @prefix needed — ex: owl: are pre-loaded): loadRdf({turtle:"ex:SalamiPizza owl:equivalentClass [ a owl:Restriction ; owl:onProperty ex:hasPart ; owl:someValuesFrom ex:SalamiTopping ] ."})` };
         }
         rdfManager.addTriple(subjectIri, predicateIri, objectIri);
 
