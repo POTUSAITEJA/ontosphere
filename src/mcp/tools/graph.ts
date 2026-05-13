@@ -85,6 +85,20 @@ function validateTurtleSnippet(turtle: string): string | null {
   return null;
 }
 
+/**
+ * Fix common qwen3 Turtle mistakes before parsing:
+ * 1. Remove @prefix lines for pre-loaded prefixes (often malformed: `< http://...>`)
+ * 2. Collapse whitespace inside angle brackets: `< http://... >` → `<http://...>`
+ */
+function sanitizeTurtle(turtle: string): string {
+  const preloaded = new Set(Object.keys(BUILTIN_PREFIXES).map(k => k.replace(/:$/, '')));
+  const lines = turtle.split('\n').filter(line => {
+    const m = line.match(/^\s*@prefix\s+(\w*)\s*:/i);
+    return !(m && preloaded.has(m[1]));
+  });
+  return lines.join('\n').replace(/<\s+(https?:\/\/[^>]*?)\s*>/g, '<$1>');
+}
+
 /** Prepend BUILTIN_PREFIXES for any prefix not already declared in the turtle. */
 function injectTurtlePrefixes(turtle: string): string {
   const declared = new Set<string>();
@@ -114,10 +128,11 @@ const loadRdf: McpTool = {
         return { success: true, data: { loaded: p.url } };
       }
       if (p.turtle) {
-        const snippetError = validateTurtleSnippet(p.turtle);
+        const cleaned = sanitizeTurtle(p.turtle);
+        const snippetError = validateTurtleSnippet(cleaned);
         if (snippetError) return { success: false, error: snippetError };
         const canvasBefore = getCanvasIris();
-        const normalizedTurtle = injectTurtlePrefixes(p.turtle);
+        const normalizedTurtle = injectTurtlePrefixes(cleaned);
         await rdfManager.loadRDFIntoGraph(normalizedTurtle, 'urn:vg:data', 'text/turtle');
         // Wait for the RDF worker change event to propagate to dataProvider.allSubjects
         await new Promise(r => setTimeout(r, LOAD_RDF_PROPAGATION_DELAY_MS));

@@ -430,25 +430,35 @@ test('openwebui-socratic: Socratic pizza ontology — live qwen3:4b via OWUI rel
   });
 
   // ── 9. Wait for model's help() cycle to complete ──────────────────────────
-  // Model reads starter prompt → calls help() → relay executes → model reads manifest
-  // and may make follow-up calls. waitQuiet(15 000) exits only after 15 consecutive
-  // seconds of complete silence (no relay work, no content growth) — prevents
-  // accidentally firing during a brief pause between tool calls. 3-min cap cuts out
-  // if the model gets stuck without producing output for the full window.
-  demoLog('step 6: relay injected — waiting for model help() cycle (up to 3 min)');
+  // qwen3 thinking (CoT) goes into hidden <details> blocks — content outside
+  // <details> doesn't grow, relay isn't busy → isBusy() returns false during
+  // the entire thinking phase. waitQuiet with a short window would exit during
+  // CoT and see mcpCallCount=0 before help() fires.
+  //
+  // Fix: first wait for at least one MCP call (up to 3 min), THEN wait quiet.
+  // This correctly handles qwen3 CoT phases that can last 20-60 s before the
+  // first tool call appears in the relay queue.
+  demoLog('step 6: relay injected — waiting for first MCP call (up to 3 min)…');
   await caption(page, 'Model familiarising with MCP tools — calling help()…');
-  await waitQuiet(chatFrame, 15_000, 180_000);
-  demoLog('step 6: help() cycle done — 15 s silent or 3 min elapsed');
-
-  // Sanity check: the relay must have dispatched at least one tool call during
-  // the help() cycle (the model should have called help() to get the manifest).
-  // If no relay result messages exist in the chat, the model failed to load or
-  // ignored the starter — abort now instead of recording 11 empty turns.
-  const mcpCallCount = await appFrame.evaluate(() => (window as any).__demoMcpCallCount__ ?? 0);
-  if (mcpCallCount === 0) {
-    demoLog('step 6: ABORT — no MCP tool calls during help() cycle (model failed to load or ignored starter)');
-    throw new Error('Model did not call any tools during help() cycle — likely failed to load. Re-run after checking OWUI model availability.');
+  {
+    const HELP_MAX_MS = 180_000;
+    const POLL_MS = 500;
+    const deadline = Date.now() + HELP_MAX_MS;
+    let gotFirst = false;
+    while (Date.now() < deadline) {
+      const n = await appFrame.evaluate(() => (window as any).__demoMcpCallCount__ ?? 0);
+      if (n > 0) { gotFirst = true; break; }
+      await sleep(POLL_MS);
+    }
+    if (!gotFirst) {
+      demoLog('step 6: ABORT — no MCP tool calls during help() cycle (model failed to load or ignored starter)');
+      throw new Error('Model did not call any tools during help() cycle — likely failed to load. Re-run after checking OWUI model availability.');
+    }
+    demoLog('step 6: first MCP call received — waiting for help() cycle to go quiet…');
+    // Now wait for 15 s of continuous silence after the last relay activity.
+    await waitQuiet(chatFrame, 15_000, 60_000);
   }
+  const mcpCallCount = await appFrame.evaluate(() => (window as any).__demoMcpCallCount__ ?? 0);
   demoLog(`step 6: help() cycle OK — ${mcpCallCount} MCP call(s) dispatched`);
 
   // Brief pause so viewers see the model's response before Socratic turns begin.
