@@ -4,7 +4,7 @@
   "tools": [
     {
       "name": "loadRdf",
-      "description": "Load ABox instance data — subjects appear as canvas nodes. Use for individual/data triples. To load a schema or ontology without adding canvas nodes, use loadOntology instead. OWL RESTRICTIONS: loadRdf is the only way to assert axioms that require blank nodes, such as owl:someValuesFrom / owl:allValuesFrom / owl:hasValue restrictions and owl:equivalentClass with anonymous class expressions. Pattern (Turtle): `:MyClass owl:equivalentClass [ a owl:Restriction ; owl:onProperty :hasP ; owl:someValuesFrom :C ] .` The blank-node restriction individual appears in the TBox canvas view after loading.",
+      "description": "Load ABox instance data — subjects appear as canvas nodes. Use for individual/data triples. To load a schema or ontology without adding canvas nodes, use loadOntology instead. OWL RESTRICTIONS: loadRdf is the simplest way to assert axioms with blank nodes — all triples created atomically. Pattern (Turtle): `:MyClass owl:equivalentClass [ a owl:Restriction ; owl:onProperty :hasP ; owl:someValuesFrom :C ] .` Alternatively use addTriple with blank-node labels (see addTriple description). The blank-node restriction individual appears in the TBox canvas view after loading.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -226,7 +226,7 @@
     },
     {
       "name": "addTriple",
-      "description": "Assert any RDF triple on entities that already exist on the canvas. IRI object → object-property edge, renders on canvas immediately (both nodes must already exist — call addNode first if needed). Literal object → annotation property (rdfs:comment, skos:definition, etc.), visible after expandNode. Use addNode (not addTriple) when creating an entity for the first time — addNode writes type+label atomically and navigates to the new node. BLANK NODE LIMITATION: addTriple cannot express OWL axioms requiring blank nodes (owl:someValuesFrom, owl:allValuesFrom, owl:hasValue restrictions, owl:intersectionOf, owl:unionOf). Use loadRdf with inline Turtle instead.",
+      "description": "Assert any RDF triple on entities that already exist on the canvas. IRI object → object-property edge, renders on canvas immediately (both nodes must already exist — call addNode first if needed). Literal object → annotation property (rdfs:comment, skos:definition, etc.), visible after expandNode. Use addNode (not addTriple) when creating an entity for the first time — addNode writes type+label atomically and navigates to the new node. OWL RESTRICTIONS via blank-node labels — 4 calls per restriction (use a distinct label per restriction: _:b0, _:b1, _:b2 …): addTriple(\"_:b0\",\"rdf:type\",\"owl:Restriction\") [MUST be owl:Restriction, NOT owl:Class] + addTriple(\"_:b0\",\"owl:onProperty\",\"ex:hasPart\") + addTriple(\"_:b0\",\"owl:someValuesFrom\",\"ex:SalamiTopping\") + addTriple(\"ex:SalamiPizza\",\"owl:equivalentClass\",\"_:b0\"). Same label → same IRI → restrictions collapse — always use a distinct label per restriction. Alternatively use loadRdf with Turtle blank-node syntax for all triples in one call.",
       "inputSchema": {
         "type": "object",
         "properties": {
