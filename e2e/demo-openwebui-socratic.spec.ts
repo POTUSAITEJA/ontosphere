@@ -3,7 +3,7 @@
  *
  * Records a side-by-side stage: OWUI live chat (left iframe) + Ontosphere canvas
  * (right iframe). qwen3:4b is guided through a pizza ontology via purely
- * conceptual Socratic questions — TBox, ABox, OWL-RL reasoning (T0–T9).
+ * conceptual Socratic questions — TBox, ABox, OWL-RL reasoning (T0–T10).
  *
  * Auth note: context.addInitScript does not run inside iframes. Fix: a throwaway
  * authPage pre-seeds OWUI localStorage in the browser context before the stage
@@ -41,7 +41,8 @@ const TURN_TOPICS = [
   'Guide: expand all TBox nodes to reveal their asserted properties.',
   'Guide: switch to ABox — create 3 untyped pizza individuals.',
   'Guide: build pizza1 — add Salami, Mozzarella, ThinCrust parts and hasPart links.',
-  'Guide: build pizza2 (Hawaiian) and pizza3 (Margherita) — add parts and links.',
+  'Guide: build pizza2 (Hawaiian) — add parts and links.',
+  'Guide: build pizza3 (Margherita) — add parts and links.',
   'Guide: apply OWL-RL reasoning to derive all inferred triples.',
   'Guide: inspect pizza1, pizza2, pizza3 — trace the classification inference chain.',
 ];
@@ -56,12 +57,13 @@ const AFTER_CAPTIONS = [
   'All TBox nodes expanded — asserted properties visible across the hierarchy.',
   'ABox view — pizza1 · pizza2 · pizza3 as bare NamedIndividuals, no class asserted.',
   'pizza1 built — salami1 · mozz1 · base1 typed and linked via hasPart.',
-  'pizza2 (Hawaiian) and pizza3 (Margherita) built — all parts typed and linked.',
+  'pizza2 (Hawaiian) built — pineapple1 · ham1 · base2 typed and linked via hasPart.',
+  'pizza3 (Margherita) built — tom1 · mozz2 · base3 typed and linked via hasPart.',
   'OWL-RL reasoning complete — inferred triples materialised in urn:vg:inferred.',
   'Classification! pizza1 → SalamiPizza · pizza2 → HawaiianPizza · pizza3 → MargheritaPizza — all inferred, none asserted.',
 ];
 
-// T0–T10: Socratic arc guiding qwen3 through a rich pizza ontology.
+// T0–T11: Socratic arc guiding qwen3 through a rich pizza ontology.
 // Named pizza types (SalamiPizza/HawaiianPizza/MargheritaPizza) with equivalentClass
 // axioms; 3 untyped ABox pizzas classified by OWL-RL reasoning.
 // Source of truth: .playwright/pizza-demo-setup.js (T0) + .playwright/turn-driver.js (T1–T10).
@@ -101,14 +103,18 @@ const TURNS = [
   // SalamiTopping is the characteristic for SalamiPizza (T4 equivalentClass).
   'Build ex:pizza1 as a Salami pizza. Add three ingredient individuals: ex:salami1 of type ex:SalamiTopping, ex:mozz1 of type ex:MozzarellaTopping, and ex:base1 of type ex:ThinCrustBase. Then add an ex:hasPart edge FROM ex:pizza1 TO each ingredient (subject=pizza1, object=ingredient). Do not assert any pizza class on ex:pizza1 — leave it untyped; the reasoner will classify it. Wait for my next question.',
 
-  // T8 — build pizza2 (Hawaiian) + pizza3 (Margherita) + layout
-  // PineappleTopping is characteristic for HawaiianPizza; TomatoTopping for MargheritaPizza.
-  'Build ex:pizza2 as a Hawaiian pizza and ex:pizza3 as a Margherita pizza. For ex:pizza2: add ex:pineapple1 of type ex:PineappleTopping, ex:ham1 of type ex:HamTopping, and ex:base2 of type ex:DeepPanBase. Add ex:hasPart edges FROM ex:pizza2 TO each ingredient (subject=pizza2, object=ingredient). For ex:pizza3: add ex:tom1 of type ex:TomatoTopping, ex:mozz2 of type ex:MozzarellaTopping, and ex:base3 of type ex:ThinCrustBase. Add ex:hasPart edges FROM ex:pizza3 TO each ingredient (subject=pizza3, object=ingredient). Do not assert any class type on pizza2 or pizza3. Reveal all node properties and arrange the canvas. Wait for my next question.',
+  // T8 — build pizza2 (Hawaiian) only
+  // PineappleTopping is characteristic for HawaiianPizza.
+  'Build ex:pizza2 as a Hawaiian pizza. Add ex:pineapple1 of type ex:PineappleTopping, ex:ham1 of type ex:HamTopping, and ex:base2 of type ex:DeepPanBase. Add ex:hasPart edges FROM ex:pizza2 TO each ingredient: pizza2→pineapple1, pizza2→ham1, pizza2→base2. Do not assert any class type on pizza2. Arrange. Wait for my next question.',
 
-  // T9 — runReasoning
+  // T9 — build pizza3 (Margherita) only — explicit "pizza3 ONLY" to prevent model repeating pizza2
+  // TomatoTopping is characteristic for MargheritaPizza.
+  'Now focus ONLY on ex:pizza3 (the Margherita). ex:pizza2 is already finished — do not touch it. ex:pizza3 has no ingredients yet. Add ex:tom1 of type ex:TomatoTopping, ex:mozz2 of type ex:MozzarellaTopping, and ex:base3 of type ex:ThinCrustBase. Then add ex:hasPart edges with ex:pizza3 as subject: pizza3→tom1, pizza3→mozz2, pizza3→base3. Do not assert any class on pizza3. Arrange. Wait for my next question.',
+
+  // T10 — runReasoning
   'The schema and all three pizzas are in place. Now apply OWL-RL reasoning to derive everything that can be inferred. Wait for my next question.',
 
-  // T10 — classification showcase via graph query
+  // T11 — classification showcase via graph query
   // queryGraph covers urn:vg:data + urn:vg:inferred by default — model should reach for it
   // naturally when asked to "verify" classification. getNodeDetails is acceptable fallback.
   // cls-svf1: pizza1 hasPart salami1 ∧ salami1 type SalamiTopping → pizza1 type _:restriction
@@ -207,6 +213,46 @@ async function waitIdle(frame: Frame, timeout = 300_000, stableMs = 3_000): Prom
     await sleep(pollMs);
   }
   return false;
+}
+
+// After waitIdle, the relay bookmarklet may not have started extracting tool calls
+// yet — its content-stability check (12s full DOM, including timestamps) can fire
+// up to ~32s after the spec's walk()-based idle check. The relay also processes
+// tool calls in multiple bursts (extracted in batches as the model response settles),
+// so we require STABLE_MS of continuous relay silence before declaring it flushed.
+async function waitRelayFlush(frame: Frame): Promise<void> {
+  const POLL_MS = 500;
+  const ACTIVITY_WAIT_MS = 45_000;  // max time to wait for relay to start processing
+  const STABLE_MS        = 45_000;  // relay must stay idle this long to be "flushed"
+                                     // relay processes calls in multiple bursts ~28-38s apart;
+                                     // a 45s window catches all bursts before declaring done
+  const FINISH_WAIT_MS   = 300_000; // max total time once relay has started
+
+  // Phase 1: wait for relay to become active (start extracting / processing).
+  const actDeadline = Date.now() + ACTIVITY_WAIT_MS;
+  let relayBecameActive = false;
+  while (Date.now() < actDeadline) {
+    const isIdle = await frame.evaluate(() => (window as any).__vgIsRelayIdle?.() ?? true).catch(() => true);
+    if (!isIdle) { relayBecameActive = true; break; }
+    await sleep(POLL_MS);
+  }
+  if (!relayBecameActive) return;
+
+  // Phase 2: wait for relay to stay idle for STABLE_MS.
+  // Relay processes calls in bursts; a single idle detection is not enough.
+  // Reset the stable counter whenever relay becomes active again.
+  const finDeadline = Date.now() + FINISH_WAIT_MS;
+  let silentMs = 0;
+  while (Date.now() < finDeadline) {
+    const isIdle = await frame.evaluate(() => (window as any).__vgIsRelayIdle?.() ?? true).catch(() => true);
+    if (isIdle) {
+      silentMs += POLL_MS;
+      if (silentMs >= STABLE_MS) return;
+    } else {
+      silentMs = 0;
+    }
+    await sleep(POLL_MS);
+  }
 }
 
 // Wait for quietMs of continuous silence — relay fully drained, no content growth.
@@ -466,38 +512,50 @@ test('openwebui-socratic: Socratic pizza ontology — live qwen3:4b via OWUI rel
   await clearCaption(page);
 
   // ── 10. Socratic turns ────────────────────────────────────────────────────
+  // T0 is sent before the loop so the loop follows a uniform pattern:
+  // "wait for turn N's response → show both captions → send turn N+1".
+  // All captions fire within 7s of relay flush so they land inside the freeze
+  // block before inject+clickSend ends it — shorten-idle's 20s min_freeze means
+  // a ~7s block is never detected and both captions survive.
   await clearCaption(page);
+  demoLog(`turn 1/${TURNS.length}: "${TURN_TOPICS[0]}" — sending`);
+  await caption(page, TURN_TOPICS[0]);
+  await sleep(3_000);
+  await inject(chatFrame, TURNS[0]);
+  await sleep(400);
+  await clickSend(chatFrame);
+  await clearCaption(page);
+
   for (let i = 0; i < TURNS.length; i++) {
-    demoLog(`turn ${i + 1}/${TURNS.length}: "${TURN_TOPICS[i]}" — sending`);
-    // Before: brief label so viewer knows what concept is being asked about
-    await caption(page, TURN_TOPICS[i]);
-    await sleep(2_000);
-
-    // Inject via relay for multi-line turns (avoids choppy Shift+Enter typing
-    // animation); fall back to typeAndSend for single-line questions.
-    const isMultiLine = TURNS[i].includes('\n');
-    if (isMultiLine) {
-      await inject(chatFrame, TURNS[i]);
-      await sleep(400);
-      await clickSend(chatFrame);
-    } else {
-      await typeAndSend(chatFrame, page, TURNS[i]);
-    }
-
-    // Clear caption while model generates — the live chat + canvas are the show
-    await clearCaption(page);
-    // 10s stable window — ensures relay queue is fully drained and model is
-    // truly done before declaring idle between turns.
+    // Wait for turn i to complete (10s stable window).
     await waitIdle(chatFrame, 300_000, 10_000);
     demoLog(`turn ${i + 1}/${TURNS.length}: idle — model done`);
 
-    // Caption goes up the moment the model first goes idle so viewers can read
-    // what was built. waitQuiet holds for 15 s of continuous silence (was 10 s)
-    // to avoid cutting before late tool calls finish.
+    // Flush relay: the relay's 12s full-DOM stability check can fire 30+ seconds
+    // after the spec's walk()-based idle. Wait for relay to process any queued
+    // tool calls BEFORE showing captions or sending the next turn.
+    await waitRelayFlush(appFrame);
+    demoLog(`turn ${i + 1}/${TURNS.length}: relay flushed`);
+
+    // AFTER caption fires at 0s of the static period (relay just went idle).
     await caption(page, AFTER_CAPTIONS[i]);
-    await waitQuiet(chatFrame, 15_000);
-    await clearCaption(page);
-    await sleep(2_000);
+    await sleep(4_000);  // 4s into static period
+
+    if (i < TURNS.length - 1) {
+      // TOPIC caption for next turn fires at 4s — well inside any freeze window.
+      demoLog(`turn ${i + 2}/${TURNS.length}: "${TURN_TOPICS[i + 1]}" — sending`);
+      await caption(page, TURN_TOPICS[i + 1]);
+      await sleep(3_000);  // 7s into static period
+      // inject+clickSend at 7s starts model response → content grows → static period ends.
+      await inject(chatFrame, TURNS[i + 1]);
+      await sleep(400);
+      await clickSend(chatFrame);
+      await clearCaption(page);
+    } else {
+      // Last turn — hold AFTER_CAPTIONS briefly then clear; end card follows.
+      await sleep(3_000);
+      await clearCaption(page);
+    }
   }
 
   // ── 11. Export Turtle snapshot ───────────────────────────────────────────
