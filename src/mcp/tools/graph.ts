@@ -43,6 +43,30 @@ function injectPrefixes(sparql: string): string {
 }
 
 const RDFS_LABEL = 'http://www.w3.org/2000/01/rdf-schema#label';
+
+/** Shorten an IRI using registered prefixes. Blank-node skolem IRIs → "_:bnode". */
+function abbreviateIri(iri: string): string {
+  if (typeof iri !== 'string') return iri;
+  if (iri.startsWith('urn:vg:bnode:')) return '_:bnode';
+  const dynamicNamespaces = rdfManager.getNamespaces();
+  const builtinEntries = Object.entries(BUILTIN_PREFIXES).map(([k, v]) => ({
+    prefix: k.replace(/:$/, ''),
+    uri: v,
+  }));
+  // longer namespaces first so more specific prefixes win
+  const all = [...builtinEntries, ...dynamicNamespaces].sort((a, b) => b.uri.length - a.uri.length);
+  for (const { prefix, uri } of all) {
+    if (uri && iri.startsWith(uri)) return `${prefix}:${iri.slice(uri.length)}`;
+  }
+  return iri;
+}
+
+/** Abbreviate all string values in a plain object (one level deep). */
+function abbreviateRow(row: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(row)) out[k] = abbreviateIri(v);
+  return out;
+}
 function getElementLabel(data: Reactodia.ElementModel | undefined): string {
   return (data?.properties?.[RDFS_LABEL]?.[0] as { value?: string } | undefined)?.value ?? '';
 }
@@ -274,12 +298,15 @@ const queryGraph: McpTool = {
       const workerResult = await rdfManager.sparqlQuery(sparql, { limit: effectiveLimit });
 
       if (workerResult.type === 'select') {
-        const rows: Array<Record<string, string>> = workerResult.rows ?? [];
+        const rows: Array<Record<string, string>> = (workerResult.rows ?? []).map(abbreviateRow);
         return { success: true, data: { rows, total: rows.length, truncated: rows.length >= effectiveLimit } };
       }
 
       if (workerResult.type === 'construct') {
-        const triples: Array<{ s: string; p: string; o: string }> = workerResult.triples ?? [];
+        const rawTriples: Array<{ s: string; p: string; o: string }> = workerResult.triples ?? [];
+        const triples = rawTriples.map(t => ({
+          s: abbreviateIri(t.s), p: abbreviateIri(t.p), o: abbreviateIri(t.o),
+        }));
         return {
           success: true,
           data: {
