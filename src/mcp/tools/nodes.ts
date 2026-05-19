@@ -5,6 +5,8 @@ import { rdfManager } from '@/utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import { focusElementOnCanvas } from './layout';
 import { expandIri } from './iriUtils';
+import { abbreviateIri } from './graph';
+import { ADD_NODE_PIPELINE_DELAY_MS } from '@/utils/canvasConstants';
 
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 const RDFS_LABEL = 'http://www.w3.org/2000/01/rdf-schema#label';
@@ -33,10 +35,17 @@ const addNode: McpTool = {
   },
   handler: async (params) => {
     try {
-      const raw = params as { iri?: string; typeIri?: string; type?: string; label?: string };
+      const raw = params as { iri?: string; subjectIri?: string; typeIri?: string; type?: string; label?: string };
+      if (!raw.iri && raw.subjectIri) raw.iri = raw.subjectIri;
       if (!raw.iri) return { success: false, error: 'iri is required' };
       const iri = expandIri(raw.iri);
       if (iri.startsWith('Unknown prefix:')) return { success: false, error: iri };
+      if (/ /.test(iri)) {
+        const blankNodeHint = /^\s+:/.test(iri)
+          ? ` You passed "${iri}" — blank-node label with leading spaces. Use "_:${iri.trim().slice(1)}" (must start with "_:", not spaces).`
+          : ` You passed "${iri}".`;
+        return { success: false, error: `Node IRI contains spaces and is not valid.${blankNodeHint}` };
+      }
       const typeIri = (raw.typeIri ?? raw.type) ? expandIri((raw.typeIri ?? raw.type)!) : undefined;
       if (typeIri?.startsWith('Unknown prefix:')) return { success: false, error: typeIri };
       const { label } = raw;
@@ -49,6 +58,11 @@ const addNode: McpTool = {
       if (typeIri) adds.push({ s: iri, p: RDF_TYPE, o: typeIri });
       if (label) adds.push({ s: iri, p: RDFS_LABEL, o: label });
       if (adds.length > 0) await rdfManager.applyBatch({ adds });
+
+      // Wait for the RDF→canvas pipeline before navigating; navigateToIri handles view-switching.
+      await new Promise(r => setTimeout(r, ADD_NODE_PIPELINE_DELAY_MS));
+      const { navigateToIri } = getWorkspaceRefs();
+      navigateToIri?.(iri);
 
       return { success: true, data: { iri } };
     } catch (e) {
@@ -110,6 +124,8 @@ const expandNode: McpTool = {
       const el = findEntityElement(iri, model);
       if (!el) return { success: false, error: `Element not on canvas: ${iri}` };
       model.history.execute(Reactodia.setElementExpanded(el, expand));
+      const { navigateToIri } = getWorkspaceRefs();
+      navigateToIri?.(iri);
       return { success: true, data: { iri, expanded: expand } };
     } catch (e) {
       return { success: false, error: String(e) };
@@ -209,7 +225,7 @@ function classifyObject(value: string): 'iri' | 'literal' | 'bnode' {
 
 const getNodeDetails: McpTool = {
   name: 'getNodeDetails',
-  description: 'Return all asserted RDF properties (triples) for a specific entity IRI. Also navigates the canvas to the node, switching between ABox/TBox views if needed. Only reads from the asserted graph (urn:vg:data) — inferred triples are not included.',
+  description: 'Return all RDF properties (triples) for a specific entity IRI — both asserted (urn:vg:data) and inferred (urn:vg:inferred). Inferred triples are marked inferred:true in the result. Also navigates the canvas to the node, switching between ABox/TBox views if needed.',
   inputSchema: {
     type: 'object',
     required: ['iri'],
@@ -248,7 +264,16 @@ const getNodeDetails: McpTool = {
         }
       }
 
-      return { success: true, data: { iri, label, types: [...typeSet], properties } };
+      const { navigateToIri } = getWorkspaceRefs();
+      navigateToIri?.(iri);
+
+      const abbrevTypes = [...typeSet].map(abbreviateIri);
+      const abbrevProps = properties.map(p => ({
+        ...p,
+        predicate: abbreviateIri(p.predicate),
+        object: p.objectType === 'iri' || p.objectType === 'bnode' ? abbreviateIri(p.object) : p.object,
+      }));
+      return { success: true, data: { iri: abbreviateIri(iri), label, types: abbrevTypes, properties: abbrevProps } };
     } catch (e) {
       return { success: false, error: String(e) };
     }

@@ -30,11 +30,26 @@ if (!fs.existsSync(RESULTS_DIR)) {
   process.exit(1);
 }
 
+// Sort longest-first so pizza-tutorial-chat is claimed before pizza-tutorial
+specNames.sort((a, b) => b.length - a.length);
+
+// Pre-assign each result subdir to its longest-matching spec name
+const claimedDirs = new Map(); // subdir → name
+for (const subdir of fs.readdirSync(RESULTS_DIR)) {
+  for (const name of specNames) {
+    if (subdir.startsWith(`demo-${name}`) && !claimedDirs.has(subdir)) {
+      claimedDirs.set(subdir, name);
+      break;
+    }
+  }
+}
+
 let copied = 0;
 for (const name of specNames) {
   // Playwright names the output dir: e2e-demo-<name>-<hash>-demo/
-  const subdirs = fs.readdirSync(RESULTS_DIR)
-    .filter(d => d.startsWith(`demo-${name}`));
+  const subdirs = [...claimedDirs.entries()]
+    .filter(([, n]) => n === name)
+    .map(([d]) => d);
 
   for (const subdir of subdirs) {
     const videoPath = path.join(RESULTS_DIR, subdir, 'video.webm');
@@ -44,24 +59,48 @@ for (const name of specNames) {
     const size = (fs.statSync(dest).size / 1024).toFixed(0);
     console.log(`✓ docs/demo-videos/${name}.webm  (${size} KB)`);
 
-    // Convert to mp4 for broad playback compatibility
+    // Shorten idle blocks and produce mp4 in one step.
+    // Samples at 0.5fps so cursor blinks/CSS animations don't break detection.
+    // min_freeze=20s: qwen3 CoT thinking phases freeze the visible chat for 20–60s
+    // (hidden <details> block) — 8s was too low and cut active thinking phases.
+    // no_cut_last=1 for the OWUI demo: its final freeze block is the model's
+    // classification response — cutting it would remove the payoff of the demo.
     const mp4 = path.join(OUTPUT_DIR, `${name}.mp4`);
+    const noCutLast = name === 'openwebui-socratic' ? '1' : '0';
+    let mp4ok = false;
     try {
-      execFileSync('ffmpeg', [
-        '-y', '-i', dest,
-        '-c:v', 'libx264',
-        '-crf', '20',
-        '-preset', 'slow',
-        '-profile:v', 'high',
-        '-level:v', '4.2',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        mp4,
-      ], { stdio: 'pipe' });
+      execFileSync('python3', [
+        path.join(__dirname, 'shorten-idle.py'),
+        dest,          // input webm
+        mp4,           // output mp4 directly — libx264, no intermediate webm
+        '10.0',        // digest seconds (keep 10s of each idle block)
+        '20.0',        // min idle duration to shorten (raised from 8s — preserves CoT thinking)
+        '0.5',         // sample fps (1 frame / 2s — ignores sub-2s animations)
+        '-30',         // noise floor dB
+        noCutLast,     // 1 = keep last freeze block at full length
+      ], { stdio: 'inherit' });
       const mp4size = (fs.statSync(mp4).size / 1024).toFixed(0);
       console.log(`✓ docs/demo-videos/${name}.mp4   (${mp4size} KB)`);
+      mp4ok = true;
     } catch {
-      console.warn(`  ffmpeg not found — skipping mp4 conversion for ${name}`);
+      console.warn(`  shorten-idle.py failed — falling back to plain mp4 conversion`);
+    }
+
+    // Fallback: plain webm → mp4 if shorten-idle failed
+    if (!mp4ok) {
+      try {
+        execFileSync('ffmpeg', [
+          '-y', '-i', dest,
+          '-c:v', 'libx264', '-crf', '20', '-preset', 'slow',
+          '-profile:v', 'high', '-level:v', '4.2',
+          '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+          mp4,
+        ], { stdio: 'pipe' });
+        const mp4size = (fs.statSync(mp4).size / 1024).toFixed(0);
+        console.log(`✓ docs/demo-videos/${name}.mp4   (${mp4size} KB)  [no idle-trim]`);
+      } catch {
+        console.warn(`  ffmpeg not found — skipping mp4 conversion for ${name}`);
+      }
     }
 
     copied++;

@@ -2,8 +2,9 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockClearInferred } = vi.hoisted(() => ({
+const { mockClearInferred, mockClearInferredCallback } = vi.hoisted(() => ({
   mockClearInferred: vi.fn(),
+  mockClearInferredCallback: vi.fn(),
 }));
 
 vi.mock('@/utils/rdfManager', () => ({
@@ -21,6 +22,7 @@ vi.mock('@/mcp/workspaceContext', () => {
         view: { findAnyCanvas: vi.fn().mockReturnValue(undefined) },
       },
       dataProvider,
+      clearInferred: mockClearInferredCallback,
     })),
   };
 });
@@ -79,7 +81,18 @@ describe('runReasoning', () => {
 
 // ---------------------------------------------------------------------------
 describe('clearInferred', () => {
-  it('calls dataProvider.clearInferred() and returns cleared: true', async () => {
+  it('calls registered clearInferred callback when available', async () => {
+    const result = await tool('clearInferred').handler({});
+    expect(result).toEqual({ success: true, data: { cleared: true } });
+    expect(mockClearInferredCallback).toHaveBeenCalledOnce();
+    expect(mockClearInferred).not.toHaveBeenCalled();
+  });
+
+  it('falls back to dataProvider.clearInferred() when callback not registered', async () => {
+    (getWorkspaceRefs as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      ctx: {},
+      dataProvider: { clearInferred: mockClearInferred },
+    });
     const result = await tool('clearInferred').handler({});
     expect(result).toEqual({ success: true, data: { cleared: true } });
     expect(mockClearInferred).toHaveBeenCalledOnce();
@@ -88,9 +101,8 @@ describe('clearInferred', () => {
   it('returns error if clearInferred throws', async () => {
     (getWorkspaceRefs as ReturnType<typeof vi.fn>).mockReturnValueOnce({
       ctx: {},
-      dataProvider: {
-        clearInferred: vi.fn(() => { throw new Error('clear error'); }),
-      },
+      dataProvider: { clearInferred: vi.fn() },
+      clearInferred: vi.fn(() => { throw new Error('clear error'); }),
     });
     const result = await tool('clearInferred').handler({});
     expect(result).toMatchObject({ success: false, error: expect.stringContaining('clear error') });
@@ -106,6 +118,7 @@ describe('getCapabilities', () => {
       data: {
         layoutAlgorithms: ['dagre-lr', 'dagre-tb', 'elk-layered', 'elk-force', 'elk-stress', 'elk-radial'],
         exportFormats: ['turtle', 'jsonld', 'rdfxml', 'svg', 'png'],
+        reasonerBackends: ['konclude', 'n3'],
       },
     });
   });

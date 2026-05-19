@@ -115,7 +115,7 @@ describe("OWL2Bench UNIV-BENCH-OWL2DL reasoning", () => {
       // -----------------------------------------------------------------------
       console.log("[TEST] Running OWL-RL reasoning...");
       const t0 = Date.now();
-      const result = await rdfManager.runReasoning({ rulesets: ["owl-rl.n3"] });
+      const result = await rdfManager.runReasoning({ rulesets: ["owl-rl.n3"], reasonerBackend: 'n3' });
       console.log("[TEST] Reasoning duration:", Date.now() - t0, "ms");
       console.log("[TEST] Reasoning status:", result.status);
       console.log("[TEST] Rule quad count:", (result.meta as any)?.ruleQuadCount);

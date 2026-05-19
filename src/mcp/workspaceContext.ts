@@ -8,6 +8,7 @@ interface WorkspaceRefs {
   ctx: Reactodia.WorkspaceContext;
   dataProvider: N3DataProvider;
   runReasoning?: () => Promise<unknown>;
+  clearInferred?: () => void;
   navigateToIri?: (iri: string) => void;
   setViewMode?: (mode: 'abox' | 'tbox') => void;
 }
@@ -68,6 +69,10 @@ export function registerReasoningCallback(fn: () => Promise<unknown>): void {
     pendingReasoningCallback = fn;
   }
   maybeNotifyReady();
+}
+
+export function registerClearInferredCallback(fn: () => void): void {
+  if (refs) refs.clearInferred = fn;
 }
 
 export function registerNavigateToIri(fn: (iri: string) => void): void {

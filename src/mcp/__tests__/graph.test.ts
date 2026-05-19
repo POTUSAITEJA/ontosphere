@@ -76,7 +76,10 @@ describe('loadRdf', () => {
   it('calls loadRDFIntoGraph when turtle is provided', async () => {
     const turtle = '@prefix ex: <http://example.org/> .';
     const result = await tool('loadRdf').handler({ turtle });
-    expect(rdfManager.loadRDFIntoGraph).toHaveBeenCalledWith(turtle, 'urn:vg:data', 'text/turtle');
+    // injectTurtlePrefixes prepends missing built-in prefixes before parsing
+    const [injectedTurtle] = (rdfManager.loadRDFIntoGraph as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(injectedTurtle).toContain('@prefix ex: <http://example.org/> .');
+    expect(rdfManager.loadRDFIntoGraph).toHaveBeenCalledWith(injectedTurtle, 'urn:vg:data', 'text/turtle');
     expect(result).toMatchObject({
       success: true,
       data: expect.objectContaining({ loaded: 'inline turtle' }),
@@ -140,7 +143,7 @@ describe('queryGraph', () => {
     const result = await tool('queryGraph').handler({ sparql: 'SELECT * WHERE { ?s ?p ?o }' }) as any;
     expect(result.success).toBe(true);
     expect(result.data.rows).toHaveLength(2);
-    expect(result.data.rows[0]).toMatchObject({ s: EX + 'Alice', p: RDFS_LABEL, o: 'Alice' });
+    expect(result.data.rows[0]).toMatchObject({ s: 'ex:Alice', p: 'rdfs:label', o: 'Alice' });
   });
 
   it('SELECT with bound subject returns matching rows', async () => {
@@ -153,7 +156,7 @@ describe('queryGraph', () => {
     }) as any;
     expect(result.success).toBe(true);
     expect(result.data.rows).toHaveLength(2);
-    expect(result.data.rows.map((r: any) => r.p)).toContain(RDFS_LABEL);
+    expect(result.data.rows.map((r: any) => r.p)).toContain('rdfs:label');
   });
 
   it('truncates results when limit is exceeded', async () => {
@@ -186,7 +189,7 @@ describe('queryGraph', () => {
     }) as any;
     expect(result.success).toBe(true);
     expect(result.data.triples).toHaveLength(1);
-    expect(result.data.triples[0]).toEqual({ s: EX + 'Team', p: EX_MANAGED_BY, o: EX + 'Alice' });
+    expect(result.data.triples[0]).toEqual({ s: 'ex:Team', p: 'ex:managedBy', o: 'ex:Alice' });
   });
 
   it('CONSTRUCT returns notice when 0 triples matched', async () => {

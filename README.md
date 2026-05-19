@@ -114,12 +114,14 @@ The API key is sent only with the RDF fetch request. CORS: the server must allow
 
 ### Ontology pre-loading
 
-| Parameter   | Alias        | Description |
-|-------------|--------------|-------------|
-| `ontology`  | `ontologies` | Comma-separated list of ontologies to load on startup, in addition to any configured autoload and `owl:imports` discovery. Each value is either a well-known short name (see table below) or an arbitrary HTTPS/HTTP URI. |
+| Parameter    | Description |
+|--------------|-------------|
+| `ontologies` | Comma-separated list of ontologies that **replaces** the configured autoload list entirely. Each value is a well-known short name (see table below) or a full HTTPS/HTTP URI. Use `?ontologies=owl,rdf,rdfs` to load only the W3C core vocabs. |
+| `ontology`   | Comma-separated list of ontologies to load **in addition to** the configured autoload list. |
 
 ```text
-?ontology=bfo,dcat
+?ontologies=owl,rdf,rdfs           # replace defaults — load only W3C core vocabs
+?ontology=bfo,dcat                 # add on top of configured autoload list
 ?ontology=bfo2020,https://example.org/myontology.ttl
 ```
 
@@ -177,40 +179,25 @@ All startup mechanisms are additive and run in this order:
 Reasoning
 ---------
 
-Ontosphere runs [OWL-RL](https://www.w3.org/TR/owl2-profiles/#OWL_2_RL) inference entirely in the browser using the **N3.js BGP-only Reasoner**. Inferred triples appear as amber dashed edges; inferred types and annotations appear in amber italic. A reasoning report lists all inferred triples grouped by rule. Reasoning is idempotent — running it again produces no additional triples. Use **Clear inferred** to remove all inferred triples without affecting asserted data.
+Ontosphere runs OWL reasoning entirely in the browser via a pluggable backend. The default is **Konclude** (full OWL 2 DL). Inferred triples appear as amber dashed edges; inferred types and annotations appear in amber italic. A reasoning report lists all inferred triples. Reasoning is idempotent — running it again produces no additional triples. Use **Clear inferred** to remove all inferred triples without affecting asserted data.
 
-**Supported OWL constructs:**
+### Konclude (default — OWL 2 DL)
 
-| Construct | Rule(s) | Notes |
-|-----------|---------|-------|
-| `rdfs:subClassOf` (transitivity) | `cax-sco`, `scm-sco` | Full transitive closure |
-| `owl:equivalentClass` | `cax-eqc1/2`, `scm-eqc1/2` | Bidirectional; derives `rdfs:subClassOf` |
-| `owl:someValuesFrom` restrictions | `cls-svf1/2`, `scm-svf1/2` | Used in description-logic classification (e.g. pizza patterns) |
-| `owl:allValuesFrom` restrictions | `cls-avf` | Filler type propagation |
-| `owl:hasValue` restrictions | `cls-hv1/2` | Fixed-value property constraints |
-| `owl:inverseOf` | `prp-inv1/2` | Both directions |
-| `owl:SymmetricProperty` | `prp-symp` | |
-| `owl:TransitiveProperty` | `prp-trp` | |
-| `rdfs:subPropertyOf` | `prp-spo1` | |
-| `rdfs:domain` / `rdfs:range` | `prp-domain`, `prp-range` | |
-| `owl:disjointWith` violations | `cax-dw` | Raises consistency violation |
+[Konclude](https://www.derivo.de/products/konclude/) is a complete tableau reasoner for the description logic **SROIQ(D)** (OWL 2 DL), compiled to WebAssembly. It runs classification over the loaded ontology and writes `rdfs:subClassOf` and `owl:equivalentClass` inferences.
 
-**Not supported — requires full EYE reasoner:**
+**Supported OWL constructs (complete):** `rdfs:subClassOf`, `owl:equivalentClass`, `owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:inverseOf`, `owl:SymmetricProperty`, `owl:TransitiveProperty`, `owl:subPropertyOf`, `rdfs:domain`/`rdfs:range`, `owl:intersectionOf`, `owl:unionOf`, `owl:oneOf`, `owl:propertyChainAxiom`, number restrictions, nominals, and more.
 
-| Construct | Reason |
-|-----------|--------|
-| `owl:intersectionOf` membership | Requires `list:in` / `e:findall` built-ins |
-| `owl:unionOf` membership | Requires `list:in` built-in |
-| `owl:oneOf` enumeration | Requires `list:in` built-in |
-| `owl:AllDisjointClasses` / `owl:AllDisjointProperties` | Requires `list:in` + `log:notEqualTo` |
-| `owl:propertyChainAxiom` | Requires `e:propertyChainExtension` built-in |
-| `owl:FunctionalProperty` / `owl:InverseFunctionalProperty` | Generates `owl:sameAs` — explosive inference; excluded |
-| `owl:maxCardinality` / cardinality restrictions | Generates `owl:sameAs` — explosive inference; excluded |
-| `owl:sameAs` equality closure (eq-* rules) | Fires on every triple — O(n²) cost; excluded |
+**Deployment requirement:** Konclude's WASM binary uses `SharedArrayBuffer` (pthreads). The server must send `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: credentialless` headers. Localhost deployments have `SharedArrayBuffer` available without headers. Ontosphere's `server.js` sets these headers automatically.
 
-N3.js is a BGP-only reasoner: any rule using EYE/SWAP built-ins (`e:findall`, `list:in`, `log:notEqualTo`) is silently ignored. The rule files in `public/reasoning-rules/` contain comments marking all such rules `[REQUIRES EYE]`. Full OWL-RL support (intersectionOf, unionOf, cardinality) requires migrating to [`eyereasoner`](https://www.npmjs.com/package/eyereasoner) (SWI-Prolog compiled to WASM) — tracked in `docs/plans/2026-04-28-006-feat-migrate-eyereasoner-plan.md`.
+**Performance:** 250 ms – 2.5 s for typical benchmark ontologies (LUBM, GALEN, Pizza).
 
-**Performance:** Reasoning completes in under 2 seconds for typical ontologies (hundreds to a few thousand triples). There is currently no way to abort a running reasoning job; a page reload is required if reasoning hangs.
+### N3 Rules (legacy / advanced)
+
+The N3 backend uses the **N3.js BGP-only Reasoner** with configurable rulesets loaded from `public/reasoning-rules/`. Select it in *Settings → Reasoner Backend → N3 Rules*.
+
+N3.js is BGP-only: rules using EYE/SWAP built-ins (`e:findall`, `list:in`, `log:notEqualTo`) are silently ignored. The `[REQUIRES EYE]` comments in the rule files mark those rules. Use this backend when you need custom N3 rule files or are working with demos that depend on specific rule-file behavior.
+
+**Performance:** Under 2 seconds for typical ontologies (hundreds to a few thousand triples). There is currently no way to abort a running reasoning job; a page reload is required if reasoning hangs.
 
 Reasoning demo
 --------------
@@ -476,7 +463,7 @@ The **AI Relay Bridge** connects any AI chat tab to Ontosphere with no server, e
 **Starter prompt** (paste into your AI chat after clicking the bookmarklet):
 
 ```text
-You are connected to Ontosphere via a relay. A script in this tab intercepts your tool calls, runs them in Ontosphere, and injects results back as a user message.
+You are connected to Ontosphere via a relay. A script in this tab intercepts your tool calls, runs them in Ontosphere, and injects results back as a user message. If a tool call returns success:false, read the error, fix the argument, and retry the same call immediately — never skip a failed call. Ask the user what they would like to build.
 
 Output format — one JSON-RPC 2.0 call per line, backtick-wrapped:
 `{"jsonrpc":"2.0","id":<N>,"method":"tools/call","params":{"name":"<toolName>","arguments":{...}}}`

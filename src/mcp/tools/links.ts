@@ -2,7 +2,6 @@
 import type { McpTool } from '../types';
 import { rdfManager } from '@/utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
-import { focusElementOnCanvas } from './layout';
 import { expandIri } from './iriUtils';
 import * as Reactodia from '@reactodia/workspace';
 
@@ -19,8 +18,8 @@ interface LinkParams {
 
 export const linkTools: McpTool[] = [
   {
-    name: 'addLink',
-    description: 'Add a triple (directed edge) between two entities.',
+    name: 'addTriple',
+    description: 'Add a simple RDF triple between named entities (IRIs) or attach a literal annotation. Use for: object-property links between known IRIs (e.g. ex:Pizza rdf:type ex:Food), data/annotation properties (e.g. rdfs:label "Pizza"@en), and rdf:type assertions. Object-property triples render on canvas immediately; literal triples appear when the subject node is expanded via expandNode. OWL RESTRICTIONS via blank-node labels — 4 addTriple calls per restriction (use a distinct label per restriction: _:b0, _:b1, _:b2 …): addTriple("_:b0","rdf:type","owl:Restriction") [MUST be owl:Restriction, NOT owl:Class] + addTriple("_:b0","owl:onProperty","ex:hasPart") + addTriple("_:b0","owl:someValuesFrom","ex:SalamiTopping") + addTriple("ex:SalamiPizza","owl:equivalentClass","_:b0"). Same label → same IRI → restrictions collapse — always use a distinct label per restriction. Alternatively use loadRdf with Turtle blank-node syntax for all triples in one call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -41,10 +40,23 @@ export const linkTools: McpTool[] = [
         // objectIri may be a plain literal — only expand if it looks like a prefixed IRI
         const objectIri = rawO ? expandIri(rawO) : undefined;
         if (!subjectIri || !predicateIri || !objectIri) {
-          return { success: false as const, error: 'subjectIri, predicateIri, and objectIri are all required. Call help({tool:"addLink"}) for the full schema.' };
+          return { success: false as const, error: 'subjectIri, predicateIri, and objectIri are all required. Call help({tool:"addTriple"}) for the full schema.' };
         }
         const expandError = [subjectIri, predicateIri, objectIri].find(v => v.startsWith('Unknown prefix:'));
         if (expandError) return { success: false as const, error: expandError };
+        if (subjectIri.startsWith('[') || objectIri.startsWith('[')) {
+          return { success: false as const, error: 'Inline Turtle blank node syntax "[ ... ]" is not a valid IRI. Use an explicit blank node label instead, e.g. "_:b0". Call addTriple("_:b0","rdf:type","owl:Restriction") then addTriple("_:b0","owl:onProperty","ex:hasPart") etc. Each distinct restriction needs a distinct label.' };
+        }
+        // IRIs never contain spaces — catch Turtle fragments passed as IRIs
+        // (e.g. "ex:hasPart someValuesFrom ex:Foo" or "Pizza and hasTopping some Foo")
+        if (/ /.test(subjectIri) || / /.test(objectIri)) {
+          const badIri = [subjectIri, objectIri].find(v => / /.test(v)) ?? '';
+          // Detect corrupted blank-node: leading whitespace before colon (e.g. "     :r1" → should be "_:r1")
+          const blankNodeHint = /^\s+:/.test(badIri)
+            ? ` You passed "${badIri}" — this is a blank-node label with leading spaces instead of underscore. Use "_:${badIri.trim().slice(1)}" (must start with "_:", not spaces).`
+            : ` You passed "${badIri}".`;
+          return { success: false as const, error: `IRI contains spaces and is not valid.${blankNodeHint} For OWL restrictions prefer loadRdf with Turtle (no @prefix needed — ex: owl: are pre-loaded): loadRdf({turtle:"ex:SalamiPizza owl:equivalentClass [ a owl:Restriction ; owl:onProperty ex:hasPart ; owl:someValuesFrom ex:SalamiTopping ] ."})` };
+        }
         rdfManager.addTriple(subjectIri, predicateIri, objectIri);
 
         const { ctx } = getWorkspaceRefs();
@@ -53,10 +65,8 @@ export const linkTools: McpTool[] = [
           addedElements: [subjectIri as Reactodia.ElementIri, objectIri as Reactodia.ElementIri],
         });
 
-        const subjectEl = model.elements.find(
-          e => e instanceof Reactodia.EntityElement && (e as Reactodia.EntityElement).iri === subjectIri
-        ) as Reactodia.EntityElement | undefined;
-        if (subjectEl) focusElementOnCanvas(subjectEl, ctx);
+        const { navigateToIri } = getWorkspaceRefs();
+        navigateToIri?.(subjectIri);
 
         return { success: true as const, data: { added: { s: subjectIri, p: predicateIri, o: objectIri } } };
       } catch (e) {

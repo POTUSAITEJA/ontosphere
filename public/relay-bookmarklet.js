@@ -34,6 +34,19 @@
     window.__vgRelayWatcher = null;
   }
 
+  /* ── Streaming detector — mutation-rate based, no UI-specific selectors ── */
+  // Records timestamp of last DOM mutation. isAiStreaming() uses this as a
+  // generic fallback: if the page mutated recently, generation is likely active.
+  var STREAM_QUIET_MS = 4000; // ms of DOM silence before we consider generation done
+  window.__vgLastMutation = window.__vgLastMutation || 0;
+  var streamObserver = new MutationObserver(function () {
+    window.__vgLastMutation = Date.now();
+  });
+  streamObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+  // Re-register under the relay observer slot so it's killed on next inject.
+  if (window.__vgStreamObserver) { try { window.__vgStreamObserver.disconnect(); } catch (_) {} }
+  window.__vgStreamObserver = streamObserver;
+
   /* ── Instance ID — deactivates old message listeners ──────────────────── */
   // Every click stamps a new ID.  The message listener checks at runtime and
   // ignores messages if a newer instance has taken over.
@@ -172,6 +185,50 @@
     });
   }
 
+  // Returns page text scoped to AI/assistant messages only where detectable,
+  // to avoid dispatching tool-call examples from user messages (e.g. starter prompt).
+  // Falls back to full page text (excluding input) for UIs without role markers.
+  function getAssistantText() {
+    // OWUI: data-message-author-role="assistant" on each message container
+    var nodes = document.querySelectorAll('[data-message-author-role="assistant"]');
+    if (!nodes.length) nodes = document.querySelectorAll('[data-role="assistant"]');
+    // FhGenie / generic: look for direct children of the message list that
+    // are NOT the user's own bubbles (right-aligned). Use aria role if present.
+    if (!nodes.length) nodes = document.querySelectorAll('[role="log"] [aria-label*="assistant" i], [role="log"] [aria-label*="bot" i]');
+    if (nodes.length) {
+      var parts = [];
+      for (var i = 0; i < nodes.length; i++) parts.push(nodes[i].innerText || nodes[i].textContent || '');
+      return parts.join('\n');
+    }
+    return null; // no assistant-scoped nodes found
+  }
+
+  // Returns page text excluding the chat input element.
+  // Prefers assistant-message-scoped text to avoid user-message tool-call examples.
+  // Textarea value is never in body.innerText so only contenteditable needs DOM exclusion.
+  // Uses SHOW_ELEMENT|SHOW_TEXT so FILTER_REJECT on the input element skips its whole subtree.
+  function getPageText() {
+    var assistantText = getAssistantText();
+    if (assistantText !== null) return assistantText;
+    var inp = findInput();
+    if (!inp || inp.tagName === 'TEXTAREA')
+      return document.body.innerText || document.body.textContent || '';
+    var parts = [];
+    var walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+      { acceptNode: function (node) {
+          if (node === inp) return NodeFilter.FILTER_REJECT;
+          if (node.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
+          return NodeFilter.FILTER_SKIP;
+        }
+      }
+    );
+    var node;
+    while ((node = walker.nextNode())) parts.push(node.nodeValue);
+    return parts.join(' ');
+  }
+
   /* ── Submit the chat input ─────────────────────────────────────────────── */
   function submitInput(inputEl) {
     var foundBtn = false;
@@ -188,7 +245,9 @@
         var sendBtn = btns.find(function (b) {
           if (b.disabled) return false;
           var lbl = (b.getAttribute('aria-label') || b.title || b.textContent || '').toLowerCase();
-          return b.type === 'submit' || lbl.includes('send') || lbl.includes('senden') || lbl.includes('submit');
+          var cls = (b.className || '').toLowerCase();
+          return b.type === 'submit' || lbl.includes('send') || lbl.includes('senden') ||
+                 lbl.includes('submit') || cls.includes('send') || cls.includes('submit');
         });
         if (sendBtn) { sendBtn.click(); foundBtn = true; break; }
         cur = cur.parentElement;
@@ -208,7 +267,9 @@
       }
     }
 
-    // 4. Enter keydown — textarea UIs only (TipTap: Enter = new paragraph)
+    // 4. Enter keydown — textarea UIs only, or when no button found.
+    // TipTap (OWUI) maps Enter → new paragraph, NOT submit. Button click is
+    // the correct submit path. Only fall back to Enter for non-TipTap UIs.
     if (inputEl.tagName === 'TEXTAREA' || !foundBtn) {
       ['keydown', 'keyup'].forEach(function (type) {
         inputEl.dispatchEvent(new KeyboardEvent(type, {
@@ -232,149 +293,64 @@
       return false;
     }
 
-    // Wait until the send button is enabled (Svelte/TipTap state flushed) then submit.
-    // Poll up to 3 s in 50 ms steps; fall through to requestSubmit() on timeout.
-    function doSubmit() {
-      var deadline = Date.now() + 3000;
-      (function poll() {
-        var directBtn = document.getElementById('send-message-button');
-        var btnEnabled = directBtn && !directBtn.disabled;
-        if (!btnEnabled) {
-          // Also check tree-climbed send button
-          var cur = el.parentElement;
-          while (cur && cur !== document.body && !btnEnabled) {
-            var found = Array.from(cur.querySelectorAll('button')).find(function (b) {
-              if (b.disabled) return false;
-              var lbl = (b.getAttribute('aria-label') || b.title || b.textContent || '').toLowerCase();
-              return b.type === 'submit' || lbl.includes('send') || lbl.includes('senden') || lbl.includes('submit');
-            });
-            if (found) btnEnabled = true;
-            cur = cur.parentElement;
-          }
-        }
-        if (btnEnabled || Date.now() >= deadline) {
-          submitInput(el);
-          injectInProgress = false;
-        } else {
-          setTimeout(poll, 50);
-        }
-      })();
-    }
-
     if (el.tagName === 'TEXTAREA') {
+      // Textarea: set value via native setter + input event, then defer submit one
+      // render cycle so React/framework state updates before the button is clicked.
       el.focus();
       var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
       setter.call(el, (el.value ? el.value + '\n' : '') + text);
       el.dispatchEvent(new Event('input', { bubbles: true }));
-      doSubmit();
+      setTimeout(function () { submitInput(el); injectInProgress = false; }, 50);
     } else {
-      // ProseMirror / TipTap contenteditable (OpenWebUI, ChatGPT…)
-      //
-      // Three-path strategy, most reliable first:
-      //
-      // Path 1: Direct ProseMirror view dispatch via element.pmViewDesc.view.
-      //   TipTap attaches the ProseMirror EditorView to the DOM element.
-      //   Dispatching a transaction through it updates both PM state and Svelte
-      //   store atomically — no DOM reconciliation, no race conditions.
-      //
-      // Path 2: Synthetic beforeinput(insertFromPaste) with DataTransfer.
-      //   ProseMirror handles this through its beforeinput handler, reading
-      //   event.dataTransfer.  Falls back to this if Path 1 isn't available.
-      //
-      // Path 3: beforeinput(insertText) with data field — last resort.
-      //
-      // Focus first, defer 50 ms so ProseMirror has an active selection.
+      // TipTap/ProseMirror contenteditable (OWUI).
+      // Wait until the UI is ready (isAiStreaming()=false) before calling setContent —
+      // injecting while OWUI is still transitioning out of streaming state causes a race
+      // where the paste lands before the editor accepts input. Signal 4 (DOM mutation
+      // rate) was removed so this check no longer deadlocks on content injection.
       var live = findInput() || el;
       live.focus();
       el = live;
+      var injectDeadline = Date.now() + 10000;
 
-      setTimeout(function () {
+      (function waitReady() {
+        if (isAiStreaming() && Date.now() < injectDeadline) {
+          setTimeout(waitReady, 100);
+          return;
+        }
         var target = findInput() || el;
-        target.focus();
-        var dispatched = false;
+        var tiptap = target.editor;
 
-        // ── Path 1: TipTap / ProseMirror dispatch ───────────────────────
-        // Strategies (most reliable first):
-        //   a) tiptap.commands.setContent — full TipTap pipeline, fires onTransaction
-        //      → onChange → Svelte prompt update → send button enables
-        //   b) pmView.dispatch (raw PM transaction) — fallback for older TipTap
-        //   c) own-property scan for EditorView-shaped objects (minified builds)
-        try {
-          var tiptap = target.editor;
-
-          // (a) TipTap high-level API — preferred; goes through full callback chain
-          if (tiptap && tiptap.commands && typeof tiptap.commands.setContent === 'function') {
-            try {
-              tiptap.commands.focus();
-              // setContent(content, emitUpdate) — emitUpdate=true fires onTransaction
-              tiptap.commands.setContent(text, true);
-              dispatched = (tiptap.state || tiptap.view.state).doc.textContent.length > 0;
-            } catch (_) {}
-          }
-
-          // (b) raw PM dispatch — works when tiptap.commands unavailable
-          if (!dispatched) {
-            var pmView = null;
-            if (tiptap && tiptap.view && typeof tiptap.view.dispatch === 'function') {
-              pmView = tiptap.view;
-            }
-            if (!pmView) {
-              var desc = target.pmViewDesc;
-              if (desc && desc.view && typeof desc.view.dispatch === 'function') pmView = desc.view;
-            }
-            if (!pmView) {
-              var ownKeys = Object.keys(target);
-              for (var oi = 0; oi < ownKeys.length; oi++) {
-                try {
-                  var ov = target[ownKeys[oi]];
-                  if (ov && typeof ov === 'object' && typeof ov.dispatch === 'function' &&
-                      ov.state && typeof ov.state.tr === 'object') { pmView = ov; break; }
-                } catch (_) {}
-              }
-            }
-            if (pmView) {
-              var state = pmView.state;
-              var docSize = state.doc.content.size;
-              var endPos = docSize > 2 ? docSize - 1 : 1;
-              var pmTr = state.tr.insertText(text, 1, endPos);
-              pmView.dispatch(pmTr);
-              dispatched = pmView.state.doc.textContent.length > 0;
-            }
-          }
-        } catch (_) {}
-
-        // ── Path 2: beforeinput insertFromPaste with DataTransfer ───────
-        if (!dispatched) {
-          try {
-            var dt = new DataTransfer();
-            dt.setData('text/plain', text);
-            target.dispatchEvent(new InputEvent('beforeinput', {
-              inputType: 'insertFromPaste',
-              dataTransfer: dt,
-              bubbles: true,
-              cancelable: true,
-            }));
-            dispatched = true;
-          } catch (_) {}
+        if (!tiptap || !tiptap.commands || typeof tiptap.commands.setContent !== 'function') {
+          injectInProgress = false;
+          return;
         }
 
-        // ── Path 3: beforeinput insertText ──────────────────────────────
-        if (!dispatched) {
-          try {
-            target.dispatchEvent(new InputEvent('beforeinput', {
-              inputType: 'insertText',
-              data: text,
-              bubbles: true,
-              cancelable: true,
-            }));
-          } catch (_) {}
-        }
+        tiptap.commands.focus();
+        tiptap.commands.setContent(text, true);
+        var submitDeadline = Date.now() + 10000;
 
-        // Belt-and-suspenders: fire input so Svelte bindings notice any change
-        target.dispatchEvent(new Event('input', { bubbles: true }));
-        el = target;
-        doSubmit();
-      }, 50);
+        // Try to submit, then check whether the editor was cleared.
+        // A cleared editor = OWUI accepted the submit. Retry every 300ms until
+        // it works or deadline. Only click when isAiStreaming() is false so we
+        // don't submit into a mid-think or post-stream annotation window.
+        // Initial 600ms grace period lets OWUI finish its post-stream annotation
+        // phase — no generic DOM/network signal reliably marks the end of it.
+        setTimeout(function trySubmit() {
+          var inp = findInput() || target;
+          var tp = inp.editor || tiptap;
+          var isEmpty = tp.isEmpty !== undefined ? tp.isEmpty
+            : !(tp.getText ? tp.getText().trim() : (inp.innerText || inp.textContent || '').trim());
+          if (isEmpty) { injectInProgress = false; return; }
+
+          if (!isAiStreaming()) {
+            var btn = findSendButton(inp);
+            if (btn && !btn.disabled) { el = inp; btn.click(); }
+          }
+
+          if (Date.now() >= submitDeadline) { injectInProgress = false; return; }
+          setTimeout(trySubmit, 300);
+        }, 600);
+      })();
     }
 
     return true;
@@ -607,22 +583,88 @@
   }
 
   /* ── Streaming-idle detection ──────────────────────────────────────────── */
+  // Primary signal: find the send/submit button and read its state.
+  // A visible, enabled send button (not showing a stop icon) = AI is idle.
+  // Absent, disabled-with-content, or replaced by a stop icon = generating.
+  // Fallback signals cover UIs where no send button is discoverable.
+  function findSendButton(inp) {
+    var direct = document.getElementById('send-message-button');
+    if (direct) return direct;
+    var cur = inp && inp.parentElement;
+    while (cur && cur !== document.body) {
+      var found = null;
+      var candidates = cur.querySelectorAll('button');
+      for (var ci = 0; ci < candidates.length; ci++) {
+        var cb = candidates[ci];
+        var lbl = (cb.getAttribute('aria-label') || cb.title || cb.textContent || '').toLowerCase();
+        var cls = (cb.className || '').toLowerCase();
+        if (cb.type === 'submit' || lbl.includes('send') || lbl.includes('senden') ||
+            lbl.includes('submit') || cls.includes('send') || cls.includes('submit')) {
+          found = cb; break;
+        }
+      }
+      if (found) return found;
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+
   function isAiStreaming() {
     var inp = findInput();
+    var sendBtn = findSendButton(inp);
+
+    if (sendBtn) {
+      // Stop icon in button (FhGenie: same button, SVG swaps arrow→X during generation)
+      var xPath = sendBtn.querySelector('path[d^="M8.22 8.22"]');
+      if (xPath && sendBtn.offsetWidth > 0) return true;
+
+      // Enabled = idle; disabled + has content = generating (OWUI pattern).
+      // Disabled + empty = idle (FhGenie: send button disabled when input empty).
+      // OWUI during generation: send button is replaced by a stop button, so
+      // findSendButton() returns null and the fallback signals below handle it.
+      if (!sendBtn.disabled) return false;
+      if (inp) {
+        var content = inp.tagName === 'TEXTAREA'
+          ? inp.value
+          : (inp.innerText || inp.textContent || '');
+        if (content.trim().length > 0) return true;
+      }
+      return false;
+    }
+
+    // Fallback for UIs without a discoverable send button
     if (inp) {
-      // Textarea-specific: disabled during generation
       if (inp.tagName === 'TEXTAREA' && inp.disabled) return true;
       if (inp.getAttribute('aria-disabled') === 'true') return true;
-      // aria-busy on any ancestor signals generation in progress
       var el = inp.parentElement;
       while (el && el !== document.body) {
         if (el.getAttribute('aria-busy') === 'true') return true;
         el = el.parentElement;
       }
-      // NOTE: we intentionally do NOT check the send button's disabled state here.
-      // TipTap/ProseMirror UIs disable the send button when the editor is empty,
-      // which is the normal idle state — not a streaming indicator.
     }
+
+    var SPINNER_SEL = '[class*="spinner" i],[class*="loading" i],[class*="typing" i],' +
+                      '[class*="thinking" i],[class*="generating" i],[class*="streaming" i],' +
+                      '[class*="skeleton" i]';
+    var spinnerEls = document.querySelectorAll(SPINNER_SEL);
+    for (var si = 0; si < spinnerEls.length; si++) {
+      var sp = spinnerEls[si];
+      if (inp && inp.contains(sp)) continue;
+      if (sp.offsetWidth > 0 || sp.offsetHeight > 0) return true;
+    }
+
+    var STOP_WORDS = ['stop', 'stopp', 'cancel', 'abort', 'halt', 'abbrechen', 'arrêter', 'interrompi'];
+    var btns = document.querySelectorAll('button:not([disabled])');
+    for (var bi = 0; bi < btns.length; bi++) {
+      var b = btns[bi];
+      if (b.offsetWidth === 0 && b.offsetHeight === 0) continue;
+      var lbl2 = (b.getAttribute('aria-label') || b.title || '').toLowerCase();
+      var txt = b.textContent.trim().toLowerCase();
+      for (var wi = 0; wi < STOP_WORDS.length; wi++) {
+        if (lbl2.indexOf(STOP_WORDS[wi]) !== -1 || txt === STOP_WORDS[wi]) return true;
+      }
+    }
+
     return false;
   }
 
@@ -679,54 +721,48 @@
     }, 200);
   }
 
-  /* ── MutationObserver ──────────────────────────────────────────────────── */
-  var debounceTimer = null;
-  var pendingNodes = new Set();
+  /* ── Fire-on-idle poll ─────────────────────────────────────────────────── */
+  // Polls every 500 ms. Fires only when page text has been stable for 12 s
+  // (24 consecutive ticks with identical content-length) AND relay is not busy.
+  // Resets counter on any content change, so qwen3 thinking pauses never
+  // trigger early dispatch. isAiStreaming() is intentionally NOT used here —
+  // it gives false negatives for qwen3 (send button stays enabled during
+  // generation), which was the root cause of multiple partial dispatches per turn.
+  var idlePollTimer = null;
+  var idleConsecutive = 0;
+  var idleLastLen = -1;
 
-  function flushPending() {
-    pendingNodes.forEach(function (node) { parseAndEnqueue(node); });
-    pendingNodes.clear();
-  }
-
-  function collectAncestors(node) {
-    var el = node.nodeType === 3 ? node.parentElement : node;
-    // Ignore mutations inside editable elements (user typing / our inject)
-    var check = el;
-    while (check && check !== document.body) {
-      if (check.tagName === 'TEXTAREA' || check.contentEditable === 'true') return;
-      check = check.parentElement;
-    }
-    // Stop at the NEAREST block element — do not climb to large chat-stream
-    // containers that also contain user messages with example tool calls.
-    // MCP tool calls are always in a single <code> block; the nearest p/code/div
-    // is sufficient to find them.
-    while (el && el !== document.body) {
-      var tag = el.tagName ? el.tagName.toLowerCase() : '';
-      if (tag === 'p' || tag === 'li' || tag === 'pre' || tag === 'code' ||
-          tag === 'div' || tag === 'section' || tag === 'article') {
-        pendingNodes.add(el);
-        return;
+  function idlePoll() {
+    if (window.__vgRelayInstanceId !== instanceId) return; // stale instance
+    if (!isProcessing && callQueue.length === 0) {
+      var text = getPageText();
+      var len = text.length;
+      if (len !== idleLastLen) {
+        idleLastLen = len;
+        idleConsecutive = 0;
+      } else {
+        idleConsecutive++;
+        if (idleConsecutive >= 24) { // 24 × 500 ms = 12 s stable
+          var calls = extractAllToolCalls(text, dispatchedSigs);
+          if (calls.length > 0) {
+            idleConsecutive = 0;
+            idleLastLen = -1;
+            callQueue = callQueue.concat(calls);
+            processNextInQueue();
+          }
+        }
       }
-      el = el.parentElement;
+    } else {
+      idleConsecutive = 0;
+      idleLastLen = -1;
     }
-    if (el === document.body) pendingNodes.add(document.body);
+    idlePollTimer = setTimeout(idlePoll, 500);
   }
 
-  var observer = new MutationObserver(function (mutations) {
-    mutations.forEach(function (m) {
-      m.addedNodes.forEach(function (n) { collectAncestors(n); });
-      if (m.type === 'characterData') collectAncestors(m.target);
-    });
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(flushPending, DEBOUNCE_MS);
-  });
+  // Pre-seed: mark all calls currently visible on the page as already dispatched.
+  extractAllToolCalls(getPageText(), dispatchedSigs);
 
-  // Pre-seed dispatchedSigs with all tool calls already visible on the page
-  // BEFORE starting the observer, so newly-arriving AI messages are not seeded.
-  // This prevents system-prompt examples (id:0 etc.) from being dispatched.
-  extractAllToolCalls(document.body.innerText || document.body.textContent || '', dispatchedSigs);
-
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-  window.__vgRelayObserver = observer;
+  idlePoll();
+  window.__vgRelayObserver = { disconnect: function () { clearTimeout(idlePollTimer); idlePollTimer = null; } };
 
 })();

@@ -9,6 +9,7 @@ vi.mock('@/utils/rdfManager', () => ({
     removeAllQuadsForIri: vi.fn().mockResolvedValue(undefined),
     fetchQuadsPage: vi.fn(),
     applyBatch: vi.fn().mockResolvedValue(undefined),
+    getNamespaces: vi.fn().mockReturnValue([]),
   },
 }));
 
@@ -197,13 +198,13 @@ describe('getNodeDetails', () => {
     expect(result).toEqual({
       success: true,
       data: {
-        iri: 'http://example.org/Alice',
+        iri: 'ex:Alice',
         label: 'Alice',
-        types: ['http://example.org/Person'],
+        types: ['ex:Person'],
         properties: [
-          { predicate: RDF_TYPE, object: 'http://example.org/Person', objectType: 'iri' },
-          { predicate: RDFS_LABEL, object: 'Alice', objectType: 'literal' },
-          { predicate: 'http://example.org/age', object: '30', objectType: 'literal' },
+          { predicate: 'rdf:type', object: 'ex:Person', objectType: 'iri' },
+          { predicate: 'rdfs:label', object: 'Alice', objectType: 'literal' },
+          { predicate: 'ex:age', object: '30', objectType: 'literal' },
         ],
       },
     });
@@ -214,7 +215,7 @@ describe('getNodeDetails', () => {
     const result = await getNodeDetails.handler({ iri: 'http://example.org/Empty' });
     expect(result).toEqual({
       success: true,
-      data: { iri: 'http://example.org/Empty', label: '', types: [], properties: [] },
+      data: { iri: 'ex:Empty', label: '', types: [], properties: [] },
     });
   });
 

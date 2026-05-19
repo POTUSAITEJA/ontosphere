@@ -3,7 +3,7 @@
 // Dynamic namespaces (from addNamespace / loadOntology) are provided via
 // setNamespaceRegistryGetter, wired up by ontosphereMcpServer.ts at startup.
 
-const BUILTIN_PREFIXES: Record<string, string> = {
+export const BUILTIN_PREFIXES: Record<string, string> = {
   'rdf:':     'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
   'rdfs:':    'http://www.w3.org/2000/01/rdf-schema#',
   'owl:':     'http://www.w3.org/2002/07/owl#',
@@ -53,6 +53,8 @@ const URI_SCHEMES = ['http:', 'https:', 'urn:', 'mailto:', 'ftp:', 'file:', 'urn
  */
 export function expandIri(value: string): string {
   if (!value) return value;
+  // Blank node identifiers pass through unchanged.
+  if (value.startsWith('_:')) return value;
   // Pass through any value whose scheme is a known URI scheme (not an RDF prefix).
   for (const scheme of URI_SCHEMES) {
     if (value.startsWith(scheme)) return value;
