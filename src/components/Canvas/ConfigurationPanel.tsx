@@ -97,6 +97,7 @@ export const ConfigurationPanel = ({
     setClusteringAlgorithm,
     // Reasoning rulesets setter
     setReasoningRulesets,
+    setReasonerBackend,
     resetToDefaults,
     exportConfig,
     importConfig,
@@ -474,6 +475,28 @@ export const ConfigurationPanel = ({
                 </div>
 
                 <div className="space-y-2">
+                  <Label>Reasoner Backend</Label>
+                  <div className="flex gap-3 text-xs">
+                    {(['konclude', 'n3'] as const).map((b) => (
+                      <label key={b} className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="reasonerBackend"
+                          value={b}
+                          checked={(config.reasonerBackend ?? 'konclude') === b}
+                          onChange={() => setReasonerBackend(b)}
+                        />
+                        {b === 'konclude' ? 'OWL DL (Konclude)' : 'N3 Rules'}
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    OWL DL uses the Konclude tableau reasoner for complete OWL 2 classification. N3 Rules uses forward-chaining with custom rulesets.
+                  </p>
+                </div>
+
+                {(config.reasonerBackend ?? 'konclude') === 'n3' && (
+                <div className="space-y-2">
                   <Label>Reasoning Rulesets</Label>
                   <div className="space-y-2 text-xs">
                     <div className="text-xs text-muted-foreground">
@@ -515,6 +538,7 @@ export const ConfigurationPanel = ({
                     })()}
                   </div>
                 </div>
+                )}
 
                 <div className="space-y-2">
                   <Label>Auto-loaded Ontologies ({config.additionalOntologies.length})</Label>

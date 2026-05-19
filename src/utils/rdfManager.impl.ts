@@ -657,11 +657,17 @@ export class RDFManagerImpl {
     await this.worker.call("triggerSubjects", { subjects });
   }
 
-  async runReasoning(options?: { rulesets?: string[] }): Promise<ReasoningResult> {
+  async runReasoning(options?: { rulesets?: string[]; reasonerBackend?: 'konclude' | 'n3' }): Promise<ReasoningResult> {
     const reasoningId = `reasoning-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const rulesets = Array.isArray(options?.rulesets)
       ? options!.rulesets.map((r) => String(r)).filter(Boolean)
       : [];
+    const appConfigState = (useAppConfigStore as any)?.getState?.();
+    const reasonerBackend: 'konclude' | 'n3' =
+      options?.reasonerBackend === 'n3' ? 'n3'
+      : options?.reasonerBackend === 'konclude' ? 'konclude'
+      : appConfigState?.config?.reasonerBackend === 'n3' ? 'n3'
+      : 'konclude';
     const resolveBaseUrl = (): string => {
       try {
         const envBase =
@@ -691,6 +697,7 @@ export class RDFManagerImpl {
       rulesets,
       emitSubjects: true,
       baseUrl: resolveBaseUrl(),
+      reasonerBackend,
     };
     const response = await this.worker.call("runReasoning", payload);
     const safe = isPlainObject(response) ? response : {};
