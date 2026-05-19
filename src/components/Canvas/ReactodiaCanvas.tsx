@@ -1078,7 +1078,8 @@ export default function ReactodiaCanvas() {
     try {
       const cfg = useAppConfigStore.getState().config;
       const rulesets = Array.isArray(cfg?.reasoningRulesets) ? cfg.reasoningRulesets : [];
-      const result = await rdfManager.runReasoning({ rulesets });
+      const reasonerBackend = cfg?.reasonerBackend ?? 'konclude';
+      const result = await rdfManager.runReasoning({ rulesets, reasonerBackend });
       setCurrentReasoning(result);
       setReasoningHistory(h => [...h, result]);
 
