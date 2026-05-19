@@ -256,7 +256,12 @@ class KoncludeReasoner {
       const inferredGraphNode = N3.DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI);
       store.removeQuads(store.getQuads(null, null, null, inferredGraphNode));
 
-      const { tripleBuffer, strTableBuffer } = _encodeToBuffers(store.getQuads(null, null, null, null));
+      const sourceQuads = store.getQuads(null, null, null, null);
+      const sourceKeys = new Set(
+        sourceQuads.map((q) => `${q.subject.value}\0${q.predicate.value}\0${q.object.value}`),
+      );
+
+      const { tripleBuffer, strTableBuffer } = _encodeToBuffers(sourceQuads);
       await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer], [tripleBuffer, strTableBuffer]);
       await this._call("realization", []);
 
@@ -264,6 +269,7 @@ class KoncludeReasoner {
       const inferredQuads = _decodeBuffers(resultBuf);
 
       for (const q of inferredQuads) {
+        if (sourceKeys.has(`${q.subject.value}\0${q.predicate.value}\0${q.object.value}`)) continue;
         store.addQuad(N3.DataFactory.quad(q.subject, q.predicate, q.object, inferredGraphNode));
       }
 
@@ -720,7 +726,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     if (str.startsWith("_:")) return DataFactory.blankNode(str.slice(2));
     // N3.js literal formats (all start with '"')
     if (str.startsWith('"')) {
-      const langMatch = /^"(.*)"\@([a-zA-Z-]+)$/.exec(str);
+      const langMatch = /^"(.*)"@([a-zA-Z-]+)$/.exec(str);
       if (langMatch) return DataFactory.literal(langMatch[1], langMatch[2]);
       const typedMatch = /^"(.*)"\^\^(.+)$/.exec(str);
       if (typedMatch) return DataFactory.literal(typedMatch[1], DataFactory.namedNode(typedMatch[2]));
