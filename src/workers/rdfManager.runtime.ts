@@ -194,8 +194,9 @@ class KoncludeReasoner {
   constructor() {
     // Absolute public URL — required because new URL("./worker.js", import.meta.url)
     // resolves to the bundle URL inside a Vite worker, not the package directory.
+    // BASE_URL is "/" in dev and "/ontosphere/" on GitHub Pages.
     // Increment v= when upgrading rdf-reasoner-konclude.
-    this.worker = new Worker("/rdf-reasoner-konclude/worker.js?v=16", { type: "module" });
+    this.worker = new Worker(`${import.meta.env.BASE_URL}rdf-reasoner-konclude/worker.js?v=16`, { type: "module" });
 
     let readyReject!: (reason: Error) => void;
     let readySettled = false;
