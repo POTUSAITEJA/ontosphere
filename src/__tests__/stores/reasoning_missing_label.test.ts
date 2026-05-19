@@ -98,7 +98,7 @@ ex:AnotherPerson a ex:Person ;
     expect(quadCount).toBeGreaterThan(0);
 
     // Run reasoning with best-practice rules
-    const result = await rdfMgr.runReasoning();
+    const result = await rdfMgr.runReasoning({ reasonerBackend: 'n3' });
 
     // Restore original fetch
     try {
