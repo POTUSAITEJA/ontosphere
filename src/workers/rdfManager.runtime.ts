@@ -2240,6 +2240,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             rulesets: payload.rulesets,
             baseUrl: payload.baseUrl,
             emitSubjects: payload.emitSubjects,
+            reasonerBackend: payload.reasonerBackend,
           };
           const outcome = await handleRunReasoning(reasoningRequest, {
             mutateSharedStore: true,
