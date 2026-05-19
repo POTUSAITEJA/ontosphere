@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
+    <!-- Cross-Origin Isolation via service worker — required for SharedArrayBuffer
+         (Konclude WASM) on static hosts like GitHub Pages that cannot set headers. -->
+    <script src="%BASE_URL%coi-serviceworker.js"></script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Ontosphere - Knowledge Graph Builder</title>
