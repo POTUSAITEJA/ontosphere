@@ -123,6 +123,7 @@ export type RDFWorkerCommandPayloads = {
     rulesets?: string[];
     baseUrl?: string;
     emitSubjects?: boolean;
+    reasonerBackend?: 'konclude' | 'n3';
   };
   importSerialized: ImportSerializedPayload;
   exportGraph: ExportGraphPayload;
@@ -523,6 +524,10 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
     if (typeof emitSubjects !== "undefined") {
       assertBoolean(emitSubjects, "runReasoning.emitSubjects must be a boolean when provided");
     }
+    const { reasonerBackend } = payload as RDFWorkerCommandPayloads["runReasoning"];
+    if (typeof reasonerBackend !== "undefined") {
+      assertString(reasonerBackend, "runReasoning.reasonerBackend must be a string when provided");
+    }
   },
   importSerialized(payload) {
     assertPlainObject(payload, "importSerialized payload must be an object");
@@ -685,6 +690,7 @@ export interface RDFWorkerRunReasoningMessage {
   rulesets?: string[];
   baseUrl?: string;
   emitSubjects?: boolean;
+  reasonerBackend?: 'konclude' | 'n3';
 }
 
 export type RDFWorkerInboundMessage =
@@ -880,6 +886,9 @@ export function assertRdfWorkerInbound(value: unknown): asserts value is RDFWork
       }
       if (typeof message.emitSubjects !== "undefined") {
         assertBoolean(message.emitSubjects, "runReasoning.emitSubjects must be a boolean when provided");
+      }
+      if (typeof message.reasonerBackend !== "undefined") {
+        assertString(message.reasonerBackend, "runReasoning.reasonerBackend must be a string when provided");
       }
       return;
     default:

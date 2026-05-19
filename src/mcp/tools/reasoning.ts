@@ -11,16 +11,17 @@ const EXPORT_FORMATS = ['turtle', 'jsonld', 'rdfxml', 'svg', 'png'];
 // ---------------------------------------------------------------------------
 const runReasoning: McpTool = {
   name: 'runReasoning',
-  description: 'Run OWL/RDFS reasoning over the loaded graph and infer new triples. Pass clearBefore=true to clear previous inferences first.',
+  description: "Run OWL reasoning over the loaded graph and infer new triples. Default backend is 'konclude' (full OWL 2 DL). Pass reasonerBackend='n3' to use N3 rule-based inference instead. Pass clearBefore=true to clear previous inferences first.",
   inputSchema: {
     type: 'object',
     properties: {
       clearBefore: { type: 'boolean', default: false },
+      reasonerBackend: { type: 'string', enum: ['konclude', 'n3'], description: "Reasoning backend: 'konclude' (OWL 2 DL, default) or 'n3' (N3 rule-based)" },
     },
   },
   async handler(params): Promise<McpResult> {
     try {
-      const { clearBefore = false } = (params ?? {}) as { clearBefore?: boolean };
+      const { clearBefore = false, reasonerBackend } = (params ?? {}) as { clearBefore?: boolean; reasonerBackend?: 'konclude' | 'n3' };
       const refs = getWorkspaceRefs();
 
       if (clearBefore) {
@@ -29,7 +30,8 @@ const runReasoning: McpTool = {
 
       const cfg = useAppConfigStore.getState().config;
       const rulesets = Array.isArray(cfg?.reasoningRulesets) ? cfg.reasoningRulesets : [];
-      const result = await rdfManager.runReasoning({ rulesets });
+      const backend = reasonerBackend === 'n3' ? 'n3' : reasonerBackend === 'konclude' ? 'konclude' : undefined;
+      const result = await rdfManager.runReasoning({ rulesets, ...(backend ? { reasonerBackend: backend } : {}) });
       const inferredTriples = result?.meta?.addedCount ?? result?.inferences?.length ?? 0;
 
       // Trigger canvas refresh via registered callback if available
@@ -84,6 +86,7 @@ const getCapabilities: McpTool = {
         data: {
           layoutAlgorithms: [...VALID_ALGORITHMS],
           exportFormats: EXPORT_FORMATS,
+          reasonerBackends: ['konclude', 'n3'],
         },
       };
     } catch (e) {

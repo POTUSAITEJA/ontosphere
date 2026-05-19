@@ -14,6 +14,10 @@ export default defineConfig({
     host: "::",
     port: 8080,
     allowedHosts: true,
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "credentialless",
+    },
   },
 
   // Dev plugins: keep minimal for fast dev runs

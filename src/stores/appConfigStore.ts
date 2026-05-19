@@ -35,6 +35,7 @@ export interface AppConfig {
   clusteringAlgorithm: "none" | "louvain" | "label-propagation" | "kmeans";
   collapsedNodes: string[];
   reasoningRulesets: string[];
+  reasonerBackend: 'konclude' | 'n3';
   debugRdfLogging: boolean;
   debugAll: boolean;
   recentOntologies: string[];
@@ -69,6 +70,7 @@ interface AppConfigStore {
   toggleNodeCollapsed: (iri: string) => void;
   setCollapsedNodes: (iris: string[]) => void;
   setReasoningRulesets: (reasoningRulesets: string[]) => void;
+  setReasonerBackend: (backend: 'konclude' | 'n3') => void;
   setDebugRdfLogging: (enabled: boolean) => void;
   setDebugAll: (enabled: boolean) => void;
   setBlacklistEnabled: (enabled: boolean) => void;
@@ -120,6 +122,7 @@ const defaultConfig: AppConfig = {
   clusteringAlgorithm: "label-propagation",
   collapsedNodes: [],
   reasoningRulesets: ["best-practice.n3", "owl-rl.n3"],
+  reasonerBackend: "konclude" as const,
   recentOntologies: [],
   recentLayouts: ["horizontal"],
   additionalOntologies: [
@@ -240,6 +243,7 @@ function normalizeAppConfigInput(value: unknown, context: string): AppConfig {
       input.reasoningRulesets ?? cfg.reasoningRulesets,
       `${context}.reasoningRulesets`,
     ),
+    reasonerBackend: input.reasonerBackend === 'n3' ? 'n3' : 'konclude',
     debugRdfLogging: normalizeBooleanFlag(
       input.debugRdfLogging,
       `${context}.debugRdfLogging`,
@@ -457,6 +461,13 @@ export const useAppConfigStore = create<AppConfigStore>()(
         }));
       },
 
+      setReasonerBackend: (backend: 'konclude' | 'n3') => {
+        updateConfig(set, (config) => ({
+          ...config,
+          reasonerBackend: backend === 'n3' ? 'n3' : 'konclude',
+        }));
+      },
+
       setDebugRdfLogging: (enabled: boolean) => {
         updateConfig(set, (config) => ({
           ...config,
@@ -601,6 +612,7 @@ export const useAppConfigStore = create<AppConfigStore>()(
     }),
     {
       name: STORAGE_KEY,
+      version: 1,
       storage: createJSONStorage(resolveStateStorage),
       merge: (persisted: unknown, current) => {
         if (!isPlainObject(persisted)) return current;
