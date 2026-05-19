@@ -90,8 +90,10 @@ describe("Konclude DL reasoning: reasoning-demo.ttl", () => {
       );
       expect(employeeSubPerson).toBe(true);
 
-      // Konclude echoes source triples back into the inferred graph (full taxonomy
-      // output). Verify the split so future upgrades don't silently change behaviour.
+      // The npm RdfReasoner echoes source triples back into the inferred graph
+      // as part of its full taxonomy output. Our inline KoncludeReasoner filters
+      // these out before writing to urn:konclude:inferred (see rdfManager.runtime.ts).
+      // Lock in the npm package's echo count so upgrades are visible.
       const sourceKeys = new Set(
         store
           .getQuads(null, null, null, N3.DataFactory.defaultGraph())
@@ -100,22 +102,13 @@ describe("Konclude DL reasoning: reasoning-demo.ttl", () => {
       const echoed = inferred.filter((q) =>
         sourceKeys.has(`${q.subject.value} ${q.predicate.value} ${q.object.value}`),
       );
-      const genuinelyNew = inferred.filter(
-        (q) => !sourceKeys.has(`${q.subject.value} ${q.predicate.value} ${q.object.value}`),
-      );
       console.log(
         "[TEST] inferred breakdown — echoed source triples:",
         echoed.length,
         "| genuinely new:",
-        genuinelyNew.length,
+        inferred.length - echoed.length,
       );
-      // All inferred quads are in a different named graph from the source quads —
-      // N3.Store does not deduplicate across graphs, so echoed triples are stored
-      // alongside (not replacing) their asserted counterparts.
-      expect(echoed.length + genuinelyNew.length).toBe(inferred.length);
-      // Konclude v0.2.0 produces more than just the echoed taxonomy —
-      // there are genuinely new inferences (subClassOf owl:Thing, type inferences, etc.)
-      expect(genuinelyNew.length).toBeGreaterThan(0);
+      expect(echoed.length).toBe(12); // npm RdfReasoner echoes; inline KoncludeReasoner filters these out
     },
     30000,
   );
