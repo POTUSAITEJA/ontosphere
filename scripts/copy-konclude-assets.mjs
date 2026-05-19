@@ -18,3 +18,9 @@ for (const file of assets) {
   copyFileSync(resolve(src, file), resolve(dest, file));
   console.log(`copied: ${file}  →  public/rdf-reasoner-konclude/${file}`);
 }
+
+// Copy coi-serviceworker for SharedArrayBuffer support on static hosts (GitHub Pages).
+const coiSrc = resolve(root, "node_modules/coi-serviceworker/coi-serviceworker.js");
+const coiDest = resolve(root, "public/coi-serviceworker.js");
+copyFileSync(coiSrc, coiDest);
+console.log("copied: coi-serviceworker.js  →  public/coi-serviceworker.js");

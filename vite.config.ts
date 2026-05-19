@@ -20,6 +20,13 @@ export default defineConfig({
     },
   },
 
+  preview: {
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "credentialless",
+    },
+  },
+
   // Dev plugins: keep minimal for fast dev runs
   plugins: [
     react(),
