@@ -50,6 +50,7 @@ describe("reasoning (app integration) with LengthMeasurement ttl", () => {
               const appCfg = useAppConfigStore.getState();
               // Restore the app rulesets so the N3 reasoner runs with configured rules (best-practice + owl-rl)
               appCfg.setReasoningRulesets(["best-practice.n3","owl-rl.n3"]);
+              appCfg.setReasonerBackend('n3');
               // keep persisted autoload enabled so ontologies are still preloaded
               if (typeof appCfg.setPersistedAutoload === "function") {
                 try { appCfg.setPersistedAutoload(true); } catch (_) { /* ignore */ }

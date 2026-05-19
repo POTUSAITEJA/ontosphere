@@ -59,6 +59,7 @@ describe("Disjoint Class Reasoning", () => {
     // Run reasoning with best-practice rules
     const result = await rdfManager.runReasoning({
       rulesets: ["best-practice.n3"],
+      reasonerBackend: 'n3',
     });
 
     console.log("Reasoning result:", JSON.stringify(result, null, 2));

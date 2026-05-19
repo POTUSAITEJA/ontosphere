@@ -214,7 +214,7 @@ describe("OWL restriction classification — no collapse (regression guard)", ()
   it("NAMED NODES — no collapse; ind1 typed as ClassA only", async () => {
     await seedNamedNodeGraph();
 
-    const result = await rdfManager.runReasoning({ rulesets: ["owl-rl.n3"] });
+    const result = await rdfManager.runReasoning({ rulesets: ["owl-rl.n3"], reasonerBackend: 'n3' });
 
     if ((result.meta as any)?.ruleQuadCount === 0) {
       console.warn("[TEST] No rule quads loaded — skipping");
@@ -236,7 +236,7 @@ describe("OWL restriction classification — no collapse (regression guard)", ()
     const hasSkolem = dataQuads.some((q: any) => (q.subject?.value ?? q.subject ?? "").startsWith("urn:vg:bnode:"));
     expect(hasSkolem).toBe(true);
 
-    const result = await rdfManager.runReasoning({ rulesets: ["owl-rl.n3"] });
+    const result = await rdfManager.runReasoning({ rulesets: ["owl-rl.n3"], reasonerBackend: 'n3' });
 
     if ((result.meta as any)?.ruleQuadCount === 0) {
       console.warn("[TEST] No rule quads loaded — skipping");
@@ -280,7 +280,7 @@ ex:p1 rdf:type ex:FillerA .
     const hasSkolem = dataQuads.some((q: any) => (q.subject?.value ?? q.subject ?? "").startsWith("urn:vg:bnode:"));
     expect(hasSkolem).toBe(true);
 
-    const result = await rdfManager.runReasoning({ rulesets: ["owl-rl.n3"] });
+    const result = await rdfManager.runReasoning({ rulesets: ["owl-rl.n3"], reasonerBackend: 'n3' });
 
     if ((result.meta as any)?.ruleQuadCount === 0) {
       console.warn("[TEST] No rule quads loaded — skipping");
@@ -340,7 +340,7 @@ ex:p1 rdf:type ex:FillerA .
     );
     expect(skolemSubjects.size).toBe(2); // _:b0 and _:b1 get distinct IRIs
 
-    const result = await rdfManager.runReasoning({ rulesets: ["owl-rl.n3"] });
+    const result = await rdfManager.runReasoning({ rulesets: ["owl-rl.n3"], reasonerBackend: 'n3' });
 
     if ((result.meta as any)?.ruleQuadCount === 0) {
       console.warn("[TEST] No rule quads loaded — skipping");
