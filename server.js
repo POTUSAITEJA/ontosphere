@@ -15,6 +15,12 @@ const app = express();
 //   Content-Type to "application/javascript" so the browser will attempt to execute it.
 // This is a temporary server-side safeguard; the proper fix is to ensure built
 // assets are emitted with .js extension and served with the correct MIME.
+app.use((_req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+  next();
+});
+
 app.use((req, res, next) => {
   if (req.method === 'GET' && req.originalUrl && req.originalUrl.startsWith('/ontosphere/assets/')) {
     res.setHeader('Access-Control-Allow-Origin', '*');

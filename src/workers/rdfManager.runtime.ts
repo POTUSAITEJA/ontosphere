@@ -24,11 +24,281 @@ import { ensureDefaultNamespaceMap } from "../constants/namespaces.ts";
 import { RDF_TYPE, RDFS_LABEL, SHACL } from "../constants/vocabularies.ts";
 import { OWL_SCHEMA_AXIOMS } from "../constants/owlSchemaData.ts";
 import { QueryEngine } from "@comunica/query-sparql-rdfjs";
+const KONCLUDE_INFERRED_GRAPH_IRI = "urn:konclude:inferred";
+
+// ---------------------------------------------------------------------------
+// Binary codec — verbatim from rdf-reasoner-konclude v0.2.0 ts/intern.ts.
+// Not exported from the package public API; inlined here to avoid importing
+// private dist paths. Coupled to the worker.js in public/rdf-reasoner-konclude/
+// — both come from the same package version. Pin: 0.2.0
+// ---------------------------------------------------------------------------
+
+const _enc = new TextEncoder();
+const _dec = new TextDecoder();
+
+class InternTable {
+  private readonly namedNodes = new Map<string, number>();
+  private readonly blankNodes = new Map<string, number>();
+  private readonly literals = new Map<string, number>();
+  private readonly entries: Uint8Array[] = [];
+
+  private addEntry(bytes: Uint8Array, type: 0 | 1 | 2): number {
+    const id = (this.entries.length & 0x3fffffff) | (type << 30);
+    this.entries.push(bytes);
+    return id;
+  }
+
+  encodeTerm(term: N3.Term): number {
+    switch (term.termType) {
+      case "NamedNode": {
+        let id = this.namedNodes.get(term.value);
+        if (id === undefined) {
+          id = this.addEntry(_enc.encode(term.value), 0);
+          this.namedNodes.set(term.value, id);
+        }
+        return id;
+      }
+      case "BlankNode": {
+        let id = this.blankNodes.get(term.value);
+        if (id === undefined) {
+          id = this.addEntry(_enc.encode(term.value), 1);
+          this.blankNodes.set(term.value, id);
+        }
+        return id;
+      }
+      case "Literal": {
+        const dt = term.datatype?.value ?? "";
+        const lang = term.language ?? "";
+        const raw = `${term.value}\0${dt}\0${lang}`;
+        let id = this.literals.get(raw);
+        if (id === undefined) {
+          id = this.addEntry(_enc.encode(raw), 2);
+          this.literals.set(raw, id);
+        }
+        return id;
+      }
+      default: {
+        let id = this.namedNodes.get("");
+        if (id === undefined) {
+          id = this.addEntry(_enc.encode(""), 0);
+          this.namedNodes.set("", id);
+        }
+        return id;
+      }
+    }
+  }
+
+  buildStrTableBuffer(): ArrayBuffer {
+    const count = this.entries.length;
+    const headerBytes = 4 + 4 * count;
+    let dataBytes = 0;
+    for (const e of this.entries) dataBytes += e.byteLength;
+    const buf = new ArrayBuffer(headerBytes + dataBytes);
+    const dv = new DataView(buf);
+    const u8 = new Uint8Array(buf);
+    dv.setUint32(0, count, true);
+    let offset = 0;
+    let dataPos = headerBytes;
+    for (let i = 0; i < count; i++) {
+      dv.setUint32(4 + 4 * i, offset, true);
+      const entry = this.entries[i];
+      u8.set(entry, dataPos);
+      offset += entry.byteLength;
+      dataPos += entry.byteLength;
+    }
+    return buf;
+  }
+}
+
+function _encodeToBuffers(quads: Iterable<N3.Quad>): { tripleBuffer: ArrayBuffer; strTableBuffer: ArrayBuffer } {
+  const table = new InternTable();
+  const ids: number[] = [];
+  for (const quad of quads) {
+    ids.push(table.encodeTerm(quad.subject), table.encodeTerm(quad.predicate), table.encodeTerm(quad.object));
+  }
+  return { tripleBuffer: new Uint32Array(ids).buffer, strTableBuffer: table.buildStrTableBuffer() };
+}
+
+function _decodeTerm(id: number, rawStrings: string[]): N3.NamedNode | N3.BlankNode | N3.Literal {
+  const type = id >>> 30;
+  const idx = id & 0x3fffffff;
+  const raw = rawStrings[idx] ?? "";
+  switch (type) {
+    case 1: return N3.DataFactory.blankNode(raw);
+    case 2: {
+      const nul1 = raw.indexOf("\0");
+      const value = nul1 >= 0 ? raw.slice(0, nul1) : raw;
+      const rest = nul1 >= 0 ? raw.slice(nul1 + 1) : "";
+      const nul2 = rest.indexOf("\0");
+      const datatype = nul2 >= 0 ? rest.slice(0, nul2) : rest;
+      const language = nul2 >= 0 ? rest.slice(nul2 + 1) : "";
+      if (language) return N3.DataFactory.literal(value, language);
+      if (datatype) return N3.DataFactory.literal(value, N3.DataFactory.namedNode(datatype));
+      return N3.DataFactory.literal(value);
+    }
+    default: return N3.DataFactory.namedNode(raw);
+  }
+}
+
+function _decodeBuffers(combined: ArrayBuffer): N3.Quad[] {
+  if (combined.byteLength < 4) return [];
+  const dv = new DataView(combined);
+  const strTableLen = dv.getUint32(0, true);
+  const strTableStart = 4;
+  const tripleStart = 4 + strTableLen;
+  if (strTableLen < 4) return [];
+  const strDv = new DataView(combined, strTableStart, strTableLen);
+  const termCount = strDv.getUint32(0, true);
+  const headerBytes = 4 + 4 * termCount;
+  const strDataLen = strTableLen - headerBytes;
+  const strBytes = new Uint8Array(combined, strTableStart + headerBytes, strDataLen);
+  const rawStrings: string[] = new Array(termCount);
+  for (let i = 0; i < termCount; i++) {
+    const start = strDv.getUint32(4 + 4 * i, true);
+    const end = i + 1 < termCount ? strDv.getUint32(4 + 4 * (i + 1), true) : strDataLen;
+    rawStrings[i] = _dec.decode(strBytes.slice(start, end));
+  }
+  const tripleBytes = combined.byteLength - tripleStart;
+  const tripleCount = Math.floor(tripleBytes / 12);
+  if (tripleCount === 0) return [];
+  const tripDv = new DataView(combined, tripleStart, tripleCount * 12);
+  const quads: N3.Quad[] = new Array(tripleCount);
+  for (let i = 0; i < tripleCount; i++) {
+    const sId = tripDv.getUint32(i * 12, true);
+    const pId = tripDv.getUint32(i * 12 + 4, true);
+    const oId = tripDv.getUint32(i * 12 + 8, true);
+    quads[i] = N3.DataFactory.quad(
+      _decodeTerm(sId, rawStrings) as N3.NamedNode,
+      _decodeTerm(pId, rawStrings) as N3.NamedNode,
+      _decodeTerm(oId, rawStrings),
+      N3.DataFactory.defaultGraph(),
+    );
+  }
+  return quads;
+}
+
+// ---------------------------------------------------------------------------
+// KoncludeReasoner — adapted from RdfReasoner in rdf-reasoner-konclude v0.2.0.
+// Identical to upstream except the worker URL uses an absolute public path
+// instead of new URL("./worker.js", import.meta.url), which resolves
+// incorrectly inside Vite worker bundles.
+// ---------------------------------------------------------------------------
+
+class KoncludeReasoner {
+  readonly ready: Promise<void>;
+  private readonly worker: Worker;
+  private nextId = 0;
+  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason: unknown) => void }>();
+  private _queue: Promise<void> = Promise.resolve();
+
+  constructor() {
+    // Absolute public URL — required because new URL("./worker.js", import.meta.url)
+    // resolves to the bundle URL inside a Vite worker, not the package directory.
+    // Increment v= when upgrading rdf-reasoner-konclude.
+    this.worker = new Worker("/rdf-reasoner-konclude/worker.js?v=16", { type: "module" });
+
+    let readyReject!: (reason: Error) => void;
+    let readySettled = false;
+
+    this.ready = new Promise<void>((resolve, reject) => {
+      readyReject = reject;
+      const onInit = (event: MessageEvent) => {
+        const msg = event.data;
+        if ("type" in msg) {
+          if (msg.type === "ready") {
+            this.worker.removeEventListener("message", onInit);
+            readySettled = true;
+            resolve();
+          } else if (msg.type === "error") {
+            this.worker.removeEventListener("message", onInit);
+            readySettled = true;
+            reject(new Error(msg.error));
+          }
+        }
+      };
+      this.worker.addEventListener("message", onInit);
+    });
+
+    this.worker.addEventListener("message", (event: MessageEvent) => {
+      const msg = event.data;
+      if ("type" in msg) return;
+      const entry = this.pending.get(msg.id);
+      if (!entry) return;
+      this.pending.delete(msg.id);
+      if (msg.error !== undefined) entry.reject(new Error(msg.error));
+      else entry.resolve(msg.result);
+    });
+
+    this.worker.addEventListener("error", (event: ErrorEvent) => {
+      event.preventDefault();
+      const err = new Error(event.message ?? "Worker error");
+      if (!readySettled) { readySettled = true; readyReject(err); }
+      for (const e of this.pending.values()) e.reject(err);
+      this.pending.clear();
+    });
+  }
+
+  private _call(method: string, args: unknown[], transfer?: Transferable[]): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const id = this.nextId++;
+      this.pending.set(id, { resolve, reject });
+      const request = { id, method, args };
+      if (transfer && transfer.length > 0) {
+        this.worker.postMessage(request, transfer);
+      } else {
+        this.worker.postMessage(request);
+      }
+    });
+  }
+
+  reason(store: N3.Store): Promise<void> {
+    const result = this._queue.then(async () => {
+      const inferredGraphNode = N3.DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI);
+      store.removeQuads(store.getQuads(null, null, null, inferredGraphNode));
+
+      const sourceQuads = store.getQuads(null, null, null, null);
+      const sourceKeys = new Set(
+        sourceQuads.map((q) => `${q.subject.value}\0${q.predicate.value}\0${q.object.value}`),
+      );
+
+      const { tripleBuffer, strTableBuffer } = _encodeToBuffers(sourceQuads);
+      await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer], [tripleBuffer, strTableBuffer]);
+      await this._call("realization", []);
+
+      const resultBuf = (await this._call("getInferredTripleBuffer", [])) as ArrayBuffer;
+      const inferredQuads = _decodeBuffers(resultBuf);
+
+      for (const q of inferredQuads) {
+        if (sourceKeys.has(`${q.subject.value}\0${q.predicate.value}\0${q.object.value}`)) continue;
+        store.addQuad(N3.DataFactory.quad(q.subject, q.predicate, q.object, inferredGraphNode));
+      }
+
+      console.debug("[VG_REASONING_WORKER] Konclude inferred quads:", inferredQuads.length);
+    });
+    this._queue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  terminate(): void {
+    this.worker.terminate();
+    const err = new Error("Worker terminated");
+    for (const e of this.pending.values()) e.reject(err);
+    this.pending.clear();
+  }
+}
 
 const RDF_TYPE_IRI = RDF_TYPE;
 const RDFS_LABEL_IRI = RDFS_LABEL;
 
 let _cachedQueryEngine: QueryEngine | null = null;
+let _koncludeReasoner: KoncludeReasoner | null = null;
+
+function getKoncludeReasoner(): KoncludeReasoner {
+  if (!_koncludeReasoner) {
+    _koncludeReasoner = new KoncludeReasoner();
+  }
+  return _koncludeReasoner;
+}
 
 /**
  * Create a graph term from a graph name string.
@@ -150,6 +420,45 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     } catch (err) {
       console.error("[rdfManager.worker] loadSchemaOntology failed", err);
     }
+  }
+
+  function fnv1a32(str: string): string {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, "0");
+  }
+
+  // Skolemize: replace blank-node subjects/objects with stable urn:vg:bnode:{hash} IRIs.
+  // Hash is derived from the blank node's label (value) only — not its predicate-object
+  // pairs — so the same label always maps to the same IRI regardless of batch size.
+  // This enables building blank-node restrictions via individual addTriple calls:
+  // every call that references "_:b0" produces the same urn:vg:bnode: IRI.
+  // Callers are responsible for using distinct labels for distinct blank nodes.
+  function skolemizeQuads(quads: Quad[], DataFactory: any): Quad[] {
+    const hasBnodes = quads.some(
+      (q) => q.subject.termType === "BlankNode" || q.object.termType === "BlankNode"
+    );
+    if (!hasBnodes) return quads;
+
+    const cache = new Map<string, string>();
+    const toIri = (id: string): string => {
+      if (!cache.has(id)) cache.set(id, `urn:vg:bnode:${fnv1a32(id)}`);
+      return cache.get(id)!;
+    };
+
+    return quads.map((q) => {
+      const subj = q.subject.termType === "BlankNode"
+        ? DataFactory.namedNode(toIri(q.subject.value))
+        : q.subject;
+      const obj = q.object.termType === "BlankNode"
+        ? DataFactory.namedNode(toIri((q.object as any).value))
+        : q.object;
+      if (subj === q.subject && obj === q.object) return q;
+      return DataFactory.quad(subj, q.predicate, obj, q.graph);
+    });
   }
 
   function resetSharedStore() {
@@ -417,7 +726,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     if (str.startsWith("_:")) return DataFactory.blankNode(str.slice(2));
     // N3.js literal formats (all start with '"')
     if (str.startsWith('"')) {
-      const langMatch = /^"(.*)"\@([a-zA-Z-]+)$/.exec(str);
+      const langMatch = /^"(.*)"@([a-zA-Z-]+)$/.exec(str);
       if (langMatch) return DataFactory.literal(langMatch[1], langMatch[2]);
       const typedMatch = /^"(.*)"\^\^(.+)$/.exec(str);
       if (typedMatch) return DataFactory.literal(typedMatch[1], DataFactory.namedNode(typedMatch[2]));
@@ -785,9 +1094,9 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           }
 
           if (payload && Array.isArray(payload.quads)) {
-            for (const pq of payload.quads) {
+            const rawQuads = (payload.quads as any[]).map((pq) => deserializeQuad(pq, DataFactory));
+            for (const quad of skolemizeQuads(rawQuads, DataFactory)) {
               try {
-                const quad = deserializeQuad(pq as any, DataFactory);
                 store.addQuad(quad);
                 added += 1;
                 touchedSubjects.add(subjectTermToString(quad.subject));
@@ -993,6 +1302,10 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           const addedSerialized: WorkerQuad[] = [];
           let addedCount = 0;
 
+          // Buffer raw parsed quads, then skolemize as a batch after the stream
+          // ends — this ensures content-hash consistency across the whole parse.
+          const parsedBuffer: Quad[] = [];
+
           await new Promise<void>((resolve, reject) => {
             const opts: Record<string, unknown> = {};
             if (contentType) opts.contentType = contentType;
@@ -1007,31 +1320,12 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
                   !incoming.graph || !incoming.graph.termType || incoming.graph.termType === "DefaultGraph"
                     ? targetGraph
                     : incoming.graph;
-                const normalized = DataFactory.quad(
+                parsedBuffer.push(DataFactory.quad(
                   incoming.subject,
                   incoming.predicate,
                   incoming.object,
                   graphTerm,
-                );
-                const exists =
-                  typeof store.countQuads === "function"
-                    ? store.countQuads(
-                        normalized.subject,
-                        normalized.predicate,
-                        normalized.object,
-                        normalized.graph,
-                      ) > 0
-                    : (store.getQuads(
-                        normalized.subject,
-                        normalized.predicate,
-                        normalized.object,
-                        normalized.graph,
-                      ) || []).length > 0;
-                if (exists) return;
-                store.addQuad(normalized);
-                addedCount += 1;
-                touchedSubjects.add(subjectTermToString(normalized.subject));
-                addedSerialized.push(serializeQuad(normalized));
+                ));
               } catch (err) {
                 console.debug("[rdfManager.worker] importSerialized.data failed", err);
               }
@@ -1059,6 +1353,33 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               resolve();
             });
           });
+
+          // Skolemize the full parsed batch, then write to store
+          for (const normalized of skolemizeQuads(parsedBuffer, DataFactory)) {
+            try {
+              const exists =
+                typeof store.countQuads === "function"
+                  ? store.countQuads(
+                      normalized.subject,
+                      normalized.predicate,
+                      normalized.object,
+                      normalized.graph,
+                    ) > 0
+                  : (store.getQuads(
+                      normalized.subject,
+                      normalized.predicate,
+                      normalized.object,
+                      normalized.graph,
+                    ) || []).length > 0;
+              if (exists) continue;
+              store.addQuad(normalized);
+              addedCount += 1;
+              touchedSubjects.add(subjectTermToString(normalized.subject));
+              addedSerialized.push(serializeQuad(normalized));
+            } catch (err) {
+              console.debug("[rdfManager.worker] importSerialized.data failed", err);
+            }
+          }
 
           if (
             Object.keys(prefixes).length > 0 &&
@@ -1229,7 +1550,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               ? (store.getQuads(null, null, null, inferredTerm) || [])
               : [];
 
-          const filteredInferred = rawInferred.filter((q) => {
+          const skolemizedInferred = skolemizeQuads(rawInferred, DataFactory);
+          const filteredInferred = skolemizedInferred.filter((q) => {
             // Must be grounded in data (subject is a NamedNode known from the data graph)
             if (q.subject.termType !== "NamedNode") return false;
             if (!dataSubjects.has(q.subject.value)) return false;
@@ -1250,11 +1572,22 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             if (!seenKeys.has(k)) { seenKeys.add(k); mergedQuads.push(q); }
           }
 
+          const deskolemized = mergedQuads.map((q) => {
+            const subj = q.subject.termType === "NamedNode" && q.subject.value.startsWith("urn:vg:bnode:")
+              ? DataFactory.blankNode(q.subject.value.slice("urn:vg:bnode:".length))
+              : q.subject;
+            const obj = q.object.termType === "NamedNode" && q.object.value.startsWith("urn:vg:bnode:")
+              ? DataFactory.blankNode(q.object.value.slice("urn:vg:bnode:".length))
+              : q.object;
+            if (subj === q.subject && obj === q.object) return q;
+            return DataFactory.quad(subj, q.predicate, obj, q.graph);
+          });
+
           const toWrite: Quad[] = formatInfo.dropGraph
-            ? mergedQuads.map((q) =>
+            ? deskolemized.map((q) =>
                 DataFactory.quad(q.subject, q.predicate, q.object, DataFactory.defaultGraph()),
               )
-            : mergedQuads;
+            : deskolemized;
 
           let output: string;
 
@@ -1568,9 +1901,9 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
                   ? DataFactory.namedNode(gVal)
                   : DataFactory.defaultGraph();
 
-              store.addQuad(subj, pred, obj, graph);
+              store.addQuad(DataFactory.quad(subj, pred, obj, graph));
               renamed += 1;
-              touchedSubjects.add(newS !== null ? newS : subjectTermToString(q.subject));
+              touchedSubjects.add(newS !== null ? newS : subjectTermToString(subj));
             } catch (err) {
               console.debug("[rdfManager.worker] renameNamespaceUri failed for quad", err);
             }
@@ -1803,10 +2136,9 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           }
 
           if (payload && Array.isArray(payload.adds)) {
-            for (const add of payload.adds) {
-              if (!add) continue;
+            const rawAdds = (payload.adds as any[]).filter(Boolean).map((a) => deserializeQuad(a, DataFactory));
+            for (const quad of skolemizeQuads(rawAdds, DataFactory)) {
               try {
-                const quad = deserializeQuad(add, DataFactory);
                 store.addQuad(quad);
                 added += 1;
                 touchedSubjects.add(subjectTermToString(quad.subject));
@@ -1908,6 +2240,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             rulesets: payload.rulesets,
             baseUrl: payload.baseUrl,
             emitSubjects: payload.emitSubjects,
+            reasonerBackend: payload.reasonerBackend,
           };
           const outcome = await handleRunReasoning(reasoningRequest, {
             mutateSharedStore: true,
@@ -1966,6 +2299,161 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     const emitSubjectsFlag = options.emitSubjects ?? mutateSharedStore;
     const emitChangeFlag = options.emitChange ?? mutateSharedStore;
     const emitResultEvent = options.emitResultEvent ?? true;
+
+    // ── KONCLUDE PATH ──────────────────────────────────────────────────────────
+    if ((msg.reasonerBackend ?? 'konclude') !== 'n3') {
+      let kSharedStoreRef: any | null = null;
+      let kWorkingStore: any;
+
+      if (mutateSharedStore) {
+        kSharedStoreRef = getSharedStore();
+        kWorkingStore = new (StoreCls as any)();
+        try {
+          const sourceGraphs = [
+            DataFactory.namedNode("urn:vg:data"),
+            DataFactory.namedNode("urn:vg:ontologies"),
+          ];
+          for (const g of sourceGraphs) {
+            kWorkingStore.addQuads(kSharedStoreRef.getQuads(null, null, null, g));
+          }
+        } catch (_) {
+          kWorkingStore = kSharedStoreRef;
+        }
+      } else {
+        kWorkingStore = new (StoreCls as any)();
+        for (const pq of msg.quads || []) {
+          try { kWorkingStore.addQuad(deserializeQuad(pq, DataFactory)); } catch (_) { /* ignore */ }
+        }
+      }
+
+      let kUsedReasoner = false;
+      let kReasonerDuration = 0;
+      const kInferredGraphTerm = DataFactory.namedNode("urn:vg:inferred");
+
+      try {
+        const sabAvailable = typeof SharedArrayBuffer !== 'undefined';
+        console.debug("[VG_REASONING_WORKER] Konclude init", { sabAvailable, crossOriginIsolated: (globalThis as any).crossOriginIsolated });
+        if (!sabAvailable) {
+          throw new Error("SharedArrayBuffer unavailable — page needs HTTPS + COOP/COEP headers (or localhost). Use reasonerBackend='n3' as fallback.");
+        }
+        const konclude = getKoncludeReasoner();
+        await konclude.ready;
+        const kQuadCount = kWorkingStore.size ?? kWorkingStore.countQuads?.(null,null,null,null) ?? 0;
+        console.debug("[VG_REASONING_WORKER] Konclude input quads:", kQuadCount);
+        reasoningStage({ type: "reasoningStage", id: msg.id, stage: "reasoner-start", meta: { backend: 'konclude' } });
+        const kStart = Date.now();
+        await konclude.reason(kWorkingStore);
+        kReasonerDuration = Date.now() - kStart;
+        kUsedReasoner = true;
+        reasoningStage({ type: "reasoningStage", id: msg.id, stage: "reasoner-complete", meta: { durationMs: kReasonerDuration, backend: 'konclude' } });
+      } catch (err) {
+        const errMsg = String((err as Error).message || err);
+        console.error("[VG_REASONING_WORKER] Konclude failed:", errMsg);
+        reasoningStage({ type: "reasoningStage", id: msg.id, stage: "reasoner-error", meta: { error: errMsg } });
+      }
+
+      const kAddedQuads: Quad[] = [];
+      const kTouchedSubjects = new Set<string>();
+      const kAdditionSeen = new Set<string>();
+
+      if (kUsedReasoner) {
+        const koncludeGraphTerm = DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI);
+        const rawInferred: Quad[] = kWorkingStore.getQuads(null, null, null, koncludeGraphTerm);
+        console.debug("[VG_REASONING_WORKER] Konclude rawInferred from store:", rawInferred.length);
+        const remapped = rawInferred.map((q: Quad) =>
+          DataFactory.quad(q.subject, q.predicate, q.object, kInferredGraphTerm),
+        );
+        for (const inferredQuad of skolemizeQuads(remapped, DataFactory)) {
+          const key = quadKeyFromTerms(inferredQuad);
+          if (!kAdditionSeen.has(key)) {
+            kAdditionSeen.add(key);
+            kAddedQuads.push(inferredQuad);
+            if (mutateSharedStore && kSharedStoreRef) {
+              try { kSharedStoreRef.addQuad(inferredQuad); } catch (_) { /* dup */ }
+            }
+            const sv = subjectTermToString(inferredQuad.subject, inferredQuad.subject.value);
+            if (sv) kTouchedSubjects.add(sv);
+          }
+        }
+      }
+
+      if (mutateSharedStore && kSharedStoreRef) {
+        if (emitChangeFlag && kAddedQuads.length > 0) {
+          emitChange({ reason: "reasoning", addedCount: kAddedQuads.length });
+        }
+        if (emitSubjectsFlag && kAddedQuads.length > 0) {
+          const emission = prepareSubjectEmissionFromSet(kTouchedSubjects, kSharedStoreRef, DataFactory);
+          if (emission.subjects.length > 0) {
+            emitSubjects(emission.subjects, emission.quadsBySubject, emission.snapshot, { reason: "reasoning", graphName: "urn:vg:inferred" });
+          }
+        }
+      }
+
+      const { warnings: kWarnings, errors: kErrors } = collectShaclResults(kAddedQuads);
+      if (!kUsedReasoner) {
+        kWarnings.push({
+          message: "Konclude OWL DL reasoner unavailable. Requires SharedArrayBuffer (HTTPS or localhost). Switch to reasonerBackend='n3' for rule-based reasoning, or access via HTTPS.",
+          rule: "konclude-unavailable",
+          severity: "warning",
+        } as any);
+      }
+      const RDF_TYPE_K = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+      const kInferences: ReasoningInference[] = kAddedQuads
+        .map((quad) => {
+          const subject = subjectTermToString(quad.subject, quad.subject.value);
+          const predicate = termToString(quad.predicate);
+          const object = termToString(quad.object);
+          if (!subject || !predicate) return null;
+          return predicate === RDF_TYPE_K
+            ? { type: "class", subject, predicate, object, confidence: 0.95 } as ReasoningInference
+            : { type: "relationship", subject, predicate, object, confidence: 0.9 } as ReasoningInference;
+        })
+        .filter((e): e is ReasoningInference => Boolean(e));
+
+      const kDurationMs = Date.now() - startedAt;
+      const kResult: ReasoningResultMessage = {
+        type: "reasoningResult",
+        id: msg.id,
+        durationMs: kDurationMs,
+        startedAt,
+        added: includeAdded ? kAddedQuads.map((quad) => serializeQuad(quad)) : undefined,
+        addedCount: kAddedQuads.length,
+        warnings: kWarnings,
+        errors: kErrors,
+        inferences: kInferences,
+        usedReasoner: kUsedReasoner,
+        workerDurationMs: kReasonerDuration,
+        ruleQuadCount: 0,
+      };
+
+      if (emitResultEvent) {
+        const eventPayload: ReasoningResult = {
+          id: msg.id,
+          timestamp: startedAt,
+          status: "completed",
+          duration: kDurationMs,
+          errors: kErrors,
+          warnings: kWarnings,
+          inferences: kInferences,
+          meta: {
+            usedReasoner: kUsedReasoner,
+            workerDurationMs: kReasonerDuration,
+            totalDurationMs: kDurationMs,
+            addedCount: kResult.addedCount,
+            ruleQuadCount: 0,
+          },
+        };
+        post({ type: "event", event: "reasoningResult", payload: eventPayload });
+      }
+
+      reasoningStage({ type: "reasoningStage", id: msg.id, stage: "complete", meta: {
+        durationMs: kDurationMs, addedCount: kResult.addedCount, usedReasoner: kUsedReasoner,
+        inferenceCount: kInferences.length, ruleQuadCount: 0,
+      }});
+
+      return kResult;
+    }
+    // ── END KONCLUDE PATH — N3 path follows ────────────────────────────────────
 
     let sharedStoreRef: any | null = null;
     let workingStore: any;
@@ -2293,18 +2781,16 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     // No removal step is needed: the reasoner ran on a working copy so the main store
     // was never touched by string-keyed _addToIndex calls.
     if (capturedInsertions.length > 0) {
+      const rawInferred: Quad[] = [];
       for (const insertion of capturedInsertions) {
         const subjectTerm = termFromReasonerValue(DataFactory, insertion.subject);
         const predicateTerm = termFromReasonerValue(DataFactory, insertion.predicate);
         const objectTerm = termFromReasonerValue(DataFactory, insertion.object);
         if (!subjectTerm || !predicateTerm || !objectTerm) continue;
+        rawInferred.push(DataFactory.quad(subjectTerm, predicateTerm, objectTerm, inferredGraphTerm));
+      }
 
-        const inferredQuad = DataFactory.quad(
-          subjectTerm,
-          predicateTerm,
-          objectTerm,
-          inferredGraphTerm,
-        );
+      for (const inferredQuad of skolemizeQuads(rawInferred, DataFactory)) {
         const additionKey = quadKeyFromTerms(inferredQuad);
         if (!additionSeen.has(additionKey)) {
           additionSeen.add(additionKey);
@@ -2319,7 +2805,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             }
           }
 
-          const subjectValue = subjectTermToString(subjectTerm, subjectTerm.value);
+          const subjectValue = subjectTermToString(inferredQuad.subject, inferredQuad.subject.value);
           if (subjectValue) touchedSubjects.add(subjectValue);
         }
       }
