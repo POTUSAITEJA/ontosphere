@@ -118,6 +118,7 @@ describe('getCapabilities', () => {
       data: {
         layoutAlgorithms: ['dagre-lr', 'dagre-tb', 'elk-layered', 'elk-force', 'elk-stress', 'elk-radial'],
         exportFormats: ['turtle', 'jsonld', 'rdfxml', 'svg', 'png'],
+        reasonerBackends: ['konclude', 'n3'],
       },
     });
   });
