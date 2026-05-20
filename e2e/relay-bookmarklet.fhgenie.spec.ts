@@ -1,23 +1,17 @@
 /**
- * FhGenie rendering E2E tests.
+ * FhGenie relay E2E tests.
  *
- * Verifies the relay bookmarklet correctly extracts TOOL blocks from HTML
- * produced by FhGenie's markdown renderer (Fluent UI + custom CSS modules).
+ * Verifies the relay bookmarklet dispatches JSON-RPC tool calls found in the
+ * body text of a FhGenie-style page (CSS-module class hierarchy, textarea input).
  *
- * The fixture at /relay-fhgenie-mock.html mimics FhGenie's exact class
- * hierarchy:
- *   ._chatMessageStream_c6udf_108
- *     ._chatMessageGpt_c6udf_126
- *       ._body_1gd8t_67   ← bookmarklet scans here
- *
- * Scenarios:
- *   plain        — raw TOOL blocks in a <pre> (baseline)
- *   markdown-p   — each TOOL line wrapped in <p> by markdown renderer
- *   markdown-list — BUG CASE: AI outputs "dagre- lr" → renderer makes <li>lr</li>
- *                   → dagre alias must recover "dagre-lr"
- *   codeblock    — TOOL blocks inside a fenced <pre><code> block
- *   inline-algo  — algorithm param on same line as TOOL name
- *   prefixed     — prefixed IRIs (ex:Alice, owl:Class) expanded by expandIri()
+ * Key scenarios:
+ *   single          — one addNode call dispatched correctly
+ *   batch           — 3 addNode calls dispatched as a batch
+ *   prefixed        — prefixed IRIs (ex:, owl:) expanded before dispatch
+ *   progress-indicator — call dispatched immediately even with a changing % counter
+ *                        (regression: old stability-window never fired on FhGenie
+ *                        because the progress indicator kept resetting it)
+ *   partial-json    — truncated JSON is NOT dispatched; complete JSON IS dispatched
  *
  * Run:
  *   DEV_URL=http://docker-dev.iwm.fraunhofer.de:8080 npx playwright test e2e/relay-bookmarklet.fhgenie.spec.ts
@@ -75,7 +69,7 @@ async function getSubmittedResult(chatPage: Page, timeout = 15_000): Promise<str
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-test.describe('relay — FhGenie rendering scenarios', () => {
+test.describe('relay — FhGenie scenarios', () => {
   test.setTimeout(60_000);
 
   let appPage: Page;
@@ -88,97 +82,86 @@ test.describe('relay — FhGenie rendering scenarios', () => {
     await appPage.close();
   });
 
-  // ── plain text (baseline) ─────────────────────────────────────────────
+  // ── single addNode ─────────────────────────────────────────────────────
 
-  test('plain: TOOL blocks in <pre> reach Ontosphere correctly', async ({ context, page }) => {
+  test('single: addNode call dispatched from FhGenie DOM structure', async ({ context, page }) => {
     await page.goto(`${DEV_URL}/relay-fhgenie-mock.html`);
     await injectBookmarklet(page);
-    await page.click('button[data-scenario="plain"]');
+    await page.click('button[data-scenario="single"]');
 
     const result = await getSubmittedResult(page);
-    // 3 tools: runLayout, fitCanvas, exportImage
+    expect(result).toContain('[Ontosphere — 1 tool ✓]');
+    expect(result).toContain('http://example.org/Alice');
+  });
+
+  // ── batch ─────────────────────────────────────────────────────────────
+
+  test('batch: 3 addNode calls dispatched and combined in result', async ({ context, page }) => {
+    await page.goto(`${DEV_URL}/relay-fhgenie-mock.html`);
+    await injectBookmarklet(page);
+    await page.click('button[data-scenario="batch"]');
+
+    const result = await getSubmittedResult(page, 20_000);
     expect(result).toContain('[Ontosphere — 3 tools ✓]');
-    expect(result).toContain('✓ runLayout');
-    expect(result).toContain('✓ fitCanvas');
-    expect(result).toContain('✓ exportImage');
-  });
-
-  // ── <p>-wrapped markdown ──────────────────────────────────────────────
-
-  test('markdown-p: <p>-wrapped TOOL lines parsed correctly', async ({ context, page }) => {
-    await page.goto(`${DEV_URL}/relay-fhgenie-mock.html`);
-    await injectBookmarklet(page);
-    await page.click('button[data-scenario="markdown-p"]');
-
-    const result = await getSubmittedResult(page);
-    expect(result).toContain('[Ontosphere — 3 tools ✓]');
-    expect(result).toContain('✓ runLayout');
-    expect(result).toContain('✓ fitCanvas');
-    expect(result).toContain('✓ exportImage');
-  });
-
-  // ── markdown-list BUG CASE ────────────────────────────────────────────
-  // AI outputs "dagre- lr" where renderer makes <li>lr</li>.
-  // innerText collapses to "algorithm: dagre\nlr".
-  // The dagre alias in runLayout must recover "dagre-lr".
-
-  test('markdown-list: dagre alias recovers dagre-lr from <li>lr</li> rendering', async ({ context, page }) => {
-    await page.goto(`${DEV_URL}/relay-fhgenie-mock.html`);
-    await injectBookmarklet(page);
-    await page.click('button[data-scenario="markdown-list"]');
-
-    const result = await getSubmittedResult(page);
-    // runLayout + fitCanvas: both should succeed via dagre alias
-    expect(result).toContain('✓ runLayout');
-    expect(result).toContain('✓ fitCanvas');
-    expect(result).not.toContain('✗ runLayout');
-  });
-
-  // ── fenced code block ─────────────────────────────────────────────────
-
-  test('codeblock: TOOL blocks inside <pre><code> parsed correctly', async ({ context, page }) => {
-    await page.goto(`${DEV_URL}/relay-fhgenie-mock.html`);
-    await injectBookmarklet(page);
-    await page.click('button[data-scenario="codeblock"]');
-
-    const result = await getSubmittedResult(page);
-    expect(result).toContain('[Ontosphere — 3 tools ✓]');
-    expect(result).toContain('✓ runLayout');
-    expect(result).toContain('✓ fitCanvas');
-    expect(result).toContain('✓ exportImage');
-  });
-
-  // ── inline algorithm param ────────────────────────────────────────────
-
-  test('inline-algo: algorithm on same line as TOOL name parsed correctly', async ({ context, page }) => {
-    await page.goto(`${DEV_URL}/relay-fhgenie-mock.html`);
-    await injectBookmarklet(page);
-    await page.click('button[data-scenario="inline-algo"]');
-
-    const result = await getSubmittedResult(page);
-    expect(result).toContain('✓ runLayout');
-    expect(result).toContain('✓ fitCanvas');
-    expect(result).not.toContain('✗ runLayout');
+    expect(result).toContain('http://example.org/Alice');
+    expect(result).toContain('http://example.org/Bob');
+    expect(result).toContain('http://example.org/Carol');
   });
 
   // ── prefixed IRIs ─────────────────────────────────────────────────────
 
-  test('prefixed: ex:Alice + owl:Class expanded and node created in Ontosphere', async ({ context, page }) => {
+  test('prefixed: ex:PrefixedNode + owl:Class expanded and node created', async ({ context, page }) => {
     await page.goto(`${DEV_URL}/relay-fhgenie-mock.html`);
     await injectBookmarklet(page);
     await page.click('button[data-scenario="prefixed"]');
 
     const result = await getSubmittedResult(page);
-    expect(result).toContain('✓ addNode');
-    expect(result).not.toContain('✗ addNode');
+    expect(result).toContain('[Ontosphere — 1 tool ✓]');
 
-    // Node with expanded IRI must be in Ontosphere canvas
     const nodes = await appPage.evaluate(async () => {
       const tools = (window as any).__mcpTools as Record<string, (p: any) => Promise<any>>;
       const r = await tools['getNodes']({});
       return (r.data as any)?.entities ?? [];
     });
     const iris = (nodes as any[]).map((n: any) => n.iri);
-    expect(iris).toContain('http://example.org/Alice');
+    expect(iris).toContain('http://example.org/PrefixedNode');
+  });
+
+  // ── progress indicator regression ────────────────────────────────────
+  // The old bookmarklet used a content-length stability window: dispatch only
+  // after N consecutive ticks with identical page text length. FhGenie's
+  // progress indicator (% counter) kept resetting the window — dispatch never
+  // fired. New bookmarklet dispatches immediately on any new valid JSON-RPC call.
+
+  test('progress-indicator: dispatches immediately despite changing % counter', async ({ context, page }) => {
+    await page.goto(`${DEV_URL}/relay-fhgenie-mock.html`);
+    await injectBookmarklet(page);
+    await page.click('button[data-scenario="progress-indicator"]');
+
+    // Dispatch must fire within 2s (≤4 poll ticks), despite the counter updating every 100ms.
+    const result = await getSubmittedResult(page, 5_000);
+    expect(result).toContain('[Ontosphere — 1 tool ✓]');
+    expect(result).toContain('http://example.org/Progress');
+  });
+
+  // ── partial JSON ignored ──────────────────────────────────────────────
+  // Truncated JSON (fails JSON.parse) must not dispatch. Complete JSON must
+  // dispatch within 1s of appearing.
+
+  test('partial-json: truncated JSON ignored; complete JSON dispatched on completion', async ({ context, page }) => {
+    await page.goto(`${DEV_URL}/relay-fhgenie-mock.html`);
+    await injectBookmarklet(page);
+    await page.click('button[data-scenario="partial-json"]');
+
+    // Phase 1 (0–1.5s): only truncated JSON visible — nothing should dispatch.
+    // Wait 1s, verify no result yet.
+    await page.waitForTimeout(1000);
+    const resultStream = page.locator('#result-stream .msg-user');
+    await expect(resultStream).toHaveCount(0);
+
+    // Phase 2 (after 1.5s): complete JSON appears — dispatch expected within 1.5s.
+    const result = await getSubmittedResult(page, 5_000);
+    expect(result).toContain('[Ontosphere — 1 tool ✓]');
+    expect(result).toContain('http://example.org/PartialTest');
   });
 });

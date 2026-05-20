@@ -20,7 +20,6 @@
   var RELAY_ORIGIN = '__RELAY_ORIGIN__';
   var POPUP_NAME   = 'vg-relay';
   var POPUP_OPTS   = 'width=320,height=180,menubar=no,toolbar=no,location=no,resizable=yes';
-  var DEBOUNCE_MS  = 800;
 
   /* ── Kill any previous instance ───────────────────────────────────────── */
   // Disconnect old MutationObserver so it stops enqueuing calls.
@@ -33,19 +32,6 @@
     clearInterval(window.__vgRelayWatcher);
     window.__vgRelayWatcher = null;
   }
-
-  /* ── Streaming detector — mutation-rate based, no UI-specific selectors ── */
-  // Records timestamp of last DOM mutation. isAiStreaming() uses this as a
-  // generic fallback: if the page mutated recently, generation is likely active.
-  var STREAM_QUIET_MS = 4000; // ms of DOM silence before we consider generation done
-  window.__vgLastMutation = window.__vgLastMutation || 0;
-  var streamObserver = new MutationObserver(function () {
-    window.__vgLastMutation = Date.now();
-  });
-  streamObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-  // Re-register under the relay observer slot so it's killed on next inject.
-  if (window.__vgStreamObserver) { try { window.__vgStreamObserver.disconnect(); } catch (_) {} }
-  window.__vgStreamObserver = streamObserver;
 
   /* ── Instance ID — deactivates old message listeners ──────────────────── */
   // Every click stamps a new ID.  The message listener checks at runtime and
@@ -185,53 +171,6 @@
     });
   }
 
-  // Returns page text scoped to AI/assistant messages only where detectable,
-  // to avoid dispatching tool-call examples from user messages (e.g. starter prompt).
-  // Falls back to full page text (excluding input) for UIs without role markers.
-  function getAssistantText() {
-    // OWUI: data-message-author-role="assistant" on each message container
-    var nodes = document.querySelectorAll('[data-message-author-role="assistant"]');
-    if (!nodes.length) nodes = document.querySelectorAll('[data-role="assistant"]');
-    // FhGenie: CSS-module class names like _chatMessageGpt_<hash>_<n> —
-    // the hash changes between builds but "chatMessageGpt" is stable.
-    if (!nodes.length) nodes = document.querySelectorAll('[class*="chatMessageGpt"]');
-    // Generic: look for direct children of the message list that
-    // are NOT the user's own bubbles (right-aligned). Use aria role if present.
-    if (!nodes.length) nodes = document.querySelectorAll('[role="log"] [aria-label*="assistant" i], [role="log"] [aria-label*="bot" i]');
-    if (nodes.length) {
-      var parts = [];
-      for (var i = 0; i < nodes.length; i++) parts.push(nodes[i].innerText || nodes[i].textContent || '');
-      return parts.join('\n');
-    }
-    return null; // no assistant-scoped nodes found
-  }
-
-  // Returns page text excluding the chat input element.
-  // Prefers assistant-message-scoped text to avoid user-message tool-call examples.
-  // Textarea value is never in body.innerText so only contenteditable needs DOM exclusion.
-  // Uses SHOW_ELEMENT|SHOW_TEXT so FILTER_REJECT on the input element skips its whole subtree.
-  function getPageText() {
-    var assistantText = getAssistantText();
-    if (assistantText !== null) return assistantText;
-    var inp = findInput();
-    if (!inp || inp.tagName === 'TEXTAREA')
-      return document.body.innerText || document.body.textContent || '';
-    var parts = [];
-    var walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
-      { acceptNode: function (node) {
-          if (node === inp) return NodeFilter.FILTER_REJECT;
-          if (node.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
-          return NodeFilter.FILTER_SKIP;
-        }
-      }
-    );
-    var node;
-    while ((node = walker.nextNode())) parts.push(node.nodeValue);
-    return parts.join(' ');
-  }
-
   /* ── Submit the chat input ─────────────────────────────────────────────── */
   function submitInput(inputEl) {
     var foundBtn = false;
@@ -306,54 +245,24 @@
       setTimeout(function () { submitInput(el); injectInProgress = false; }, 50);
     } else {
       // TipTap/ProseMirror contenteditable (OWUI).
-      // Wait until the UI is ready (isAiStreaming()=false) before calling setContent —
-      // injecting while OWUI is still transitioning out of streaming state causes a race
-      // where the paste lands before the editor accepts input. Signal 4 (DOM mutation
-      // rate) was removed so this check no longer deadlocks on content injection.
       var live = findInput() || el;
       live.focus();
       el = live;
-      var injectDeadline = Date.now() + 10000;
-
-      (function waitReady() {
-        if (isAiStreaming() && Date.now() < injectDeadline) {
-          setTimeout(waitReady, 100);
-          return;
-        }
+      waitForStreamEnd(5000, function () {
         var target = findInput() || el;
         var tiptap = target.editor;
-
         if (!tiptap || !tiptap.commands || typeof tiptap.commands.setContent !== 'function') {
-          injectInProgress = false;
-          return;
+          injectInProgress = false; return;
         }
-
         tiptap.commands.focus();
         tiptap.commands.setContent(text, true);
-        var submitDeadline = Date.now() + 10000;
-
-        // Try to submit, then check whether the editor was cleared.
-        // A cleared editor = OWUI accepted the submit. Retry every 300ms until
-        // it works or deadline. Only click when isAiStreaming() is false so we
-        // don't submit into a mid-think or post-stream annotation window.
-        // Initial 600ms grace period lets OWUI finish its post-stream annotation
-        // phase — no generic DOM/network signal reliably marks the end of it.
-        setTimeout(function trySubmit() {
+        setTimeout(function () {
           var inp = findInput() || target;
-          var tp = inp.editor || tiptap;
-          var isEmpty = tp.isEmpty !== undefined ? tp.isEmpty
-            : !(tp.getText ? tp.getText().trim() : (inp.innerText || inp.textContent || '').trim());
-          if (isEmpty) { injectInProgress = false; return; }
-
-          if (!isAiStreaming()) {
-            var btn = findSendButton(inp);
-            if (btn && !btn.disabled) { el = inp; btn.click(); }
-          }
-
-          if (Date.now() >= submitDeadline) { injectInProgress = false; return; }
-          setTimeout(trySubmit, 300);
-        }, 600);
-      })();
+          var btn = findSendButton(inp);
+          if (btn && !btn.disabled) btn.click();
+          injectInProgress = false;
+        }, 100);
+      });
     }
 
     return true;
@@ -617,12 +526,7 @@
     var sendBtn = findSendButton(inp);
 
     if (sendBtn) {
-      // Stop icon in button (FhGenie: same button, SVG swaps arrow→X during generation)
-      var xPath = sendBtn.querySelector('path[d^="M8.22 8.22"]');
-      if (xPath && sendBtn.offsetWidth > 0) return true;
-
       // Enabled = idle; disabled + has content = generating (OWUI pattern).
-      // Disabled + empty = idle (FhGenie: send button disabled when input empty).
       // OWUI during generation: send button is replaced by a stop button, so
       // findSendButton() returns null and the fallback signals below handle it.
       if (!sendBtn.disabled) return false;
@@ -646,59 +550,17 @@
       }
     }
 
-    var SPINNER_SEL = '[class*="spinner" i],[class*="loading" i],[class*="typing" i],' +
-                      '[class*="thinking" i],[class*="generating" i],[class*="streaming" i],' +
-                      '[class*="skeleton" i]';
-    var spinnerEls = document.querySelectorAll(SPINNER_SEL);
-    for (var si = 0; si < spinnerEls.length; si++) {
-      var sp = spinnerEls[si];
-      if (inp && inp.contains(sp)) continue;
-      if (sp.offsetWidth > 0 || sp.offsetHeight > 0) return true;
-    }
-
-    var STOP_WORDS = ['stop', 'stopp', 'cancel', 'abort', 'halt', 'abbrechen', 'arrêter', 'interrompi'];
-    var btns = document.querySelectorAll('button:not([disabled])');
-    for (var bi = 0; bi < btns.length; bi++) {
-      var b = btns[bi];
-      if (b.offsetWidth === 0 && b.offsetHeight === 0) continue;
-      var lbl2 = (b.getAttribute('aria-label') || b.title || '').toLowerCase();
-      var txt = b.textContent.trim().toLowerCase();
-      for (var wi = 0; wi < STOP_WORDS.length; wi++) {
-        if (lbl2.indexOf(STOP_WORDS[wi]) !== -1 || txt === STOP_WORDS[wi]) return true;
-      }
-    }
-
     return false;
   }
 
-  function waitForIdle(container, callback) {
-    var MAX_WAIT_MS = 30000, POLL_MS = 200, STABLE_TICKS = 3;
-    var elapsed = 0, lastLen = -1, stableCount = 0;
+  /* ── Generic "wait for AI to stop generating" before injecting ────────── */
+  function waitForStreamEnd(maxMs, callback) {
+    var deadline = Date.now() + maxMs;
     function poll() {
-      elapsed += POLL_MS;
-      var len = (container.innerText || container.textContent || '').length;
-      if (len !== lastLen) { lastLen = len; stableCount = 0; } else { stableCount++; }
-      if ((!isAiStreaming() && stableCount >= STABLE_TICKS) || elapsed >= MAX_WAIT_MS) callback();
-      else setTimeout(poll, POLL_MS);
+      if (!isAiStreaming() || Date.now() >= deadline) { callback(); return; }
+      setTimeout(poll, 300);
     }
-    setTimeout(poll, POLL_MS);
-  }
-
-  var drainTimer = null;
-  function scheduleDrain(container) {
-    clearTimeout(drainTimer);
-    drainTimer = setTimeout(function () {
-      waitForIdle(container, function () { if (!isProcessing) processNextInQueue(); });
-    }, DEBOUNCE_MS);
-  }
-
-  function parseAndEnqueue(el) {
-    if (!el) return;
-    var text = el.innerText || el.textContent || '';
-    var calls = extractAllToolCalls(text, dispatchedSigs);
-    if (calls.length === 0) return;
-    callQueue = callQueue.concat(calls);
-    scheduleDrain(el);
+    poll();
   }
 
   function processNextInQueue() {
@@ -724,46 +586,28 @@
     }, 200);
   }
 
-  /* ── Fire-on-idle poll ─────────────────────────────────────────────────── */
-  // Polls every 500 ms. Fires only when page text has been stable for 3 s
-  // (6 consecutive ticks with identical content-length) AND relay is not busy.
-  // Resets counter on any content change, so qwen3 thinking pauses never
-  // trigger early dispatch. isAiStreaming() is intentionally NOT used here —
-  // it gives false negatives for qwen3 (send button stays enabled during
-  // generation), which was the root cause of multiple partial dispatches per turn.
+  /* ── Dispatch poll ─────────────────────────────────────────────────────── */
+  // Scans full page text every 500 ms. Dispatches immediately on any new
+  // complete, valid MCP call. JSON structural completeness (validateMcpRequest)
+  // is the signal — partial JSON fails JSON.parse and is ignored. No stability
+  // window needed. dispatchedSigs deduplication handles repeats.
   var idlePollTimer = null;
-  var idleConsecutive = 0;
-  var idleLastLen = -1;
 
   function idlePoll() {
     if (window.__vgRelayInstanceId !== instanceId) return; // stale instance
     if (!isProcessing && callQueue.length === 0) {
-      var text = getPageText();
-      var len = text.length;
-      if (len !== idleLastLen) {
-        idleLastLen = len;
-        idleConsecutive = 0;
-      } else {
-        idleConsecutive++;
-        if (idleConsecutive >= 6) { // 6 × 500 ms = 3 s stable
-          var calls = extractAllToolCalls(text, dispatchedSigs);
-          if (calls.length > 0) {
-            idleConsecutive = 0;
-            idleLastLen = -1;
-            callQueue = callQueue.concat(calls);
-            processNextInQueue();
-          }
-        }
+      var text = document.body.innerText || document.body.textContent || '';
+      var calls = extractAllToolCalls(text, dispatchedSigs);
+      if (calls.length > 0) {
+        callQueue = callQueue.concat(calls);
+        processNextInQueue();
       }
-    } else {
-      idleConsecutive = 0;
-      idleLastLen = -1;
     }
     idlePollTimer = setTimeout(idlePoll, 500);
   }
 
   // Pre-seed: mark all calls currently visible on the page as already dispatched.
-  extractAllToolCalls(getPageText(), dispatchedSigs);
+  extractAllToolCalls(document.body.innerText || document.body.textContent || '', dispatchedSigs);
 
   idlePoll();
   window.__vgRelayObserver = { disconnect: function () { clearTimeout(idlePollTimer); idlePollTimer = null; } };
