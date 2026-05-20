@@ -236,13 +236,24 @@
     }
 
     if (el.tagName === 'TEXTAREA') {
-      // Textarea: set value via native setter + input event, then defer submit one
-      // render cycle so React/framework state updates before the button is clicked.
+      // Textarea path (FhGenie et al.).
+      // Set value via native setter so React/framework state updates, then
+      // retry submit every 500ms until the textarea is cleared (= accepted)
+      // or a 10s deadline. injectInProgress stays true until confirmed.
       el.focus();
       var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
       setter.call(el, (el.value ? el.value + '\n' : '') + text);
       el.dispatchEvent(new Event('input', { bubbles: true }));
-      setTimeout(function () { submitInput(el); injectInProgress = false; }, 50);
+      var submitDeadline = Date.now() + 10000;
+      setTimeout(function retrySubmit() {
+        if (!el.value.trim()) { injectInProgress = false; return; } // cleared = accepted
+        if (Date.now() >= submitDeadline) { injectInProgress = false; return; }
+        submitInput(el);
+        setTimeout(function checkCleared() {
+          if (!el.value.trim() || Date.now() >= submitDeadline) { injectInProgress = false; return; }
+          setTimeout(retrySubmit, 500);
+        }, 400);
+      }, 50);
     } else {
       // TipTap/ProseMirror contenteditable (OWUI).
       var live = findInput() || el;
@@ -256,12 +267,18 @@
         }
         tiptap.commands.focus();
         tiptap.commands.setContent(text, true);
-        setTimeout(function () {
+        var tpDeadline = Date.now() + 10000;
+        (function tryTipTap() {
           var inp = findInput() || target;
+          var tp = inp.editor || tiptap;
+          var isEmpty = tp.isEmpty !== undefined ? tp.isEmpty
+            : !(tp.getText ? tp.getText().trim() : (inp.innerText || inp.textContent || '').trim());
+          if (isEmpty) { injectInProgress = false; return; }
+          if (Date.now() >= tpDeadline) { injectInProgress = false; return; }
           var btn = findSendButton(inp);
           if (btn && !btn.disabled) btn.click();
-          injectInProgress = false;
-        }, 100);
+          setTimeout(tryTipTap, 400);
+        })();
       });
     }
 
