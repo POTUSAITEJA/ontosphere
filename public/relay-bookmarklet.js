@@ -268,7 +268,15 @@
             injectInProgress = false; return;
           }
           tiptap.commands.focus();
-          tiptap.commands.setContent(text, true);
+          // Build a ProseMirror JSON doc so newlines become paragraph breaks,
+          // not HTML-collapsed whitespace. Each line stays separate in the editor.
+          var pmParagraphs = text.split('\n').map(function (line) {
+            return line
+              ? { type: 'paragraph', content: [{ type: 'text', text: line }] }
+              : { type: 'paragraph' };
+          });
+          var pmDoc = { type: 'doc', content: pmParagraphs.length ? pmParagraphs : [{ type: 'paragraph' }] };
+          tiptap.commands.setContent(pmDoc, false);
           var tpDeadline = Date.now() + 10000;
           (function tryTipTap() {
             var inp = findInput() || target;
@@ -278,7 +286,13 @@
             if (isEmpty) { injectInProgress = false; return; }
             if (Date.now() >= tpDeadline) { injectInProgress = false; return; }
             var btn = findSendButton(inp);
-            if (btn && !btn.disabled) btn.click();
+            if (btn && !btn.disabled) {
+              btn.click();
+              // One click is enough for TipTap — release after brief delay.
+              // Retrying risks a second send when OWUI queues messages.
+              setTimeout(function () { injectInProgress = false; }, 600);
+              return;
+            }
             setTimeout(tryTipTap, 400);
           })();
         }, ANNOTATION_GUARD_MS);
