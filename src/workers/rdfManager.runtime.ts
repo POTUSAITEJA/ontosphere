@@ -24,7 +24,7 @@ import { ensureDefaultNamespaceMap } from "../constants/namespaces.ts";
 import { RDF_TYPE, RDFS_LABEL, SHACL } from "../constants/vocabularies.ts";
 import { OWL_SCHEMA_AXIOMS } from "../constants/owlSchemaData.ts";
 import { QueryEngine } from "@comunica/query-sparql-rdfjs";
-const KONCLUDE_INFERRED_GRAPH_IRI = "urn:konclude:inferred";
+const KONCLUDE_INFERRED_GRAPH_IRI = "urn:vg:inferred";
 
 // ---------------------------------------------------------------------------
 // Binary codec — verbatim from rdf-reasoner-konclude v0.2.0 ts/intern.ts.
@@ -196,7 +196,7 @@ class KoncludeReasoner {
     // resolves to the bundle URL inside a Vite worker, not the package directory.
     // BASE_URL is "/" in dev and "/ontosphere/" on GitHub Pages.
     // Increment v= when upgrading rdf-reasoner-konclude.
-    this.worker = new Worker(`${import.meta.env.BASE_URL}rdf-reasoner-konclude/worker.js?v=16`, { type: "module" });
+    this.worker = new Worker(`${import.meta.env.BASE_URL}rdf-reasoner-konclude/worker.js?v=17`, { type: "module" });
 
     let readyReject!: (reason: Error) => void;
     let readySettled = false;
@@ -257,24 +257,55 @@ class KoncludeReasoner {
       const inferredGraphNode = N3.DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI);
       store.removeQuads(store.getQuads(null, null, null, inferredGraphNode));
 
-      const sourceQuads = store.getQuads(null, null, null, null);
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows"]);
+      const allQuads: N3.Quad[] = store.getQuads(null, null, null, null);
+      const sourceQuads = allQuads.filter((q) => {
+        const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
+        return !EXCLUDED_GRAPHS.has(g);
+      });
       const sourceKeys = new Set(
         sourceQuads.map((q) => `${q.subject.value}\0${q.predicate.value}\0${q.object.value}`),
       );
 
-      const { tripleBuffer, strTableBuffer } = _encodeToBuffers(sourceQuads);
-      await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer], [tripleBuffer, strTableBuffer]);
-      await this._call("realization", []);
+      // De-skolemize: urn:vg:bnode:* → real blank nodes so Konclude sees anonymous OWL class expressions
+      const BNODE_PREFIX = "urn:vg:bnode:";
+      const deskolemized = sourceQuads.map((q) => {
+        const subj = q.subject.termType === "NamedNode" && q.subject.value.startsWith(BNODE_PREFIX)
+          ? N3.DataFactory.blankNode(q.subject.value.slice(BNODE_PREFIX.length))
+          : q.subject;
+        const obj = q.object.termType === "NamedNode" && q.object.value.startsWith(BNODE_PREFIX)
+          ? N3.DataFactory.blankNode(q.object.value.slice(BNODE_PREFIX.length))
+          : q.object;
+        if (subj === q.subject && obj === q.object) return q;
+        return N3.DataFactory.quad(subj, q.predicate, obj, q.graph);
+      });
 
-      const resultBuf = (await this._call("getInferredTripleBuffer", [])) as ArrayBuffer;
-      const inferredQuads = _decodeBuffers(resultBuf);
+      const { tripleBuffer, strTableBuffer } = _encodeToBuffers(deskolemized);
+      // Slice before first transfer — ArrayBuffer is detached after transfer
+      const tripleBuffer2 = tripleBuffer.slice(0);
+      const strTableBuffer2 = strTableBuffer.slice(0);
+
+      // classification → TBox subClassOf/equivalentClass (OWL 2 DL hierarchy)
+      await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer], [tripleBuffer, strTableBuffer]);
+      await this._call("classification", []);
+      const tboxBuf = (await this._call("getInferredTripleBuffer", [])) as ArrayBuffer;
+      const tboxQuads = _decodeBuffers(tboxBuf);
+
+      // realization → ABox rdf:type entailments; filter to type-only to avoid duplicating TBox
+      await this._call("loadTripleBuffer", [tripleBuffer2, strTableBuffer2], [tripleBuffer2, strTableBuffer2]);
+      await this._call("realization", []);
+      const aboxBuf = (await this._call("getInferredTripleBuffer", [])) as ArrayBuffer;
+      const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+      const aboxQuads = _decodeBuffers(aboxBuf).filter((q) => q.predicate.value === RDF_TYPE);
+
+      const inferredQuads = [...tboxQuads, ...aboxQuads];
 
       for (const q of inferredQuads) {
         if (sourceKeys.has(`${q.subject.value}\0${q.predicate.value}\0${q.object.value}`)) continue;
         store.addQuad(N3.DataFactory.quad(q.subject, q.predicate, q.object, inferredGraphNode));
       }
 
-      console.debug("[VG_REASONING_WORKER] Konclude inferred quads:", inferredQuads.length);
+      console.debug("[VG_REASONING_WORKER] Konclude inferred quads:", inferredQuads.length, `(${tboxQuads.length} TBox, ${aboxQuads.length} ABox)`);
     });
     this._queue = result.then(() => {}, () => {});
     return result;
@@ -2310,13 +2341,13 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         kSharedStoreRef = getSharedStore();
         kWorkingStore = new (StoreCls as any)();
         try {
-          const sourceGraphs = [
-            DataFactory.namedNode("urn:vg:data"),
-            DataFactory.namedNode("urn:vg:ontologies"),
-          ];
-          for (const g of sourceGraphs) {
-            kWorkingStore.addQuads(kSharedStoreRef.getQuads(null, null, null, g));
-          }
+          const workflowsGraph = "urn:vg:workflows";
+          const allQuads: Quad[] = kSharedStoreRef.getQuads(null, null, null, null);
+          const filteredQuads = allQuads.filter((q: Quad) => {
+            const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
+            return g !== workflowsGraph;
+          });
+          kWorkingStore.addQuads(filteredQuads);
         } catch (_) {
           kWorkingStore = kSharedStoreRef;
         }
@@ -2358,13 +2389,9 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       const kAdditionSeen = new Set<string>();
 
       if (kUsedReasoner) {
-        const koncludeGraphTerm = DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI);
-        const rawInferred: Quad[] = kWorkingStore.getQuads(null, null, null, koncludeGraphTerm);
+        const rawInferred: Quad[] = kWorkingStore.getQuads(null, null, null, kInferredGraphTerm);
         console.debug("[VG_REASONING_WORKER] Konclude rawInferred from store:", rawInferred.length);
-        const remapped = rawInferred.map((q: Quad) =>
-          DataFactory.quad(q.subject, q.predicate, q.object, kInferredGraphTerm),
-        );
-        for (const inferredQuad of skolemizeQuads(remapped, DataFactory)) {
+        for (const inferredQuad of skolemizeQuads(rawInferred, DataFactory)) {
           const key = quadKeyFromTerms(inferredQuad);
           if (!kAdditionSeen.has(key)) {
             kAdditionSeen.add(key);

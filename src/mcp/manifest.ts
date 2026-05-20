@@ -286,11 +286,12 @@ export const mcpManifest: McpToolManifestEntry[] = [
   },
   {
     name: 'runReasoning',
-    description: 'Apply OWL-RL inference to derive implicit types and relationships from the loaded ontology. Use after loading an ontology to materialise inferred triples. For explicit one-off derived triples, use queryGraph with CONSTRUCT instead.',
+    description: "Run OWL reasoning over the loaded graph and infer new triples. Default backend is 'konclude' (full OWL 2 DL). Pass reasonerBackend='n3' to use N3 rule-based inference instead. Pass clearBefore=true to clear previous inferences first.",
     inputSchema: {
       type: 'object',
       properties: {
         clearBefore: { type: 'boolean', default: false },
+        reasonerBackend: { type: 'string', enum: ['konclude', 'n3'], description: "Reasoning backend: 'konclude' (OWL 2 DL, default) or 'n3' (N3 rule-based)" },
       },
     },
   },
