@@ -107,7 +107,8 @@ export default function EntityAutoComplete({
   const displayValue = useMemo(() => {
     if (!value) return '';
     const found = source.find(e => String(e.iri || '') === String(value));
-    return found ? prefixedIri(String(found.iri)) : value;
+    if (found) return found.label || prefixedIri(String(found.iri));
+    return prefixedIri(value) || value;
   }, [value, source]);
 
   const filtered = useMemo<FatMapEntity[]>(() => {
