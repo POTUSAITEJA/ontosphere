@@ -45,7 +45,15 @@ function formatRelativeTime(timestamp: number): string {
 export const RelaySection: React.FC<RelaySectionProps> = ({ buildBookmarkletHref, connected, callLog }) => {
   const bookmarkletRef = useRef<HTMLAnchorElement>(null);
   const [copied, setCopied] = useState(false);
-  const [annotationGuardS, setAnnotationGuardS] = useState(0);
+  const [annotationGuardS, setAnnotationGuardS] = useState(() => {
+    const stored = localStorage.getItem('relay-annotation-guard-s');
+    return stored !== null ? Number(stored) : 0;
+  });
+
+  const handleGuardChange = useCallback((s: number) => {
+    setAnnotationGuardS(s);
+    localStorage.setItem('relay-annotation-guard-s', String(s));
+  }, []);
 
   const copyPrompt = useCallback(() => {
     const done = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
@@ -100,10 +108,11 @@ export const RelaySection: React.FC<RelaySectionProps> = ({ buildBookmarkletHref
         </div>
         <input
           type="range" min={0} max={10} step={1} value={annotationGuardS}
-          onChange={(e) => setAnnotationGuardS(Number(e.target.value))}
+          onChange={(e) => handleGuardChange(Number(e.target.value))}
           className="w-full accent-primary"
           title="Delay before injecting results (0 = immediate; set 2s for Open WebUI)"
         />
+        <p className="text-xs text-muted-foreground/60">Re-drag the bookmarklet after changing</p>
       </div>
 
       {/* Draggable bookmarklet */}
