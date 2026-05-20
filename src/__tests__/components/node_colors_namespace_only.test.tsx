@@ -1,10 +1,9 @@
 /**
- * Test that node colors are derived from namespace registry ONLY,
- * not from fat map entities. This ensures colors work even when
- * ontologies aren't loaded (fat map is empty).
+ * Test that node colors are derived from namespace registry ONLY.
+ * The fat map (availableClasses/availableProperties) has been removed.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { getNodeColor } from '../../utils/termUtils';
 import type { NamespaceRegistryEntry } from '../../utils/termUtils';
 
@@ -15,17 +14,11 @@ describe('Node colors from namespace registry (not fat map)', () => {
     { prefix: 'owl', namespace: 'http://www.w3.org/2002/07/owl#', color: '#0000FF' },
   ];
 
-  it('should derive color from namespace registry when fat map is empty', () => {
-    // This is the key test: fat map is empty (ontology not loaded),
-    // but namespace registry has colors defined
+  it('should derive color from namespace registry', () => {
     const color = getNodeColor(
       'http://example.com/SomeEntity',
-      undefined, // no palette
-      {
-        registry: testRegistry,
-        availableProperties: [], // EMPTY fat map
-        availableClasses: [],    // EMPTY fat map
-      }
+      undefined,
+      { registry: testRegistry },
     );
 
     expect(color).toBe('#FF0000'); // Should get color from namespace registry
@@ -35,11 +28,7 @@ describe('Node colors from namespace registry (not fat map)', () => {
     const color = getNodeColor(
       'http://www.w3.org/ns/prov#Activity',
       undefined,
-      {
-        registry: testRegistry,
-        availableProperties: [],
-        availableClasses: [],
-      }
+      { registry: testRegistry },
     );
 
     expect(color).toBe('#00FF00'); // prov namespace color
@@ -54,11 +43,7 @@ describe('Node colors from namespace registry (not fat map)', () => {
     const color = getNodeColor(
       'http://example.com/subnamespace/Entity',
       undefined,
-      {
-        registry: registryWithNested,
-        availableProperties: [],
-        availableClasses: [],
-      }
+      { registry: registryWithNested },
     );
 
     expect(color).toBe('#00FF00'); // Should match the more specific namespace
@@ -72,11 +57,7 @@ describe('Node colors from namespace registry (not fat map)', () => {
     const color = getNodeColor(
       'http://example.com/Entity',
       undefined,
-      {
-        registry: registryNoColor,
-        availableProperties: [],
-        availableClasses: [],
-      }
+      { registry: registryNoColor },
     );
 
     expect(color).toBeUndefined();
@@ -94,41 +75,25 @@ describe('Node colors from namespace registry (not fat map)', () => {
     const color = getNodeColor(
       'http://example.com/Entity',
       palette,
-      {
-        registry: registryNoColor,
-        availableProperties: [],
-        availableClasses: [],
-      }
+      { registry: registryNoColor },
     );
 
     expect(color).toBe('#ABCDEF');
   });
 
-  it('should prefer fat map entity-specific color when available (rare case)', () => {
-    // This tests the fallback: if an ontology IS loaded and has
-    // an entity-specific color override, that should take precedence
+  it('should return namespace color for entity IRI (no fat map fallback)', () => {
+    // Fat map entity-specific color overrides are no longer supported.
+    // Namespace registry color is used directly.
     const color = getNodeColor(
       'http://example.com/SpecialEntity',
       undefined,
-      {
-        registry: testRegistry,
-        availableProperties: [],
-        availableClasses: [
-          {
-            iri: 'http://example.com/SpecialEntity',
-            label: 'Special Entity',
-            color: '#SPECIAL', // entity-specific override
-          },
-        ],
-      }
+      { registry: testRegistry },
     );
 
-    // Entity-specific color should be used as fallback only
-    // But namespace color takes precedence per our fix
-    expect(color).toBe('#FF0000'); // namespace color wins
+    expect(color).toBe('#FF0000'); // namespace color
   });
 
-  it('should use fat map entity color ONLY when namespace has no color', () => {
+  it('should return undefined when namespace has no color and no fat map', () => {
     const registryNoColor: NamespaceRegistryEntry[] = [
       { prefix: 'ex', namespace: 'http://example.com/', color: undefined },
     ];
@@ -136,31 +101,17 @@ describe('Node colors from namespace registry (not fat map)', () => {
     const color = getNodeColor(
       'http://example.com/SpecialEntity',
       undefined,
-      {
-        registry: registryNoColor,
-        availableProperties: [],
-        availableClasses: [
-          {
-            iri: 'http://example.com/SpecialEntity',
-            label: 'Special Entity',
-            color: '#SPECIAL',
-          },
-        ],
-      }
+      { registry: registryNoColor },
     );
 
-    expect(color).toBe('#SPECIAL'); // Fat map color used as last resort
+    expect(color).toBeUndefined();
   });
 
   it('should work for blank nodes (return undefined)', () => {
     const color = getNodeColor(
       '_:b123',
       undefined,
-      {
-        registry: testRegistry,
-        availableProperties: [],
-        availableClasses: [],
-      }
+      { registry: testRegistry },
     );
 
     expect(color).toBeUndefined(); // Blank nodes have no namespace

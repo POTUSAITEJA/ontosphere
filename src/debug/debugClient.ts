@@ -29,14 +29,10 @@ function dumpRuntimeState() {
     safeLog("[VG_DEBUG] runtime.dump rfInstanceNodes failed", e);
   }
   try {
-    // Zustand store snapshot access (fat-map / entity index)
+    // Zustand store snapshot access
     const os = (useOntologyStore as any);
     const state = os && typeof os.getState === "function" ? os.getState() : null;
-    const availableProperties = state && state.availableProperties ? state.availableProperties : null;
-    const availableClasses = state && state.availableClasses ? state.availableClasses : null;
     const entityIndex = state && typeof state.getEntityIndex === "function" ? state.getEntityIndex() : null;
-    safeLog("[VG_DEBUG] runtime.dump availableProperties.length", Array.isArray(availableProperties) ? availableProperties.length : availableProperties);
-    safeLog("[VG_DEBUG] runtime.dump availableClasses.length", Array.isArray(availableClasses) ? availableClasses.length : availableClasses);
     safeLog("[VG_DEBUG] runtime.dump entityIndex", entityIndex);
   } catch (e) {
     safeLog("[VG_DEBUG] runtime.dump ontologyStore failed", e);

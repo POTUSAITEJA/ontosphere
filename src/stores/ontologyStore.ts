@@ -504,7 +504,6 @@ interface OntologyStore {
   exportGraph: (format: "turtle" | "json-ld" | "rdf-xml") => Promise<string>;
   getRdfManager: () => RDFManager;
   removeLoadedOntology: (url: string) => void;
-  getCompatibleProperties: (sourceClass: string, targetClass: string) => any[];
   // Namespace registry (joined prefix -> namespace -> color) persisted after reconcile
   namespaceRegistry: NamespaceEntry[];
   setNamespaceRegistry: (registry: NamespaceEntry[]) => void;
@@ -1230,8 +1229,6 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
     }
     set({
       loadedOntologies: [],
-      availableClasses: [],
-      availableProperties: [],
       validationErrors: [],
       currentGraph: { nodes: [], edges: [] },
     });
@@ -1275,17 +1272,6 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
         /* ignore */
       }
     }
-  },
-  getCompatibleProperties: (sourceClass: string, targetClass: string) => {
-    const { availableProperties } = get();
-    const props = Array.isArray(availableProperties) ? availableProperties : [];
-    return props.filter((p: any) => {
-      const domain = p.domain as string[] | undefined;
-      const range = p.range as string[] | undefined;
-      const domainOk = !domain || domain.length === 0 || domain.includes(sourceClass);
-      const rangeOk = !range || range.length === 0 || range.includes(targetClass);
-      return domainOk && rangeOk;
-    });
   },
   exportGraph: async (format: "turtle" | "json-ld" | "rdf-xml") => {
     // Prefer the store-bound rdfManager, but fall back to the module-level rdfManager
