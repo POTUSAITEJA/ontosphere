@@ -268,8 +268,7 @@
             injectInProgress = false; return;
           }
           tiptap.commands.focus();
-          var safeText = text.replace(/\n+/g, ' ')
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          var safeText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
           tiptap.commands.setContent(safeText, false);
           var tpDeadline = Date.now() + 10000;
           (function tryTipTap() {
@@ -324,28 +323,22 @@
   }
 
   /* ── Format and inject combined batch result ───────────────────────────── */
-  function injectCombinedResult(results, finalSummary, finalSvg) {
+  function injectCombinedResult(results) {
     var allOk = results.every(function (r) { return r.ok; });
-    var lines = ['[Ontosphere — ' + results.length + ' tool' + (results.length !== 1 ? 's' : '') + (allOk ? ' ✓' : ' (some failed)') + ']'];
-    results.forEach(function (r) {
-      var resp;
+    var parts = results.map(function (r) {
       if (r.ok) {
-        resp = JSON.stringify({
+        return JSON.stringify({
           jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null,
           result: { content: [{ type: 'text', text: briefData(r.result && r.result.data) }] },
         });
-      } else {
-        var err = (r.result && r.result.error) || 'failed';
-        resp = JSON.stringify({
-          jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null,
-          error: { code: -32000, message: String(err), data: { tool: r.tool } },
-        });
       }
-      lines.push('`' + resp + '`');
+      var err = (r.result && r.result.error) || 'failed';
+      return JSON.stringify({
+        jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null,
+        error: { code: -32000, message: String(err), data: { tool: r.tool } },
+      });
     });
-    if (finalSummary) { lines.push(''); lines.push(finalSummary); }
-    if (finalSvg && typeof finalSvg === 'string') { lines.push(''); lines.push('Current graph (SVG):'); lines.push(finalSvg); }
-    injectResult(lines.join('\n'));
+    injectResult(parts.join(' '));
     showToast('Done: ' + results.length + ' tool' + (results.length !== 1 ? 's' : ''), allOk);
   }
 
@@ -356,7 +349,6 @@
   var pendingTool      = null;
   var pendingMcpId     = null;
   var pendingRequestId = null;
-  var lastSummary      = null;
   var callTimeoutTimer = null;
   var knownSessionId   = null;
   var lateResult       = null;
@@ -375,22 +367,19 @@
       pendingRequestId = null;
       lateResult = { requestId: timedOutRequestId, tool: timedOutTool, mcpId: timedOutId };
       var results = batchResults.slice(); batchResults = [];
-      var summary = lastSummary; lastSummary = null;
+      
       callQueue = [];
       var resp = JSON.stringify({
         jsonrpc: '2.0', id: timedOutId != null ? timedOutId : null,
         error: { code: -32000, message: timedOutTool + ' did not respond within ' + (CALL_TIMEOUT_MS / 1000) + ' s. A follow-up result will be injected automatically.', data: { tool: timedOutTool, lateResult: true } },
       });
       results.push({ tool: timedOutTool, mcpId: timedOutId, ok: false, result: { success: false, error: 'timeout' } });
-      var lines = ['[Ontosphere — ⏱ ' + timedOutTool + ' timed out]'];
-      results.forEach(function (r) {
-        var rr = (r.tool === timedOutTool && !r.ok) ? resp : r.ok
+      var parts = results.map(function (r) {
+        return (r.tool === timedOutTool && !r.ok) ? resp : r.ok
           ? JSON.stringify({ jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null, result: { content: [{ type: 'text', text: briefData(r.result && r.result.data) }] } })
           : JSON.stringify({ jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null, error: { code: -32000, message: String((r.result && r.result.error) || 'failed'), data: { tool: r.tool } } });
-        lines.push('`' + rr + '`');
       });
-      if (summary) { lines.push(''); lines.push(summary); }
-      injectResult(lines.join('\n'));
+      injectResult(parts.join(' '));
       showToast('⏱ ' + timedOutTool + ' timed out', false);
     }, CALL_TIMEOUT_MS);
   }
@@ -410,7 +399,7 @@
           showToast('Ontosphere reloaded — graph data was lost', false);
           clearTimeout(callTimeoutTimer);
           isProcessing = false; pendingTool = null; pendingMcpId = null; pendingRequestId = null;
-          batchResults = []; callQueue = []; lastSummary = null; lateResult = null;
+          batchResults = []; callQueue = []; lateResult = null;
         }
         knownSessionId = data.sessionId;
       }
@@ -428,10 +417,7 @@
       var lresp = lok
         ? JSON.stringify({ jsonrpc: '2.0', id: lr.mcpId != null ? lr.mcpId : null, result: { content: [{ type: 'text', text: briefData(data.result && data.result.data) }] } })
         : JSON.stringify({ jsonrpc: '2.0', id: lr.mcpId != null ? lr.mcpId : null, error: { code: -32000, message: String((data.result && data.result.error) || 'failed'), data: { tool: lr.tool } } });
-      var ll = ['[Ontosphere — late result for ' + lr.tool + (lok ? ' ✓' : ' ✗') + ']', '`' + lresp + '`'];
-      if (data.summary) { ll.push(''); ll.push(data.summary); }
-      if (data.svg) { ll.push(''); ll.push('Current graph (SVG):'); ll.push(data.svg); }
-      injectResult(ll.join('\n'));
+      injectResult(lresp);
       showToast('Late result: ' + lr.tool, lok);
       return;
     }
@@ -440,15 +426,14 @@
     lateResult = null;
     var ok = !!(data.result && data.result.success !== false);
     batchResults.push({ tool: pendingTool || '?', mcpId: pendingMcpId, ok: ok, result: data.result });
-    if (data.summary) lastSummary = data.summary;
     isProcessing = false; pendingTool = null; pendingMcpId = null; pendingRequestId = null;
 
     if (callQueue.length > 0) {
       processNextInQueue();
     } else {
-      var results = batchResults.slice(); var summary = lastSummary;
-      batchResults = []; lastSummary = null;
-      injectCombinedResult(results, summary, data.svg);
+      var results = batchResults.slice();
+      batchResults = [];
+      injectCombinedResult(results);
     }
   });
 
@@ -634,7 +619,7 @@
     if (!popup || popup.closed) popup = openPopup();
     if (!popup) {
       showToast('Relay popup could not open', false);
-      isProcessing = false; callQueue = []; batchResults = []; lastSummary = null;
+      isProcessing = false; callQueue = []; batchResults = [];
       return;
     }
     pendingTool = item.tool;
