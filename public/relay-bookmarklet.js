@@ -284,7 +284,7 @@
             if (btn && !btn.disabled) btn.click();
             setTimeout(tryTipTap, 400);
           })();
-        }, 1000);
+        }, 2000);
       });
     }
 
