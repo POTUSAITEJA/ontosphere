@@ -586,16 +586,6 @@
       }
     }
 
-    // No send button found — OWUI during generation replaces it with a stop button.
-    // Detect any visible stop/cancel button by aria-label or title.
-    var allBtns = document.querySelectorAll('button:not([disabled])');
-    for (var bi = 0; bi < allBtns.length; bi++) {
-      var b = allBtns[bi];
-      if (b.offsetWidth === 0 && b.offsetHeight === 0) continue;
-      var lbl2 = (b.getAttribute('aria-label') || b.title || '').toLowerCase();
-      if (lbl2.indexOf('stop') !== -1 || lbl2.indexOf('cancel') !== -1) return true;
-    }
-
     return false;
   }
 
