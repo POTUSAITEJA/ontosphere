@@ -467,9 +467,14 @@ export default function ReactodiaCanvas() {
         for (const t of linkTypes) {
           const lt = model.getLinkType(t.id);
           if (!lt?.data || lt.data.label.length > 0) continue;
-          const prefixed = toPrefixed(String(t.id));
-          if (prefixed === String(t.id)) continue;
-          lt.setData({ ...lt.data, label: [dataProvider.factory.literal(prefixed)] });
+          if (t.label && t.label.length > 0) {
+            lt.setData({ ...lt.data, label: t.label });
+          } else {
+            const prefixed = toPrefixed(String(t.id));
+            if (prefixed !== String(t.id)) {
+              lt.setData({ ...lt.data, label: [dataProvider.factory.literal(prefixed)] });
+            }
+          }
         }
         for (const t of elementTypeGraph.elementTypes) {
           const et = model.getElementType(t.id);
