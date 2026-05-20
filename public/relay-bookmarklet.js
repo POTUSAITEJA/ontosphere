@@ -268,8 +268,13 @@
             injectInProgress = false; return;
           }
           tiptap.commands.focus();
-          var safeText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-          tiptap.commands.setContent(safeText, false);
+          tiptap.commands.clearContent(false);
+          // Simulate paste so OWUI's own paste handler processes the text —
+          // same path as manual paste, avoids ProseMirror plugins splitting
+          // at " boundaries when setContent rebuilds the full document.
+          var dt = new DataTransfer();
+          dt.setData('text/plain', text);
+          target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
           var tpDeadline = Date.now() + 10000;
           (function tryTipTap() {
             var inp = findInput() || target;
