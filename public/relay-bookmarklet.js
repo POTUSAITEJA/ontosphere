@@ -586,15 +586,37 @@
       }
     }
 
+    // No send button found — OWUI during generation replaces it with a stop button.
+    // Detect any visible stop/cancel button by aria-label or title.
+    var allBtns = document.querySelectorAll('button:not([disabled])');
+    for (var bi = 0; bi < allBtns.length; bi++) {
+      var b = allBtns[bi];
+      if (b.offsetWidth === 0 && b.offsetHeight === 0) continue;
+      var lbl2 = (b.getAttribute('aria-label') || b.title || '').toLowerCase();
+      if (lbl2.indexOf('stop') !== -1 || lbl2.indexOf('cancel') !== -1) return true;
+    }
+
     return false;
   }
 
   /* ── Generic "wait for AI to stop generating" before injecting ────────── */
+  // Requires isAiStreaming() to be false for 2 consecutive polls (600 ms) before
+  // calling back. One false reading is not enough — OWUI briefly re-enables the
+  // send button mid-annotation before generation is truly complete, which would
+  // cause early injection and the UUID-echo bug.
   function waitForStreamEnd(maxMs, callback) {
     var deadline = Date.now() + maxMs;
+    var idleStreak = 0;
     function poll() {
-      if (!isAiStreaming() || Date.now() >= deadline) { callback(); return; }
-      setTimeout(poll, 300);
+      if (Date.now() >= deadline) { callback(); return; }
+      if (isAiStreaming()) {
+        idleStreak = 0;
+        setTimeout(poll, 300);
+      } else if (++idleStreak >= 2) {
+        callback();
+      } else {
+        setTimeout(poll, 300);
+      }
     }
     poll();
   }
