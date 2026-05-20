@@ -1,7 +1,7 @@
 /**
  * Lightweight runtime debug helper injected in development.
  * - Logs the React Flow instance nodes (window.__VG_RF_INSTANCE.getNodes())
- * - Logs ontology store snapshots (availableProperties, availableClasses, entity index)
+ * - Logs ontology store snapshots (namespace registry, entity index)
  * - Exposes window.__VG_DEBUG_DUMP() to re-run the dump from the browser console
  *
  * This file is intentionally minimal and guarded so it won't crash production.
