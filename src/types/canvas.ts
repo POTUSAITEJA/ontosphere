@@ -185,24 +185,6 @@ export interface NodePropertyEditorProps {
 }
 
 /**
- * Link property editor configuration
- */
-export interface LinkPropertyEditorProps {
-  /** Whether the editor is open */
-  open: boolean;
-  /** Callback for opening/closing the editor */
-  onOpenChange: (open: boolean) => void;
-  /** Link data being edited */
-  linkData: LinkData | null;
-  /** Source node data */
-  sourceNode: NodeData | null;
-  /** Target node data */
-  targetNode: NodeData | null;
-  /** Callback for saving link properties */
-  onSave: (linkKey: string, propertyUri: string) => void;
-}
-
-/**
  * Canvas state management
  */
 export interface CanvasState {
