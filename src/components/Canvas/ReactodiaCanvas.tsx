@@ -1073,55 +1073,59 @@ export default function ReactodiaCanvas() {
     void rdfManager.emitAllSubjects('urn:vg:data');
   }, []);
 
-  const handleRunReasoning = React.useCallback(async () => {
-    setIsReasoning(true);
-    try {
-      const cfg = useAppConfigStore.getState().config;
-      const rulesets = Array.isArray(cfg?.reasoningRulesets) ? cfg.reasoningRulesets : [];
-      const reasonerBackend = cfg?.reasonerBackend ?? 'konclude';
-      const result = await rdfManager.runReasoning({ rulesets, reasonerBackend });
-      setCurrentReasoning(result);
-      setReasoningHistory(h => [...h, result]);
-
-      // Fetch ONLY the quads that are truly in urn:vg:inferred (not the full subject
-      // quads emitted by onSubjectsChange, which includes asserted triples too).
-      // This is what drives the inferred-decoration markers in N3DataProvider.
-      const inferredPage = await rdfManager.fetchQuadsPage({
-        graphName: 'urn:vg:inferred',
-        offset: 0,
-        limit: 0,       // 0 = no limit
-        serialize: false,
-      });
-      if (Array.isArray(inferredPage?.items) && inferredPage.items.length > 0) {
-        const rdfQuads = workerQuadsToRdf(inferredPage.items as unknown as ConverterQuad[]);
-        const filtered = rdfQuads.filter(
-          q => q.subject.termType === 'NamedNode' && knownSubjects.has(q.subject.value as string)
-        );
-        if (filtered.length > 0) {
-          dataProvider.addGraph(filtered, 'urn:vg:inferred');
-          const model = modelRef.current;
-          if (model) {
-            const subjects = [...new Set(filtered.map(q => q.subject.value as Reactodia.ElementIri))];
-            await model.requestElementData(subjects);
-            await model.requestLinks({ addedElements: subjects });
-            // Stamp inferred links with linkState so the decoration survives
-            // importLayout (linkState is serialized in the diagram snapshot).
-            for (const link of model.links) {
-              if (!(link instanceof Reactodia.RelationLink)) continue;
-              const graphName = link.data?.properties[VG_GRAPH_NAME_PROP]?.[0];
-              if (graphName?.termType === 'NamedNode' && graphName.value === 'urn:vg:inferred') {
-                const state = (link.linkState ?? Reactodia.TemplateState.empty)
-                  .set(VG_GRAPH_NAME_STATE, 'urn:vg:inferred');
-                model.history.execute(Reactodia.setLinkState(link, state));
-              }
+  const handleApplyInferred = React.useCallback(async () => {
+    // Fetch ONLY the quads that are truly in urn:vg:inferred (not the full subject
+    // quads emitted by onSubjectsChange, which includes asserted triples too).
+    // This is what drives the inferred-decoration markers in N3DataProvider.
+    const inferredPage = await rdfManager.fetchQuadsPage({
+      graphName: 'urn:vg:inferred',
+      offset: 0,
+      limit: 0,       // 0 = no limit
+      serialize: false,
+    });
+    if (Array.isArray(inferredPage?.items) && inferredPage.items.length > 0) {
+      const rdfQuads = workerQuadsToRdf(inferredPage.items as unknown as ConverterQuad[]);
+      const filtered = rdfQuads.filter(
+        q => q.subject.termType === 'NamedNode' && knownSubjects.has(q.subject.value as string)
+      );
+      if (filtered.length > 0) {
+        dataProvider.addGraph(filtered, 'urn:vg:inferred');
+        const model = modelRef.current;
+        if (model) {
+          const subjects = [...new Set(filtered.map(q => q.subject.value as Reactodia.ElementIri))];
+          await model.requestElementData(subjects);
+          await model.requestLinks({ addedElements: subjects });
+          // Stamp inferred links with linkState so the decoration survives
+          // importLayout (linkState is serialized in the diagram snapshot).
+          for (const link of model.links) {
+            if (!(link instanceof Reactodia.RelationLink)) continue;
+            const graphName = link.data?.properties[VG_GRAPH_NAME_PROP]?.[0];
+            if (graphName?.termType === 'NamedNode' && graphName.value === 'urn:vg:inferred') {
+              const state = (link.linkState ?? Reactodia.TemplateState.empty)
+                .set(VG_GRAPH_NAME_STATE, 'urn:vg:inferred');
+              model.history.execute(Reactodia.setLinkState(link, state));
             }
           }
         }
       }
+    }
+  }, []);
+
+  const handleRunReasoning = React.useCallback(async (reasonerBackend?: 'konclude' | 'n3') => {
+    setIsReasoning(true);
+    try {
+      const cfg = useAppConfigStore.getState().config;
+      const rulesets = Array.isArray(cfg?.reasoningRulesets) ? cfg.reasoningRulesets : [];
+      const backend = reasonerBackend ?? cfg?.reasonerBackend ?? 'konclude';
+      const result = await rdfManager.runReasoning({ rulesets, reasonerBackend: backend });
+      setCurrentReasoning(result);
+      setReasoningHistory(h => [...h, result]);
+      await handleApplyInferred();
+      return result;
     } finally {
       setIsReasoning(false);
     }
-  }, []);
+  }, [handleApplyInferred]);
 
   React.useEffect(() => {
     registerReasoningCallback(handleRunReasoning);

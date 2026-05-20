@@ -2,36 +2,26 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockClearInferred, mockClearInferredCallback } = vi.hoisted(() => ({
+const { mockClearInferred, mockClearInferredCallback, mockRunReasoning } = vi.hoisted(() => ({
   mockClearInferred: vi.fn(),
   mockClearInferredCallback: vi.fn(),
-}));
-
-vi.mock('@/utils/rdfManager', () => ({
-  rdfManager: {
-    runReasoning: vi.fn(),
-  },
+  mockRunReasoning: vi.fn(),
 }));
 
 vi.mock('@/mcp/workspaceContext', () => {
   const dataProvider = { clearInferred: mockClearInferred };
   return {
     getWorkspaceRefs: vi.fn(() => ({
-      ctx: {
-        model: { requestData: vi.fn().mockResolvedValue(undefined) },
-        view: { findAnyCanvas: vi.fn().mockReturnValue(undefined) },
-      },
+      ctx: {},
       dataProvider,
       clearInferred: mockClearInferredCallback,
+      runReasoning: mockRunReasoning,
     })),
   };
 });
 
 import { reasoningTools } from '../tools/reasoning';
-import { rdfManager } from '@/utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
-
-const mockRunReasoning = rdfManager.runReasoning as ReturnType<typeof vi.fn>;
 
 const tool = (name: string) => {
   const t = reasoningTools.find((t) => t.name === name);
@@ -46,33 +36,53 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 describe('runReasoning', () => {
   it('returns inferredTriples from meta.addedCount when available', async () => {
-    mockRunReasoning.mockResolvedValueOnce({
-      id: 'r1',
-      timestamp: 0,
-      status: 'completed',
-      errors: [],
-      warnings: [],
-      inferences: [],
-      meta: { addedCount: 42 },
-    });
+    mockRunReasoning.mockResolvedValueOnce({ meta: { addedCount: 42 } });
     const result = await tool('runReasoning').handler({});
     expect(result).toEqual({ success: true, data: { inferredTriples: 42 } });
   });
 
+  it('calls refs.runReasoning exactly once per invocation', async () => {
+    mockRunReasoning.mockResolvedValueOnce({ meta: { addedCount: 5 } });
+    await tool('runReasoning').handler({});
+    expect(mockRunReasoning).toHaveBeenCalledOnce();
+  });
+
+  it('passes reasonerBackend: n3 through to refs.runReasoning', async () => {
+    mockRunReasoning.mockResolvedValueOnce({ meta: { addedCount: 0 } });
+    await tool('runReasoning').handler({ reasonerBackend: 'n3' });
+    expect(mockRunReasoning).toHaveBeenCalledWith('n3');
+  });
+
+  it('passes reasonerBackend: konclude through to refs.runReasoning', async () => {
+    mockRunReasoning.mockResolvedValueOnce({ meta: { addedCount: 0 } });
+    await tool('runReasoning').handler({ reasonerBackend: 'konclude' });
+    expect(mockRunReasoning).toHaveBeenCalledWith('konclude');
+  });
+
+  it('passes undefined when no reasonerBackend given (canvas uses config default)', async () => {
+    mockRunReasoning.mockResolvedValueOnce({ meta: { addedCount: 0 } });
+    await tool('runReasoning').handler({});
+    expect(mockRunReasoning).toHaveBeenCalledWith(undefined);
+  });
+
+  it('still returns success when runReasoning is not registered', async () => {
+    (getWorkspaceRefs as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      ctx: {},
+      dataProvider: { clearInferred: mockClearInferred },
+    });
+    const result = await tool('runReasoning').handler({});
+    expect(result).toEqual({ success: true, data: { inferredTriples: 0 } });
+  });
+
   it('falls back to inferences.length when meta.addedCount is absent', async () => {
     mockRunReasoning.mockResolvedValueOnce({
-      id: 'r2',
-      timestamp: 0,
-      status: 'completed',
-      errors: [],
-      warnings: [],
       inferences: [{ type: 'class', subject: 'a', predicate: 'b', object: 'c', confidence: 1 }],
     });
     const result = await tool('runReasoning').handler({});
     expect(result).toEqual({ success: true, data: { inferredTriples: 1 } });
   });
 
-  it('returns error if runReasoning throws', async () => {
+  it('returns error if refs.runReasoning throws', async () => {
     mockRunReasoning.mockRejectedValueOnce(new Error('reasoning error'));
     const result = await tool('runReasoning').handler({});
     expect(result).toMatchObject({ success: false, error: expect.stringContaining('reasoning error') });

@@ -7,14 +7,14 @@ const CHANNEL_NAME = 'ontosphere-relay-v1';
 interface WorkspaceRefs {
   ctx: Reactodia.WorkspaceContext;
   dataProvider: N3DataProvider;
-  runReasoning?: () => Promise<unknown>;
+  runReasoning?: (reasonerBackend?: 'konclude' | 'n3') => Promise<unknown>;
   clearInferred?: () => void;
   navigateToIri?: (iri: string) => void;
   setViewMode?: (mode: 'abox' | 'tbox') => void;
 }
 
 let refs: WorkspaceRefs | null = null;
-let pendingReasoningCallback: (() => Promise<unknown>) | null = null;
+let pendingReasoningCallback: ((reasonerBackend?: 'konclude' | 'n3') => Promise<unknown>) | null = null;
 let pendingSetViewModeCallback: ((mode: 'abox' | 'tbox') => void) | null = null;
 let bc: BroadcastChannel | null = null;
 
@@ -62,7 +62,7 @@ export function setWorkspaceContext(
   maybeNotifyReady();
 }
 
-export function registerReasoningCallback(fn: () => Promise<unknown>): void {
+export function registerReasoningCallback(fn: (reasonerBackend?: 'konclude' | 'n3') => Promise<unknown>): void {
   if (refs) {
     refs.runReasoning = fn;
   } else {

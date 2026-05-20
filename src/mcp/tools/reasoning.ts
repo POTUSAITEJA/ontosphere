@@ -1,8 +1,6 @@
 // src/mcp/tools/reasoning.ts
 import type { McpTool, McpResult } from '@/mcp/types';
-import { rdfManager } from '@/utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
-import { useAppConfigStore } from '@/stores/appConfigStore';
 import { VALID_ALGORITHMS } from './layout';
 const EXPORT_FORMATS = ['turtle', 'jsonld', 'rdfxml', 'svg', 'png'];
 
@@ -25,19 +23,12 @@ const runReasoning: McpTool = {
       const refs = getWorkspaceRefs();
 
       if (clearBefore) {
-        await refs.dataProvider.clearInferred();
+        refs.clearInferred?.() ?? refs.dataProvider.clearInferred();
       }
 
-      const cfg = useAppConfigStore.getState().config;
-      const rulesets = Array.isArray(cfg?.reasoningRulesets) ? cfg.reasoningRulesets : [];
       const backend = reasonerBackend === 'n3' ? 'n3' : reasonerBackend === 'konclude' ? 'konclude' : undefined;
-      const result = await rdfManager.runReasoning({ rulesets, ...(backend ? { reasonerBackend: backend } : {}) });
-      const inferredTriples = result?.meta?.addedCount ?? result?.inferences?.length ?? 0;
-
-      // Trigger canvas refresh via registered callback if available
-      if (refs.runReasoning) {
-        await refs.runReasoning().catch(() => {/* canvas not required for count */});
-      }
+      const result = await refs.runReasoning?.(backend);
+      const inferredTriples = (result as any)?.meta?.addedCount ?? (result as any)?.inferences?.length ?? 0;
 
       return { success: true, data: { inferredTriples } };
     } catch (e) {
