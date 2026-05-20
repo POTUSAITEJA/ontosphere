@@ -383,11 +383,8 @@ export class N3DataProvider implements DataProvider {
     return results;
   }
 
-  async knownLinkTypes(p: { signal?: AbortSignal }): Promise<LinkTypeModel[]> {
-    const models = await this.inner.knownLinkTypes(p);
-    return models.map(m =>
-      m.label.length > 0 ? m : { ...m, label: [this.inner.factory.literal(toPrefixed(String(m.id)))] }
-    );
+  knownLinkTypes(p: { signal?: AbortSignal }): Promise<LinkTypeModel[]> {
+    return this.inner.knownLinkTypes(p);
   }
   elementTypes(p: { classIds: ReadonlyArray<ElementTypeIri>; signal?: AbortSignal }): Promise<Map<ElementTypeIri, ElementTypeModel>> {
     return this.inner.elementTypes(p);
@@ -397,7 +394,10 @@ export class N3DataProvider implements DataProvider {
     const out = new Map(result);
     for (const [id, m] of out) {
       if (m.label.length === 0) {
-        out.set(id, { ...m, label: [this.inner.factory.literal(toPrefixed(String(id)))] });
+        const prefixed = toPrefixed(String(id));
+        if (prefixed !== String(id)) {
+          out.set(id, { ...m, label: [this.inner.factory.literal(prefixed)] });
+        }
       }
     }
     return out;

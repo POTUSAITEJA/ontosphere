@@ -107,7 +107,12 @@ export default function EntityAutoComplete({
   const displayValue = useMemo(() => {
     if (!value) return '';
     const found = source.find(e => String(e.iri || '') === String(value));
-    if (found) return found.label || prefixedIri(String(found.iri));
+    if (found) {
+      const p = (found as any).prefixed || prefixedIri(String(found.iri));
+      const l = found.label;
+      if (p && l && l !== p) return `${p} · ${l}`;
+      return p || l || String(found.iri);
+    }
     return prefixedIri(value) || value;
   }, [value, source]);
 
