@@ -18,7 +18,7 @@
 
   var RELAY_URL             = '__RELAY_URL__';
   var RELAY_ORIGIN          = '__RELAY_ORIGIN__';
-  var ANNOTATION_GUARD_MS   = __ANNOTATION_GUARD_MS__; // 0 = generic UIs; 2000 = OWUI
+  var ANNOTATION_GUARD_MS   = 0; // updated live via vg-ping from relay.html
   var POPUP_NAME   = 'vg-relay';
   var POPUP_OPTS   = 'width=320,height=180,menubar=no,toolbar=no,location=no,resizable=yes';
 
@@ -394,6 +394,9 @@
     var data = evt.data;
 
     if (data && data.type === 'vg-ping') {
+      if (typeof data.annotationGuardMs === 'number') {
+        ANNOTATION_GUARD_MS = data.annotationGuardMs;
+      }
       if (data.sessionId) {
         if (knownSessionId && knownSessionId !== data.sessionId) {
           showToast('Ontosphere reloaded — graph data was lost', false);

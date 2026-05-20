@@ -176,11 +176,21 @@
       };
       // Send heartbeat so the Ontosphere app can show a real connection indicator.
       bc.postMessage({ type: 'vg-ping' });
+
+      function pingOpener() {
+        if (!window.opener) return;
+        const guardS = parseInt(localStorage.getItem('relay-annotation-guard-s') || '0', 10);
+        const msg = { type: 'vg-ping', annotationGuardMs: (isNaN(guardS) ? 0 : guardS) * 1000 };
+        try { window.opener.postMessage(msg, openerOrigin || '*'); } catch (_) {}
+      }
+      pingOpener(); // immediate so bookmarklet gets the value before first tool call
+
       const pingInterval = setInterval(function () {
         if (!bc) { clearInterval(pingInterval); return; }
         // Include sessionId so Ontosphere can detect relay reconnects after reload
         const ping = lastSessionId ? { type: 'vg-ping', sessionId: lastSessionId } : { type: 'vg-ping' };
         bc.postMessage(ping);
+        pingOpener();
       }, 10000);
 
       window.addEventListener('unload', function () {
