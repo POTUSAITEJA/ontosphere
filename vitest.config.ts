@@ -25,6 +25,7 @@ export default defineConfig({
     exclude: [
       '.trunk/**',
       '.worktrees/**',
+      '.claude/worktrees/**',
       'node_modules/**',
       'e2e/**',
       ...(process.env.NETWORK_TESTS ? [] : ['**/*.network.test.ts']),
