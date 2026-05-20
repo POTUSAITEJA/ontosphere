@@ -45,6 +45,7 @@ import { Button } from '../ui/button';
 import { WELL_KNOWN_BY_PREFIX, resolveOntologyLoadUrl } from '@/utils/wellKnownOntologies';
 import { instantiateWorkflowOnCanvas } from '@/utils/workflowInstantiator';
 import { LAYOUT_DEBOUNCE_MS, DEFAULT_OVERLAP_THRESHOLD_PX } from '@/utils/canvasConstants';
+import { toPrefixed } from '@/utils/termUtils';
 
 function extractNamespace(iri: string): string {
   const hash = iri.lastIndexOf('#');
@@ -450,6 +451,42 @@ export default function ReactodiaCanvas() {
     },
     [nsColorMap]
   );
+
+  // Patch unlabeled link/element types in Reactodia model after namespaces + ontologies are ready.
+  // Called at namespace-change time (after pmdco loads) so labels and toPrefixed both work correctly.
+  React.useEffect(() => {
+    if (namespaces.length === 0) return;
+    const model = contextRef.current?.model;
+    if (!model) return;
+    void (async () => {
+      try {
+        const [linkTypes, elementTypeGraph] = await Promise.all([
+          dataProvider.knownLinkTypes({}),
+          dataProvider.knownElementTypes({}),
+        ]);
+        for (const t of linkTypes) {
+          const lt = model.getLinkType(t.id);
+          if (!lt?.data || lt.data.label.length > 0) continue;
+          const prefixed = toPrefixed(String(t.id));
+          if (prefixed === String(t.id)) continue;
+          lt.setData({ ...lt.data, label: [dataProvider.factory.literal(prefixed)] });
+        }
+        for (const t of elementTypeGraph.elementTypes) {
+          const et = model.getElementType(t.id);
+          if (!et?.data) continue;
+          if (et.data.label.length > 0) continue;
+          if (t.label && t.label.length > 0) {
+            et.setData({ ...et.data, label: t.label });
+          } else {
+            const prefixed = toPrefixed(String(t.id));
+            if (prefixed !== String(t.id)) {
+              et.setData({ ...et.data, label: [dataProvider.factory.literal(prefixed)] });
+            }
+          }
+        }
+      } catch { /* ignore if model torn down */ }
+    })();
+  }, [namespaces]);
 
   const modelRef = React.useRef<Reactodia.DataDiagramModel | null>(null);
   const commandBusRef = React.useRef<((topic: any) => any) | null>(null);

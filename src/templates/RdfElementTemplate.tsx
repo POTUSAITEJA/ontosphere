@@ -97,14 +97,21 @@ function RdfElementBody({ props }: { props: Reactodia.TemplateProps }) {
   const nsColor = getNamespaceColor(data.id, registry);
 
   const displayTypes = data.types.filter(t => !t.startsWith('urn:vg:bnode:'));
-  const typeLabels = React.useMemo(
-    () => displayTypes.map(typeIri => {
-      const label = model.getElementType(typeIri)?.data?.label?.[0]?.value;
-      if (label) return label;
-      return prefixShorten(typeIri, prefixes);
-    }),
-    [data.types, prefixes, model]
+
+  // Re-render when any element type's label data changes (e.g. after ontology load patches labels).
+  Reactodia.useKeyedSyncStore(
+    Reactodia.subscribeElementTypes,
+    displayTypes as Reactodia.ElementTypeIri[],
+    model
   );
+
+  const typeChips = displayTypes.map(typeIri => {
+    const prefixed = prefixShorten(typeIri, prefixes);
+    const modelLabel = model.getElementType(typeIri)?.data?.label?.[0]?.value;
+    const display = (modelLabel && modelLabel !== prefixed) ? modelLabel : (prefixed || typeIri);
+    const hover = prefixed !== typeIri ? `${prefixed} <${typeIri}>` : typeIri;
+    return { display, hover };
+  });
 
   // Icon letter from label
   const iconLetter = label.replace(/^[^a-zA-Z0-9]*/, '').charAt(0).toUpperCase() || '✳';
@@ -157,7 +164,7 @@ function RdfElementBody({ props }: { props: Reactodia.TemplateProps }) {
       <div style={{ flex: 1, minWidth: 0 }}>
 
         {/* Types row */}
-        {typeLabels.length > 0 && (
+        {typeChips.length > 0 && (
           <div
             style={{
               padding: '3px 8px 0',
@@ -167,16 +174,19 @@ function RdfElementBody({ props }: { props: Reactodia.TemplateProps }) {
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
             }}
-            title={displayTypes.join(', ')}
           >
-            {typeLabels.map((label, i) => (
+            {typeChips.map(({ display, hover }, i) => (
               <span
                 key={displayTypes[i]}
-                style={inferredTypesSet.has(displayTypes[i])
-                  ? { fontStyle: 'italic', color: 'var(--vg-inferred-color)', opacity: 0.9 }
-                  : undefined}
+                title={hover}
+                style={{
+                  marginRight: i < typeChips.length - 1 ? 4 : 0,
+                  ...(inferredTypesSet.has(displayTypes[i])
+                    ? { fontStyle: 'italic', color: 'var(--vg-inferred-color)', opacity: 0.9 }
+                    : {}),
+                }}
               >
-                {i > 0 ? ', ' : ''}{label}
+                {i > 0 ? ', ' : ''}{display}
               </span>
             ))}
           </div>

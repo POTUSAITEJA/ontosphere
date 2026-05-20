@@ -1,6 +1,7 @@
 import React from 'react';
 import * as Reactodia from '@reactodia/workspace';
 import { VG_GRAPH_NAME_PROP, VG_GRAPH_NAME_STATE } from '../providers/N3DataProvider';
+import { toPrefixed } from '../utils/termUtils';
 
 function isInferred(link: Reactodia.Link): boolean {
   if (!(link instanceof Reactodia.RelationLink)) return false;
@@ -16,11 +17,18 @@ interface RdfLinkBodyProps extends Reactodia.LinkTemplateProps {
 }
 
 function RdfLinkBody({ inferred, ...rest }: RdfLinkBodyProps) {
+  const typeId = String(rest.link.typeId);
+  const prefixed = toPrefixed(typeId);
+  const hoverTitle = prefixed !== typeId ? `${prefixed} <${typeId}>` : typeId;
+
   return (
     <Reactodia.StandardRelation
       {...rest}
       pathProps={inferred ? { strokeDasharray: '6 3', stroke: 'var(--vg-inferred-color)' } : undefined}
-      primaryLabelProps={inferred ? { style: { color: 'var(--vg-inferred-color)', fontStyle: 'italic' } } : undefined}
+      primaryLabelProps={{
+        ...(inferred ? { style: { color: 'var(--vg-inferred-color)', fontStyle: 'italic' } } : {}),
+        title: hoverTitle,
+      }}
       // Hide the synthetic urn:vg:graphName property — it must not render as a visible label
       propertyLabelProps={(iri) => iri === VG_GRAPH_NAME_PROP ? null : undefined}
     />
