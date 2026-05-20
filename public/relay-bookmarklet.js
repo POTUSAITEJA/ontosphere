@@ -485,7 +485,8 @@
       var tool = req.params.name;
       var params = req.params.arguments || {};
       for (var k in params) {
-        if (typeof params[k] === 'string') params[k] = expandPrefix(params[k]);
+        // Only expand single-IRI values — skip multi-word blobs (Turtle, SPARQL, etc.)
+        if (typeof params[k] === 'string' && !/[\s\n]/.test(params[k])) params[k] = expandPrefix(params[k]);
       }
       var mcpId = req.id != null ? req.id : null;
       var sig = tool + ':' + JSON.stringify(params) + ':' + mcpId;
