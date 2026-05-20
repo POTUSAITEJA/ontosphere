@@ -53,11 +53,12 @@ const README_TOC = parseTocLinks(readmeSrc);
 export type RdfExportFormat = 'turtle' | 'json-ld' | 'rdf-xml';
 
 // eslint-disable-next-line no-script-url
-function buildBookmarkletHref(origin: string, pageHref: string): string {
+function buildBookmarkletHref(origin: string, pageHref: string, annotationGuardMs = 0): string {
   const relayUrl = new URL('relay.html', pageHref).href;
   const code = bookmarkletTemplate
     .replace('__RELAY_URL__', relayUrl)
-    .replace('__RELAY_ORIGIN__', origin);
+    .replace('__RELAY_ORIGIN__', origin)
+    .replace('__ANNOTATION_GUARD_MS__', String(annotationGuardMs));
   return `javascript:${code}`;
 }
 
@@ -483,7 +484,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 </AccordionTrigger>
                 <AccordionContent className="pb-2">
                   <RelaySection
-                    bookmarkletHref={buildBookmarkletHref(window.location.origin, window.location.href)}
+                    buildBookmarkletHref={(ms) => buildBookmarkletHref(window.location.origin, window.location.href, ms)}
                     connected={connected}
                     callLog={callLog}
                   />

@@ -28,8 +28,13 @@ Call help first to get full instructions and the tool list:
 \`{"jsonrpc":"2.0","id":0,"method":"tools/call","params":{"name":"help","arguments":{}}}\``;
 import type { RelayCallLogEntry } from '../../hooks/useRelayBridge';
 
+const ANNOTATION_GUARD: Record<string, number> = {
+  generic: 0,
+  owui: 2000,
+};
+
 interface RelaySectionProps {
-  bookmarkletHref: string;
+  buildBookmarkletHref: (annotationGuardMs: number) => string;
   connected: boolean;
   callLog: RelayCallLogEntry[];
 }
@@ -42,9 +47,10 @@ function formatRelativeTime(timestamp: number): string {
   return `${diffMin}m ago`;
 }
 
-export const RelaySection: React.FC<RelaySectionProps> = ({ bookmarkletHref, connected, callLog }) => {
+export const RelaySection: React.FC<RelaySectionProps> = ({ buildBookmarkletHref, connected, callLog }) => {
   const bookmarkletRef = useRef<HTMLAnchorElement>(null);
   const [copied, setCopied] = useState(false);
+  const [chatMode, setChatMode] = useState<'generic' | 'owui'>('generic');
 
   const copyPrompt = useCallback(() => {
     const done = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
@@ -61,9 +67,9 @@ export const RelaySection: React.FC<RelaySectionProps> = ({ bookmarkletHref, con
 
   useEffect(() => {
     if (bookmarkletRef.current) {
-      bookmarkletRef.current.setAttribute('href', bookmarkletHref);
+      bookmarkletRef.current.setAttribute('href', buildBookmarkletHref(ANNOTATION_GUARD[chatMode]));
     }
-  }, [bookmarkletHref]);
+  }, [buildBookmarkletHref, chatMode]);
 
   return (
     <div className="px-3 py-2 space-y-3">
@@ -90,6 +96,20 @@ export const RelaySection: React.FC<RelaySectionProps> = ({ bookmarkletHref, con
           </button>
         </li>
       </ol>
+
+      {/* Chat UI mode */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground">Chat UI:</span>
+        {(['generic', 'owui'] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => setChatMode(m)}
+            className={`text-xs px-2 py-0.5 rounded border transition-colors ${chatMode === m ? 'border-primary text-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}
+          >
+            {m === 'generic' ? 'Generic' : 'Open WebUI'}
+          </button>
+        ))}
+      </div>
 
       {/* Draggable bookmarklet */}
       <Button variant="outline" size="sm" asChild className="w-full cursor-grab active:cursor-grabbing">

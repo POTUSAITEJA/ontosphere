@@ -16,8 +16,9 @@
 (function () {
   'use strict';
 
-  var RELAY_URL    = '__RELAY_URL__';
-  var RELAY_ORIGIN = '__RELAY_ORIGIN__';
+  var RELAY_URL             = '__RELAY_URL__';
+  var RELAY_ORIGIN          = '__RELAY_ORIGIN__';
+  var ANNOTATION_GUARD_MS   = __ANNOTATION_GUARD_MS__; // 0 = generic UIs; 2000 = OWUI
   var POPUP_NAME   = 'vg-relay';
   var POPUP_OPTS   = 'width=320,height=180,menubar=no,toolbar=no,location=no,resizable=yes';
 
@@ -260,11 +261,6 @@
       live.focus();
       el = live;
       waitForStreamEnd(5000, function () {
-        // OWUI annotation guard: send button re-appears before OWUI finishes
-        // committing the message server-side. Injecting during that window
-        // causes the AI to echo the injected message UUID. 2 s guard for OWUI
-        // (detected via its known #send-message-button), 0 for other UIs.
-        var annotationGuardMs = document.getElementById('send-message-button') ? 2000 : 0;
         setTimeout(function () {
           var target = findInput() || el;
           var tiptap = target.editor;
@@ -285,7 +281,7 @@
             if (btn && !btn.disabled) btn.click();
             setTimeout(tryTipTap, 400);
           })();
-        }, annotationGuardMs);
+        }, ANNOTATION_GUARD_MS);
       });
     }
 
