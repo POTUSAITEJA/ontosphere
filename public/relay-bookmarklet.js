@@ -722,8 +722,8 @@
   }
 
   /* ── Fire-on-idle poll ─────────────────────────────────────────────────── */
-  // Polls every 500 ms. Fires only when page text has been stable for 12 s
-  // (24 consecutive ticks with identical content-length) AND relay is not busy.
+  // Polls every 500 ms. Fires only when page text has been stable for 3 s
+  // (6 consecutive ticks with identical content-length) AND relay is not busy.
   // Resets counter on any content change, so qwen3 thinking pauses never
   // trigger early dispatch. isAiStreaming() is intentionally NOT used here —
   // it gives false negatives for qwen3 (send button stays enabled during
@@ -742,7 +742,7 @@
         idleConsecutive = 0;
       } else {
         idleConsecutive++;
-        if (idleConsecutive >= 24) { // 24 × 500 ms = 12 s stable
+        if (idleConsecutive >= 6) { // 6 × 500 ms = 3 s stable
           var calls = extractAllToolCalls(text, dispatchedSigs);
           if (calls.length > 0) {
             idleConsecutive = 0;
