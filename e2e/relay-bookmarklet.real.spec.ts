@@ -231,6 +231,28 @@ test.describe('relay — real end-to-end (dev server)', () => {
     expect(result).toContain('http://example.org/Alice');
   });
 
+  // ── Double-inject deduplication ───────────────────────────────────────
+  // Injecting the bookmarklet a second time must not re-dispatch calls that are
+  // already visible on the page. dispatchedSigs is pre-seeded at injection time.
+
+  test('double-inject: re-injecting bookmarklet does not re-dispatch visible calls', async ({ context, page }) => {
+    await page.goto(`${DEV_URL}/relay-mock-chat.html`);
+    const _popup1 = await injectBookmarklet(page);
+
+    // Trigger a tool call and wait for the result to appear once.
+    await page.click('button[data-scenario="single"]');
+    await getSubmittedResult(page);
+
+    const countAfterFirst = await page.locator('#chat-stream .msg-user').count();
+
+    // Re-inject — the call is already visible and pre-seeded, must not fire again.
+    const _popup2 = await injectBookmarklet(page);
+    await page.waitForTimeout(1500);
+
+    const countAfterReinject = await page.locator('#chat-stream .msg-user').count();
+    expect(countAfterReinject).toBe(countAfterFirst);
+  });
+
   // ── relay.html shows correct status ───────────────────────────────────
 
   test('relay.html: shows "active" for opener and BC connection after first tool call', async ({ context, page }) => {
