@@ -268,7 +268,9 @@
             injectInProgress = false; return;
           }
           tiptap.commands.focus();
-          tiptap.commands.setContent(text.replace(/\n+/g, ' '), false);
+          var safeText = text.replace(/\n+/g, ' ')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          tiptap.commands.setContent(safeText, false);
           var tpDeadline = Date.now() + 10000;
           (function tryTipTap() {
             var inp = findInput() || target;
@@ -339,7 +341,7 @@
           error: { code: -32000, message: String(err), data: { tool: r.tool } },
         });
       }
-      lines.push(resp);
+      lines.push('`' + resp + '`');
     });
     if (finalSummary) { lines.push(''); lines.push(finalSummary); }
     if (finalSvg && typeof finalSvg === 'string') { lines.push(''); lines.push('Current graph (SVG):'); lines.push(finalSvg); }
@@ -385,7 +387,7 @@
         var rr = (r.tool === timedOutTool && !r.ok) ? resp : r.ok
           ? JSON.stringify({ jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null, result: { content: [{ type: 'text', text: briefData(r.result && r.result.data) }] } })
           : JSON.stringify({ jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null, error: { code: -32000, message: String((r.result && r.result.error) || 'failed'), data: { tool: r.tool } } });
-        lines.push(rr);
+        lines.push('`' + rr + '`');
       });
       if (summary) { lines.push(''); lines.push(summary); }
       injectResult(lines.join('\n'));
@@ -426,7 +428,7 @@
       var lresp = lok
         ? JSON.stringify({ jsonrpc: '2.0', id: lr.mcpId != null ? lr.mcpId : null, result: { content: [{ type: 'text', text: briefData(data.result && data.result.data) }] } })
         : JSON.stringify({ jsonrpc: '2.0', id: lr.mcpId != null ? lr.mcpId : null, error: { code: -32000, message: String((data.result && data.result.error) || 'failed'), data: { tool: lr.tool } } });
-      var ll = ['[Ontosphere — late result for ' + lr.tool + (lok ? ' ✓' : ' ✗') + ']', lresp];
+      var ll = ['[Ontosphere — late result for ' + lr.tool + (lok ? ' ✓' : ' ✗') + ']', '`' + lresp + '`'];
       if (data.summary) { ll.push(''); ll.push(data.summary); }
       if (data.svg) { ll.push(''); ll.push('Current graph (SVG):'); ll.push(data.svg); }
       injectResult(ll.join('\n'));
