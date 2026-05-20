@@ -179,7 +179,7 @@ All startup mechanisms are additive and run in this order:
 Reasoning
 ---------
 
-Ontosphere runs OWL reasoning entirely in the browser via a pluggable backend. The default is **Konclude** (full OWL 2 DL). Inferred triples appear as amber dashed edges; inferred types and annotations appear in amber italic. A reasoning report lists all inferred triples. Reasoning is idempotent — running it again produces no additional triples. Use **Clear inferred** to remove all inferred triples without affecting asserted data.
+Ontosphere runs OWL reasoning entirely in the browser via a pluggable backend. The default is **Konclude** (full OWL 2 DL). Inferred triples appear as amber dashed edges; inferred types and annotations appear in amber italic. A reasoning report lists all inferred triples. Reasoning is idempotent — running it again produces no additional triples. Use **Clear inferred** to remove all inferred triples without affecting asserted data. See [OWL 2 DL vs OWL-RL comparison](docs/reasoning-comparison.md) for a side-by-side visual example.
 
 ### Konclude (default — OWL 2 DL)
 

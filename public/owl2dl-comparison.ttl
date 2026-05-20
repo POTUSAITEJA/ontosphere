@@ -1,0 +1,63 @@
+# OWL 2 DL vs OWL-RL comparison fixture
+# Load this file and run reasoning with each backend to see the difference:
+# N3 (OWL-RL BGP): ignores owl:intersectionOf and owl:minCardinality — no new edges.
+# Konclude (OWL 2 DL): derives Father rdfs:subClassOf Male, Parent, Person from equivalentClass axioms.
+
+@prefix ex:   <http://example.org/dl-demo#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ── Ontology declaration ──────────────────────────────────────────────────────
+<http://example.org/dl-demo> a owl:Ontology ;
+    rdfs:label "OWL 2 DL vs OWL-RL Comparison" ;
+    rdfs:comment "FamilyRoles ontology: demonstrates constructs OWL 2 DL (Konclude) handles that OWL-RL (N3) cannot." .
+
+# ── TBox: Classes ─────────────────────────────────────────────────────────────
+ex:Person a owl:Class ;
+    rdfs:label "Person" .
+
+ex:Male a owl:Class ;
+    rdfs:subClassOf ex:Person ;
+    rdfs:label "Male" .
+
+ex:Female a owl:Class ;
+    rdfs:subClassOf ex:Person ;
+    rdfs:label "Female" .
+
+ex:Male owl:disjointWith ex:Female .
+
+# Parent ≡ Person ⊓ ≥1 hasChild
+# [REQUIRES OWL 2 DL] — N3 BGP-only reasoner ignores this equivalentClass axiom
+ex:Parent a owl:Class ;
+    owl:equivalentClass [
+    a owl:Class ;
+    owl:intersectionOf (
+        ex:Person
+        [
+            a owl:Restriction ;
+            owl:onProperty ex:hasChild ;
+            owl:minCardinality 1
+        ]
+    )
+] ;
+    rdfs:label "Parent" .
+
+# Father ≡ Male ⊓ Parent
+# [REQUIRES OWL 2 DL] — Konclude derives:
+#   Father rdfs:subClassOf Male
+#   Father rdfs:subClassOf Parent
+#   Father rdfs:subClassOf Person  (via Parent ⊑ Person)
+ex:Father a owl:Class ;
+    owl:equivalentClass [
+    a owl:Class ;
+    owl:intersectionOf ( ex:Male ex:Parent )
+] ;
+    rdfs:label "Father" .
+
+# ── TBox: Object Property ─────────────────────────────────────────────────────
+ex:hasChild a owl:ObjectProperty ;
+    rdfs:label "hasChild" ;
+    rdfs:domain ex:Person ;
+    rdfs:range ex:Person .
