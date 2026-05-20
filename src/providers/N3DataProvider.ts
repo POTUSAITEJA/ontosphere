@@ -6,6 +6,7 @@ import {
   type DataProviderLinkCount, type DataProviderLookupParams, type DataProviderLookupItem,
   Rdf,
 } from '@reactodia/workspace';
+import { toPrefixed } from '../utils/termUtils';
 
 const EMPTY_LINKS: ReadonlySet<LinkTypeIri> = new Set();
 
@@ -382,14 +383,24 @@ export class N3DataProvider implements DataProvider {
     return results;
   }
 
-  knownLinkTypes(p: { signal?: AbortSignal }): Promise<LinkTypeModel[]> {
-    return this.inner.knownLinkTypes(p);
+  async knownLinkTypes(p: { signal?: AbortSignal }): Promise<LinkTypeModel[]> {
+    const models = await this.inner.knownLinkTypes(p);
+    return models.map(m =>
+      m.label.length > 0 ? m : { ...m, label: [this.inner.factory.literal(toPrefixed(String(m.id)))] }
+    );
   }
   elementTypes(p: { classIds: ReadonlyArray<ElementTypeIri>; signal?: AbortSignal }): Promise<Map<ElementTypeIri, ElementTypeModel>> {
     return this.inner.elementTypes(p);
   }
-  linkTypes(p: { linkTypeIds: ReadonlyArray<LinkTypeIri>; signal?: AbortSignal }): Promise<Map<LinkTypeIri, LinkTypeModel>> {
-    return this.inner.linkTypes(p);
+  async linkTypes(p: { linkTypeIds: ReadonlyArray<LinkTypeIri>; signal?: AbortSignal }): Promise<Map<LinkTypeIri, LinkTypeModel>> {
+    const result = await this.inner.linkTypes(p);
+    const out = new Map(result);
+    for (const [id, m] of out) {
+      if (m.label.length === 0) {
+        out.set(id, { ...m, label: [this.inner.factory.literal(toPrefixed(String(id)))] });
+      }
+    }
+    return out;
   }
   propertyTypes(p: { propertyIds: ReadonlyArray<PropertyTypeIri>; signal?: AbortSignal }): Promise<Map<PropertyTypeIri, PropertyTypeModel>> {
     return this.inner.propertyTypes(p);
