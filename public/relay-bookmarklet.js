@@ -192,7 +192,10 @@
     // OWUI: data-message-author-role="assistant" on each message container
     var nodes = document.querySelectorAll('[data-message-author-role="assistant"]');
     if (!nodes.length) nodes = document.querySelectorAll('[data-role="assistant"]');
-    // FhGenie / generic: look for direct children of the message list that
+    // FhGenie: CSS-module class names like _chatMessageGpt_<hash>_<n> —
+    // the hash changes between builds but "chatMessageGpt" is stable.
+    if (!nodes.length) nodes = document.querySelectorAll('[class*="chatMessageGpt"]');
+    // Generic: look for direct children of the message list that
     // are NOT the user's own bubbles (right-aligned). Use aria role if present.
     if (!nodes.length) nodes = document.querySelectorAll('[role="log"] [aria-label*="assistant" i], [role="log"] [aria-label*="bot" i]');
     if (nodes.length) {
