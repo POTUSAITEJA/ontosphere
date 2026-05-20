@@ -260,25 +260,31 @@
       live.focus();
       el = live;
       waitForStreamEnd(5000, function () {
-        var target = findInput() || el;
-        var tiptap = target.editor;
-        if (!tiptap || !tiptap.commands || typeof tiptap.commands.setContent !== 'function') {
-          injectInProgress = false; return;
-        }
-        tiptap.commands.focus();
-        tiptap.commands.setContent(text, true);
-        var tpDeadline = Date.now() + 10000;
-        (function tryTipTap() {
-          var inp = findInput() || target;
-          var tp = inp.editor || tiptap;
-          var isEmpty = tp.isEmpty !== undefined ? tp.isEmpty
-            : !(tp.getText ? tp.getText().trim() : (inp.innerText || inp.textContent || '').trim());
-          if (isEmpty) { injectInProgress = false; return; }
-          if (Date.now() >= tpDeadline) { injectInProgress = false; return; }
-          var btn = findSendButton(inp);
-          if (btn && !btn.disabled) btn.click();
-          setTimeout(tryTipTap, 400);
-        })();
+        // OWUI annotation guard: send button re-appears before OWUI finishes
+        // committing the message server-side. Injecting during that window
+        // causes the AI to echo the injected message UUID. Wait 1 s after
+        // streaming ends before touching the editor.
+        setTimeout(function () {
+          var target = findInput() || el;
+          var tiptap = target.editor;
+          if (!tiptap || !tiptap.commands || typeof tiptap.commands.setContent !== 'function') {
+            injectInProgress = false; return;
+          }
+          tiptap.commands.focus();
+          tiptap.commands.setContent(text, true);
+          var tpDeadline = Date.now() + 10000;
+          (function tryTipTap() {
+            var inp = findInput() || target;
+            var tp = inp.editor || tiptap;
+            var isEmpty = tp.isEmpty !== undefined ? tp.isEmpty
+              : !(tp.getText ? tp.getText().trim() : (inp.innerText || inp.textContent || '').trim());
+            if (isEmpty) { injectInProgress = false; return; }
+            if (Date.now() >= tpDeadline) { injectInProgress = false; return; }
+            var btn = findSendButton(inp);
+            if (btn && !btn.disabled) btn.click();
+            setTimeout(tryTipTap, 400);
+          })();
+        }, 1000);
       });
     }
 
