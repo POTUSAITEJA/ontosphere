@@ -268,12 +268,7 @@
             injectInProgress = false; return;
           }
           tiptap.commands.focus();
-          // One <p> per line so paragraphs survive HTML parsing.
-          // Escape < > & so JSON braces don't get parsed as HTML tags.
-          var escapedHtml = text.split('\n').map(function (line) {
-            return '<p>' + line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</p>';
-          }).join('');
-          tiptap.commands.setContent(escapedHtml || '<p></p>', false);
+          tiptap.commands.setContent(text.replace(/\n+/g, ' '), false);
           var tpDeadline = Date.now() + 10000;
           (function tryTipTap() {
             var inp = findInput() || target;
