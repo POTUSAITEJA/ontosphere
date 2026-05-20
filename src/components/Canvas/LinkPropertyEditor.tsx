@@ -30,12 +30,10 @@ interface LinkPropertyEditorProps {
 /**
  * Streamlined LinkPropertyEditor
  *
- * - Relies on fat-map (entityIndex / availableProperties) for autocomplete and labels.
  * - Uses sourceNode/targetNode props as authoritative endpoints.
  * - On save/delete performs write-only mutations to urn:vg:data (via rdfManager) and does NOT
  *   mutate ontologyStore.currentGraph directly. Canvas updates happen via the RDF manager's
  *   incremental mapping pipeline.
- * - Avoids any RDF store reads for display-time lookups.
  */
 export const LinkPropertyEditor = ({
   open,
@@ -305,7 +303,7 @@ export const LinkPropertyEditor = ({
               })()}
             </div>
             <div className="text-xs text-muted-foreground">
-              {(sourceNode?.classType ?? sourceNode?.displayType ?? (Array.isArray(sourceNode?.rdfTypes) ? sourceNode.rdfTypes[0] : 'unknown'))} → {(targetNode?.classType ?? targetNode?.displayType ?? (Array.isArray(targetNode?.rdfTypes) ? targetNode.rdfTypes[0] : 'unknown'))}
+              {toPrefixed(sourceClassIri) || sourceClassIri || 'unknown'} → {toPrefixed(targetClassIri) || targetClassIri || 'unknown'}
             </div>
           </div>
 
