@@ -96,16 +96,15 @@ function RdfElementBody({ props }: { props: Reactodia.TemplateProps }) {
   const label = getLabel(data, prefixes, registry);
   const nsColor = getNamespaceColor(data.id, registry);
 
-  // Type labels — prefer prefix-shortened IRI (e.g. owl:NamedIndividual), fall back to
-  // model-loaded label, then bare local name
   const displayTypes = data.types.filter(t => !t.startsWith('urn:vg:bnode:'));
-  const typeLabels = displayTypes.map(typeIri => {
-    const shortened = prefixShorten(typeIri, prefixes);
-    // prefixShorten returns the full IRI unchanged when no prefix matches
-    if (shortened !== typeIri) return shortened;
-    const typeEl = model.getElementType(typeIri);
-    return typeEl?.data?.label?.[0]?.value ?? shortened;
-  });
+  const typeLabels = React.useMemo(
+    () => displayTypes.map(typeIri => {
+      const label = model.getElementType(typeIri)?.data?.label?.[0]?.value;
+      if (label) return label;
+      return prefixShorten(typeIri, prefixes);
+    }),
+    [data.types, prefixes, model]
+  );
 
   // Icon letter from label
   const iconLetter = label.replace(/^[^a-zA-Z0-9]*/, '').charAt(0).toUpperCase() || '✳';
