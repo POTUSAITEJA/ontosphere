@@ -29,7 +29,7 @@ Call help first to get full instructions and the tool list:
 import type { RelayCallLogEntry } from '../../hooks/useRelayBridge';
 
 interface RelaySectionProps {
-  buildBookmarkletHref: (annotationGuardMs: number) => string;
+  buildBookmarkletHref: () => string;
   connected: boolean;
   callLog: RelayCallLogEntry[];
 }
@@ -70,9 +70,9 @@ export const RelaySection: React.FC<RelaySectionProps> = ({ buildBookmarkletHref
 
   useEffect(() => {
     if (bookmarkletRef.current) {
-      bookmarkletRef.current.setAttribute('href', buildBookmarkletHref(annotationGuardS * 1000));
+      bookmarkletRef.current.setAttribute('href', buildBookmarkletHref());
     }
-  }, [buildBookmarkletHref, annotationGuardS]);
+  }, [buildBookmarkletHref]);
 
   return (
     <div className="px-3 py-2 space-y-3">
@@ -112,7 +112,7 @@ export const RelaySection: React.FC<RelaySectionProps> = ({ buildBookmarkletHref
           className="w-full accent-primary"
           title="Delay before injecting results (0 = immediate; set 2s for Open WebUI)"
         />
-        <p className="text-xs text-muted-foreground/60">Re-drag the bookmarklet after changing</p>
+        <p className="text-xs text-muted-foreground/60">Running relays update automatically via ping</p>
       </div>
 
       {/* Draggable bookmarklet */}
