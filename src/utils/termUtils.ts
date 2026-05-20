@@ -3,7 +3,6 @@ import { useOntologyStore } from "../stores/ontologyStore";
 import {
   assertPlainObject,
   assertString,
-  invariant,
   isPlainObject,
 } from "./guards";
 import {
@@ -15,26 +14,14 @@ import type { NamespaceEntry } from "../constants/namespaces";
 export type { NamespaceEntry };
 export type NamespaceRegistryEntry = NamespaceEntry;
 
-export interface FatMapEntry {
-  iri: string;
-  label?: string;
-  namespace?: string;
-  key?: string;
-  color?: string;
-}
-
 type RegistryInput = NamespaceEntry[] | Record<string, string> | undefined;
 
 interface TermDataOverrides {
   registry?: RegistryInput;
-  availableProperties?: unknown;
-  availableClasses?: unknown;
 }
 
 interface OntologyStoreSnapshot {
   namespaceRegistry: NamespaceEntry[];
-  availableProperties: FatMapEntry[];
-  availableClasses: FatMapEntry[];
 }
 
 function coerceNamespaceEntry(value: unknown, context: string): NamespaceEntry {
@@ -77,53 +64,6 @@ function coerceNamespaceRegistry(
   throw new Error(`${context} must be an array or record of namespaces`);
 }
 
-function coerceFatMapEntry(value: unknown, context: string): FatMapEntry {
-  assertPlainObject(value, context);
-  const record = value as Record<string, unknown>;
-  const iriCandidate =
-    (typeof record.iri === "string" && record.iri.trim().length > 0
-      ? record.iri
-      : undefined) ??
-    (typeof record.key === "string" && record.key.trim().length > 0
-      ? record.key
-      : undefined);
-  invariant(iriCandidate, `${context} is missing an iri/key string`);
-  const namespace =
-    typeof record.namespace === "string" && record.namespace.trim().length > 0
-      ? record.namespace.trim()
-      : undefined;
-  const label =
-    typeof record.label === "string" && record.label.trim().length > 0
-      ? record.label
-      : undefined;
-  const color =
-    typeof record.color === "string" && record.color.trim().length > 0
-      ? record.color.trim()
-      : undefined;
-  const key =
-    typeof record.key === "string" && record.key.trim().length > 0
-      ? record.key
-      : undefined;
-  return {
-    iri: iriCandidate,
-    namespace,
-    label,
-    color,
-    key,
-  };
-}
-
-function coerceFatMapEntries(source: unknown, context: string): FatMapEntry[] {
-  if (typeof source === "undefined") return [];
-  invariant(
-    Array.isArray(source),
-    `${context} must be an array of fat-map entries`,
-  );
-  return (source as unknown[]).map((entry, index) =>
-    coerceFatMapEntry(entry, `${context}[${index}]`),
-  );
-}
-
 function readOntologyStoreSnapshot(): OntologyStoreSnapshot {
   const getState =
     useOntologyStore && typeof (useOntologyStore as any).getState === "function"
@@ -132,8 +72,6 @@ function readOntologyStoreSnapshot(): OntologyStoreSnapshot {
   if (!getState) {
     return {
       namespaceRegistry: [],
-      availableProperties: [],
-      availableClasses: [],
     };
   }
   const state = getState() as Record<string, unknown>;
@@ -141,14 +79,6 @@ function readOntologyStoreSnapshot(): OntologyStoreSnapshot {
     namespaceRegistry: coerceNamespaceRegistry(
       state.namespaceRegistry as RegistryInput,
       "ontologyStore.namespaceRegistry",
-    ),
-    availableProperties: coerceFatMapEntries(
-      state.availableProperties,
-      "ontologyStore.availableProperties",
-    ),
-    availableClasses: coerceFatMapEntries(
-      state.availableClasses,
-      "ontologyStore.availableClasses",
     ),
   };
 }
@@ -162,29 +92,11 @@ function resolveTermData(overrides?: TermDataOverrides): OntologyStoreSnapshot {
 
   const haveRegistryOverride =
     overrides && Object.prototype.hasOwnProperty.call(overrides, "registry");
-  const havePropertiesOverride =
-    overrides &&
-    Object.prototype.hasOwnProperty.call(overrides, "availableProperties");
-  const haveClassesOverride =
-    overrides &&
-    Object.prototype.hasOwnProperty.call(overrides, "availableClasses");
 
   return {
     namespaceRegistry: haveRegistryOverride
       ? coerceNamespaceRegistry(overrides!.registry, "termData.registry")
       : ensureSnapshot().namespaceRegistry,
-    availableProperties: havePropertiesOverride
-      ? coerceFatMapEntries(
-          overrides!.availableProperties,
-          "termData.availableProperties",
-        )
-      : ensureSnapshot().availableProperties,
-    availableClasses: haveClassesOverride
-      ? coerceFatMapEntries(
-          overrides!.availableClasses,
-          "termData.availableClasses",
-        )
-      : ensureSnapshot().availableClasses,
   };
 }
 
@@ -300,10 +212,8 @@ export function toPrefixed(
 /**
  * Resolve a palette color for the provided IRI using the namespace registry
  * and optional palette overrides keyed by prefix.
- * 
- * IMPORTANT: Color resolution should ONLY use the namespace registry, not the fat map.
- * The fat map (availableProperties/availableClasses) may be empty when ontologies
- * are not loaded, but namespace colors should always be available from the registry.
+ *
+ * Color resolution uses only the namespace registry.
  */
 export function getNodeColor(
   targetIri: string,
@@ -311,7 +221,6 @@ export function getNodeColor(
   overrides?: TermDataOverrides,
 ): string | undefined {
   const iri = normalizeString(targetIri, "getNodeColor.targetIri");
-  const { availableProperties, availableClasses } = resolveTermData(overrides);
 
   const entry = findRegistryEntryForIri(iri, overrides?.registry);
 
@@ -328,105 +237,5 @@ export function getNodeColor(
     if (paletteColor) return paletteColor;
   }
 
-  // Fallback: entity-specific color from fat map (rare — only when ontology is loaded)
-  const fatMatch =
-    availableProperties.find((e) => e.iri === iri) ??
-    availableClasses.find((e) => e.iri === iri);
-  if (fatMatch && fatMatch.color) {
-    return fatMatch.color;
-  }
-
   return undefined;
-}
-
-export interface TermDisplayInfo {
-  iri: string;
-  prefixed: string;
-  short: string;
-  tooltipLines: string[];
-  color?: string;
-  label?: string;
-  labelSource?: "fatmap" | "computed";
-}
-
-export interface TermDisplayOptions extends TermDataOverrides {
-  palette?: Record<string, string>;
-}
-
-/**
- * Compute display metadata for an IRI or prefixed term.
- */
-export function computeTermDisplay(
-  iriOrTerm: string | NamedNode,
-  options?: TermDisplayOptions,
-): TermDisplayInfo {
-  const raw = typeof iriOrTerm === "string" ? iriOrTerm : iriOrTerm.value;
-  const source = normalizeString(raw, "computeTermDisplay.input");
-
-  if (source.startsWith("_:")) {
-    return {
-      iri: source,
-      prefixed: source,
-      short: source,
-      tooltipLines: [source],
-      color: undefined,
-      label: source,
-      labelSource: "computed",
-    };
-  }
-
-  let iri = source;
-  if (!iri.includes("://")) {
-    iri = expandPrefixed(iri, options?.registry);
-  }
-
-  const { availableProperties, availableClasses, namespaceRegistry } =
-    resolveTermData(options);
-  const fatMatch =
-    availableProperties.find((entry) => entry.iri === iri) ??
-    availableClasses.find((entry) => entry.iri === iri);
-
-  if (!fatMatch) {
-    const prefixed = toPrefixed(iri, options?.registry);
-    const local = shortLocalName(iri);
-    // For entity-specific prefixes (ending with :), use that as the label
-    const label = prefixed.endsWith(':') ? prefixed : local;
-    return {
-      iri,
-      prefixed,
-      short: local,
-      tooltipLines: [label],
-      color: undefined,
-      label,
-      labelSource: "computed",
-    };
-  }
-
-  const prefixed = toPrefixed(iri, options?.registry);
-  // For entity-specific prefixes (ending with :), use that as the label
-  // Otherwise use the fat-map label or fall back to short local name
-  const label = prefixed.endsWith(':')
-    ? prefixed
-    : (fatMatch.label ?? shortLocalName(iri));
-  const namespaceEntry =
-    namespaceRegistry.find(
-      (entry) => entry.uri === fatMatch.namespace,
-    ) ?? findRegistryEntryForIri(iri, options?.registry);
-  const color =
-    fatMatch.color ??
-    (options?.palette && namespaceEntry?.prefix
-      ? options.palette[namespaceEntry.prefix] ??
-        options.palette[namespaceEntry.prefix.toLowerCase()] ??
-        options.palette[namespaceEntry.prefix.toUpperCase()]
-      : undefined);
-
-  return {
-    iri,
-    prefixed,
-    short: shortLocalName(prefixed || iri),
-    tooltipLines: [label],
-    color,
-    label,
-    labelSource: "fatmap",
-  };
 }

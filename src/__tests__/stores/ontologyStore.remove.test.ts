@@ -66,8 +66,6 @@ test('removeLoadedOntology removes ontology meta, persisted config entry and nam
   // Inject into ontology store and app config
   useOntologyStore.setState({
     loadedOntologies: [mockOntology],
-    availableClasses: mockOntology.classes,
-    availableProperties: []
   });
 
   useAppConfigStore.getState().addAdditionalOntology(url);

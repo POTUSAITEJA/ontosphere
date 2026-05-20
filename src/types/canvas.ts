@@ -177,13 +177,6 @@ export interface NodePropertyEditorProps {
   onOpenChange: (open: boolean) => void;
   /** Node data being edited */
   nodeData: NodeData | null;
-  /** Available annotation properties */
-  availableProperties: Array<{
-   iri: string;
-    label: string;
-    namespace: string;
-    rdfType: string;
-  }>;
   /** Callback for saving node properties.
    * Note: editor currently provides the full updated node payload to the callback.
    * Signature kept intentionally permissive to avoid tight coupling during migration.
