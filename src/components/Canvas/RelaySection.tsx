@@ -28,11 +28,6 @@ Call help first to get full instructions and the tool list:
 \`{"jsonrpc":"2.0","id":0,"method":"tools/call","params":{"name":"help","arguments":{}}}\``;
 import type { RelayCallLogEntry } from '../../hooks/useRelayBridge';
 
-const ANNOTATION_GUARD: Record<string, number> = {
-  generic: 0,
-  owui: 2000,
-};
-
 interface RelaySectionProps {
   buildBookmarkletHref: (annotationGuardMs: number) => string;
   connected: boolean;
@@ -50,7 +45,7 @@ function formatRelativeTime(timestamp: number): string {
 export const RelaySection: React.FC<RelaySectionProps> = ({ buildBookmarkletHref, connected, callLog }) => {
   const bookmarkletRef = useRef<HTMLAnchorElement>(null);
   const [copied, setCopied] = useState(false);
-  const [chatMode, setChatMode] = useState<'generic' | 'owui'>('generic');
+  const [annotationGuardS, setAnnotationGuardS] = useState(0);
 
   const copyPrompt = useCallback(() => {
     const done = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
@@ -67,9 +62,9 @@ export const RelaySection: React.FC<RelaySectionProps> = ({ buildBookmarkletHref
 
   useEffect(() => {
     if (bookmarkletRef.current) {
-      bookmarkletRef.current.setAttribute('href', buildBookmarkletHref(ANNOTATION_GUARD[chatMode]));
+      bookmarkletRef.current.setAttribute('href', buildBookmarkletHref(annotationGuardS * 1000));
     }
-  }, [buildBookmarkletHref, chatMode]);
+  }, [buildBookmarkletHref, annotationGuardS]);
 
   return (
     <div className="px-3 py-2 space-y-3">
@@ -97,18 +92,18 @@ export const RelaySection: React.FC<RelaySectionProps> = ({ buildBookmarkletHref
         </li>
       </ol>
 
-      {/* Chat UI mode */}
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">Chat UI:</span>
-        {(['generic', 'owui'] as const).map((m) => (
-          <button
-            key={m}
-            onClick={() => setChatMode(m)}
-            className={`text-xs px-2 py-0.5 rounded border transition-colors ${chatMode === m ? 'border-primary text-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}
-          >
-            {m === 'generic' ? 'Generic' : 'Open WebUI'}
-          </button>
-        ))}
+      {/* Injection delay */}
+      <div className="space-y-1">
+        <div className="flex justify-between text-xs text-muted-foreground">
+          <span>Injection delay</span>
+          <span>{annotationGuardS === 0 ? 'none' : `${annotationGuardS}s`}</span>
+        </div>
+        <input
+          type="range" min={0} max={10} step={1} value={annotationGuardS}
+          onChange={(e) => setAnnotationGuardS(Number(e.target.value))}
+          className="w-full accent-primary"
+          title="Delay before injecting results (0 = immediate; set 2s for Open WebUI)"
+        />
       </div>
 
       {/* Draggable bookmarklet */}
