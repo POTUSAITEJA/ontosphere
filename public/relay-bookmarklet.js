@@ -434,11 +434,26 @@
     'schema:': 'https://schema.org/',
     'ex:': 'http://example.org/',
   };
+  // Single IRI param (e.g. iri:"ex:Alice") → plain full IRI string, no brackets.
   function expandPrefix(val) {
     for (var p in KNOWN_PREFIXES) {
       if (val.indexOf(p) === 0) return KNOWN_PREFIXES[p] + val.slice(p.length);
     }
     return val;
+  }
+
+  // Turtle / SPARQL blob: replace every prefix:local with <full-iri>.
+  // Angle brackets are required for full IRIs in both Turtle and SPARQL syntax.
+  function expandPrefixesInContent(text) {
+    var result = text;
+    for (var p in KNOWN_PREFIXES) {
+      var escaped = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      result = result.replace(
+        new RegExp(escaped + '([A-Za-z0-9_\\-.]+)', 'g'),
+        '<' + KNOWN_PREFIXES[p] + '$1>',
+      );
+    }
+    return result;
   }
 
   /* ── Tool-call parser ──────────────────────────────────────────────────── */
@@ -485,8 +500,11 @@
       var tool = req.params.name;
       var params = req.params.arguments || {};
       for (var k in params) {
-        // Only expand single-IRI values — skip multi-word blobs (Turtle, SPARQL, etc.)
-        if (typeof params[k] === 'string' && !/[\s\n]/.test(params[k])) params[k] = expandPrefix(params[k]);
+        if (typeof params[k] === 'string') {
+          params[k] = /[\s\n]/.test(params[k])
+            ? expandPrefixesInContent(params[k])  // Turtle/SPARQL: wrap in <...>
+            : expandPrefix(params[k]);             // single IRI: plain string
+        }
       }
       var mcpId = req.id != null ? req.id : null;
       var sig = tool + ':' + JSON.stringify(params) + ':' + mcpId;
