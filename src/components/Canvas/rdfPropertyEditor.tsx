@@ -306,7 +306,16 @@ interface RuntimeRelationOptions {
 
 function RelationEditor({ options }: { options: RuntimeRelationOptions }) {
   const { editor } = Reactodia.useWorkspace();
-  const [predIri, setPredIri] = useState<string>('');
+
+  const rawLinkTypeId = String(options.target?.data?.linkTypeId ?? '');
+  const initialPredIri = rawLinkTypeId.startsWith('urn:vg:bnode:') ? '' : rawLinkTypeId;
+  const [predIri, setPredIri] = useState<string>(initialPredIri);
+
+  useEffect(() => {
+    const id = String(options.target?.data?.linkTypeId ?? '');
+    setPredIri(id.startsWith('urn:vg:bnode:') ? '' : id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options.target?.data?.linkTypeId]);
 
   return (
     <Reactodia.RelationEditor
