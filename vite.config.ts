@@ -1,10 +1,28 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import tailwind from "@tailwindcss/vite";
 import path from "path";
 import { mcpManifestPlugin } from './vite-plugin-mcp-manifest';
 import { bookmarkletPlugin } from './vite-plugin-bookmarklet';
 import { workerComunicaPlugin, diagnosticsChannelStub } from './vite-plugin-worker-comunica';
+
+// COOP/COEP are required for SharedArrayBuffer (Konclude WASM).
+// relay.html must be exempted: it needs window.opener to bridge postMessages
+// between the AI chat tab (cross-origin opener) and the Ontosphere app.
+function coiHeadersPlugin(): Plugin {
+  function middleware(req: any, res: any, next: () => void) {
+    if (!req.url?.includes('relay.html')) {
+      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+      res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+    }
+    next();
+  }
+  return {
+    name: 'coi-headers',
+    configureServer(server) { server.middlewares.use(middleware); },
+    configurePreviewServer(server) { server.middlewares.use(middleware); },
+  };
+}
 
 
 export default defineConfig({
@@ -14,18 +32,9 @@ export default defineConfig({
     host: "::",
     port: 8080,
     allowedHosts: true,
-    headers: {
-      "Cross-Origin-Opener-Policy": "same-origin",
-      "Cross-Origin-Embedder-Policy": "credentialless",
-    },
   },
 
-  preview: {
-    headers: {
-      "Cross-Origin-Opener-Policy": "same-origin",
-      "Cross-Origin-Embedder-Policy": "credentialless",
-    },
-  },
+  preview: {},
 
   // Dev plugins: keep minimal for fast dev runs
   plugins: [
@@ -33,6 +42,7 @@ export default defineConfig({
     tailwind(),
     mcpManifestPlugin(),
     bookmarkletPlugin(),
+    coiHeadersPlugin(),
   ],
 
   // Ensure worker bundles use ES modules output so Rollup can code-split worker chunks.
