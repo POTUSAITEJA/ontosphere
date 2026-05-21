@@ -268,15 +268,30 @@
             injectInProgress = false; return;
           }
           tiptap.commands.focus();
+          // Clear existing content, then insert via browser-native execCommand so
+          // OWUI's reactive layer sees the same DOM event chain as real user typing.
+          // pasteText() bypasses the DOM event pipeline entirely and causes OWUI to
+          // leak the message UUID into the outgoing request context.
           tiptap.commands.clearContent(false);
-          // Simulate paste so OWUI's own paste handler processes the text —
-          // same path as manual paste, avoids ProseMirror plugins splitting
-          // at " boundaries when setContent rebuilds the full document.
-          var dt = new DataTransfer();
-          dt.setData('text/plain', text);
-          target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
+          var domEl = tiptap.view.dom;
+          domEl.focus();
+          var inserted = document.execCommand('insertText', false, text);
+          if (!inserted) {
+            // execCommand blocked (sandboxed iframe etc.) — fall back to pasteText
+            if (typeof tiptap.view.pasteText === 'function') {
+              tiptap.view.pasteText(text);
+            } else {
+              var htmlEscaped = text
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+              tiptap.commands.setContent('<code>' + htmlEscaped + '</code>', false);
+            }
+          }
+          // Delay: execCommand triggers ProseMirror reconciliation via MutationObserver
+          // (microtask). tryTipTap must run after that, or tp.isEmpty is still true
+          // and the loop exits thinking the content was already submitted.
           var tpDeadline = Date.now() + 10000;
-          (function tryTipTap() {
+          setTimeout(function tryTipTap() {
             var inp = findInput() || target;
             var tp = inp.editor || tiptap;
             var isEmpty = tp.isEmpty !== undefined ? tp.isEmpty
@@ -292,7 +307,7 @@
               return;
             }
             setTimeout(tryTipTap, 400);
-          })();
+          }, 100);
         }, ANNOTATION_GUARD_MS);
       });
     }
@@ -303,47 +318,32 @@
   /* ── Compact result summary ────────────────────────────────────────────── */
   function briefData(data) {
     if (!data) return 'ok';
-    if (typeof data === 'string') return data.slice(0, 80);
-    if (data.iri) return data.iri;
-    if (data.loaded !== undefined) {
-      var brief = String(data.loaded);
-      if (data.newEntitiesAvailable && data.newEntitiesAvailable.length)
-        brief += ' — ' + data.newEntitiesAvailable.length + ' new entities available';
-      return brief;
-    }
-    if (data.entities) return data.entities.length + ' entities';
-    if (data.links) return data.links.length + ' links';
-    if (data.results) {
-      var onCanvas = data.results.filter(function (r) { return r.onCanvas; });
-      return data.results.length + ' results' + (onCanvas.length ? ', ' + onCanvas.length + ' on canvas' : '');
-    }
-    if (data.completions) return data.completions.length + ' completions';
-    if (data.nodeCount !== undefined) return data.nodeCount + ' nodes, ' + data.linkCount + ' links';
-    if (data.added) return 's=' + (data.added.s || '') + ' p=' + (data.added.p || '') + ' o=' + (data.added.o || '');
-    if (data.removed !== undefined) return typeof data.removed === 'string' ? 'removed ' + data.removed : JSON.stringify(data.removed);
-    if (data.inferredTriples !== undefined) return data.inferredTriples + ' triples inferred';
-    if (data.content !== undefined) return typeof data.content === 'string' ? data.content : '(' + (data.content.length || 0) + ' chars)';
-    if (data.expanded !== undefined) return data.expanded + ' nodes expanded';
-    return JSON.stringify(data).slice(0, 80);
+    if (typeof data === 'string') return data;
+    if (data.content !== undefined) return typeof data.content === 'string' ? data.content : JSON.stringify(data.content);
+    return JSON.stringify(data);
   }
 
   /* ── Format and inject combined batch result ───────────────────────────── */
   function injectCombinedResult(results) {
     var allOk = results.every(function (r) { return r.ok; });
-    var parts = results.map(function (r) {
+    var lines = ['[Ontosphere — ' + results.length + ' tool' + (results.length !== 1 ? 's' : '') + (allOk ? ' ✓' : ' (some failed)') + ']'];
+    results.forEach(function (r) {
       if (r.ok) {
-        return JSON.stringify({
+        lines.push('`' + JSON.stringify({
           jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null,
           result: { content: [{ type: 'text', text: briefData(r.result && r.result.data) }] },
-        });
+        }) + '`');
+      } else {
+        var err = (r.result && r.result.error) || 'failed';
+        lines.push('`' + JSON.stringify({
+          jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null,
+          error: { code: -32000, message: String(err), data: { tool: r.tool } },
+        }) + '`');
       }
-      var err = (r.result && r.result.error) || 'failed';
-      return JSON.stringify({
-        jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null,
-        error: { code: -32000, message: String(err), data: { tool: r.tool } },
-      });
     });
-    injectResult(parts.join(' '));
+    var lastSummary = results[results.length - 1] && results[results.length - 1].summary;
+    if (lastSummary) { lines.push(''); lines.push(lastSummary); }
+    injectResult(lines.join('\n'));
     showToast('Done: ' + results.length + ' tool' + (results.length !== 1 ? 's' : ''), allOk);
   }
 
@@ -379,12 +379,16 @@
         error: { code: -32000, message: timedOutTool + ' did not respond within ' + (CALL_TIMEOUT_MS / 1000) + ' s. A follow-up result will be injected automatically.', data: { tool: timedOutTool, lateResult: true } },
       });
       results.push({ tool: timedOutTool, mcpId: timedOutId, ok: false, result: { success: false, error: 'timeout' } });
-      var parts = results.map(function (r) {
-        return (r.tool === timedOutTool && !r.ok) ? resp : r.ok
+      var timeoutLines = ['[Ontosphere — ⏱ ' + timedOutTool + ' timed out]'];
+      results.forEach(function (r) {
+        var rr = (r.tool === timedOutTool && !r.ok) ? resp : r.ok
           ? JSON.stringify({ jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null, result: { content: [{ type: 'text', text: briefData(r.result && r.result.data) }] } })
           : JSON.stringify({ jsonrpc: '2.0', id: r.mcpId != null ? r.mcpId : null, error: { code: -32000, message: String((r.result && r.result.error) || 'failed'), data: { tool: r.tool } } });
+        timeoutLines.push('`' + rr + '`');
       });
-      injectResult(parts.join(' '));
+      var lastSumT = results[results.length - 1] && results[results.length - 1].summary;
+      if (lastSumT) { timeoutLines.push(''); timeoutLines.push(lastSumT); }
+      injectResult(timeoutLines.join('\n'));
       showToast('⏱ ' + timedOutTool + ' timed out', false);
     }, CALL_TIMEOUT_MS);
   }
@@ -422,7 +426,9 @@
       var lresp = lok
         ? JSON.stringify({ jsonrpc: '2.0', id: lr.mcpId != null ? lr.mcpId : null, result: { content: [{ type: 'text', text: briefData(data.result && data.result.data) }] } })
         : JSON.stringify({ jsonrpc: '2.0', id: lr.mcpId != null ? lr.mcpId : null, error: { code: -32000, message: String((data.result && data.result.error) || 'failed'), data: { tool: lr.tool } } });
-      injectResult(lresp);
+      var lateLines = ['[Ontosphere — late result for ' + lr.tool + (lok ? ' ✓' : ' ✗') + ']', '`' + lresp + '`'];
+      if (data.summary) { lateLines.push(''); lateLines.push(data.summary); }
+      injectResult(lateLines.join('\n'));
       showToast('Late result: ' + lr.tool, lok);
       return;
     }
@@ -430,7 +436,7 @@
     clearTimeout(callTimeoutTimer);
     lateResult = null;
     var ok = !!(data.result && data.result.success !== false);
-    batchResults.push({ tool: pendingTool || '?', mcpId: pendingMcpId, ok: ok, result: data.result });
+    batchResults.push({ tool: pendingTool || '?', mcpId: pendingMcpId, ok: ok, result: data.result, summary: data.summary });
     isProcessing = false; pendingTool = null; pendingMcpId = null; pendingRequestId = null;
 
     if (callQueue.length > 0) {
