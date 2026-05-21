@@ -61,7 +61,7 @@ display), records at 1920×1080, then converts to MP4 via ffmpeg.
 | T5 | Guide: reveal the Pizza class details on canvas. | expandNode shows all properties. Next: ABox individuals. |
 | T6 | Guide: switch to individuals view and create a real pizza. | owl:NamedIndividual in ABox view. Next: connect its parts. |
 | T7 | Guide: add parts and connect via the object property. | Individual linked to toppings + base. Next: reasoning. |
-| T8 | Guide: trigger OWL-RL reasoning. | Reasoner materialised inferred triples. Next: inspect results. |
+| T8 | Guide: trigger DL reasoning by Konclude. | Reasoner materialised inferred triples. Next: inspect results. |
 | T9 | Guide: inspect what the reasoner inferred about the individual. | Pizza ontology complete — built through Socratic questioning. |
 
 ---
@@ -196,8 +196,8 @@ Naming `hasPart` explicitly prevents the model from deferring the property creat
 
 ---
 
-### Turn 8 — OWL-RL reasoning
-> "The schema and data are in place. Now apply OWL-RL reasoning to derive everything that can be inferred. Wait for my next question."
+### Turn 8 — DL reasoning by Konclude
+> "The schema and data are in place. Now apply DL reasoning to derive everything that can be inferred. Wait for my next question."
 
 **Concept:** `runReasoning({})`.
 

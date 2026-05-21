@@ -43,7 +43,7 @@ https://thhanke.github.io/ontosphere/.well-known/mcp.json
 | `addNode` / `removeNode` | Add/remove individual canvas nodes |
 | `addLink` / `removeLink` | Add/remove object-property triples |
 | `queryGraph` | SPARQL SELECT / CONSTRUCT / UPDATE against the RDF store |
-| `runReasoning` | OWL-RL inference — inferred triples in `urn:vg:inferred` |
+| `runReasoning` | DL reasoning by Konclude — inferred triples in `urn:vg:inferred` |
 | `runLayout` | Layout: `dagre-lr`, `dagre-tb`, `elk-layered`, `elk-force`, … |
 | `focusNode` / `fitCanvas` | Pan/zoom viewport |
 | `exportImage` | Export canvas as SVG or PNG (focused or full) |
@@ -119,7 +119,7 @@ Full tool list: https://thhanke.github.io/ontosphere/.well-known/mcp.json
 Canvas nodes are **not** created automatically when triples are added — you
 must call `addNode`. After adding triples, canvas links refresh automatically.
 
-OWL-RL inferred triples go to the `urn:vg:inferred` named graph and render as
+DL-derived (Konclude) inferred triples go to the `urn:vg:inferred` named graph and render as
 amber dashed edges. Clear them with `clearInferred`.
 
 ## Recommended workflow
@@ -139,7 +139,7 @@ addNode × N → addLink × N                 # for small numbers of nodes
   ↓
 runLayout({ algorithm: 'dagre-lr' })
   ↓
-runReasoning({})                          # OWL-RL → urn:vg:inferred
+runReasoning({})                          # DL reasoning (Konclude) → urn:vg:inferred
   ↓
 fitCanvas() + exportImage({ format: 'svg' })  [safe to batch with runLayout]
   ↓
@@ -178,7 +178,7 @@ Rendered agent sessions with SVG snapshots at each step:
 
 | Demo | What it shows |
 |------|--------------|
-| [FOAF Social Network](docs/mcp-demo/foaf-social-network.md) | Build a social + employment graph; extend FOAF with custom classes; run OWL-RL reasoning to infer types |
+| [FOAF Social Network](docs/mcp-demo/foaf-social-network.md) | Build a social + employment graph; extend FOAF with custom classes; run DL reasoning (Konclude) to infer types |
 | [OWL Reasoning](docs/mcp-demo/reasoning-demo.md) | Disjointness, transitivity, domain/range inference — step-by-step with visual diffs |
 | [Scene Ontology](docs/mcp-demo/scene-ontology.md) | Load an external ontology; author individuals; export Turtle |
 
@@ -196,7 +196,7 @@ Agents can deep-link Ontosphere with pre-loaded data:
 |-----------|-------------|
 | `rdfUrl` / `url` | HTTP(S) URL of an RDF file to load on startup |
 | `ontology` | Comma-separated ontology short names or URIs to pre-load |
-| `reasoning=true` | Run OWL-RL reasoning automatically after load |
+| `reasoning=true` | Run DL reasoning (Konclude) automatically after load |
 
 Example:
 ```

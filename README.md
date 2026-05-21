@@ -37,7 +37,7 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
 
 Overview
 --------
-Ontosphere is a browser-based [RDF](https://www.w3.org/RDF/)/ontology knowledge graph editor. It loads RDF from local files, remote URLs, or SPARQL/Fuseki endpoints; lets users author nodes and edges directly on the canvas; runs [OWL-RL](https://www.w3.org/TR/owl2-profiles/#OWL_2_RL) reasoning with visual differentiation of inferred triples; and applies multi-algorithm layout ([Dagre](https://github.com/dagrejs/dagre), [ELK](https://github.com/kieler/elkjs)) and automatic clustering for large graphs. Additional features include namespace management with live URI renaming, a drag-and-drop workflow template catalog, and a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for AI-agent integration. All computation runs entirely client-side in the browser against an in-memory RDF store backed by Web Workers — no backend required.
+Ontosphere is a browser-based [RDF](https://www.w3.org/RDF/)/ontology knowledge graph editor. It loads RDF from local files, remote URLs, or SPARQL/Fuseki endpoints; lets users author nodes and edges directly on the canvas; runs [OWL 2 DL reasoning](https://www.w3.org/TR/owl2-profiles/#OWL_2_DL) (via Konclude) with visual differentiation of inferred triples; and applies multi-algorithm layout ([Dagre](https://github.com/dagrejs/dagre), [ELK](https://github.com/kieler/elkjs)) and automatic clustering for large graphs. Additional features include namespace management with live URI renaming, a drag-and-drop workflow template catalog, and a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for AI-agent integration. All computation runs entirely client-side in the browser against an in-memory RDF store backed by Web Workers — no backend required.
 
 Key capabilities
 ----------------
@@ -49,7 +49,7 @@ Key capabilities
 - **TBox / ABox views**: toggle between ontology-level classes/properties (TBox) and data-level individuals (ABox).
 - **Layout engine**: multiple algorithms — Dagre (horizontal/vertical), ELK (layered, force, stress, radial), and Reactodia-default — all running in Web Workers so the UI stays responsive. Spacing is adjustable via a slider; re-layout triggers automatically when spacing changes.
 - **Clustering**: automatic grouping of large graphs on load. Three algorithms available — Label Propagation (default), Louvain, and K-Means. Threshold is configurable (default 100 nodes). Expand/collapse individual clusters or all at once from the toolbar.
-- **OWL-RL reasoning**: run inference in the browser and see inferred triples rendered as amber dashed edges; inferred types/annotations appear in amber italic. A reasoning report lists all inferred triples grouped by rule. Clear inferred triples any time without affecting asserted data.
+- **DL reasoning (Konclude)**: run OWL 2 DL inference in the browser and see inferred triples rendered as amber dashed edges; inferred types/annotations appear in amber italic. A reasoning report lists all inferred triples. Clear inferred triples any time without affecting asserted data.
 - **Namespace management**: edit namespace URIs directly in the legend panel (rename propagates across all stored triples). Colour-coded namespace badges on nodes and edges.
 - Export the current graph as Turtle, RDF/XML, or JSON-LD.
 - **Workflow catalog**: drag reusable workflow template cards from the sidebar onto the canvas to instantiate connected subgraphs.
@@ -259,11 +259,11 @@ The annotated diagram below identifies the numbered UI elements described in thi
 
 **8** **Ontologies** — shows the count of loaded ontologies. Click to open a popover listing each ontology with options to add/remove from autoload.
 
-**9** **Reasoning status** — shows the current OWL-RL state: Ready / ✓ Valid / ⚠ Warnings / Errors / spinner while running. Click to open the reasoning report (inferred triples grouped by rule).
+**9** **Reasoning status** — shows the current DL reasoning state: Ready / ✓ Valid / ⚠ Warnings / Errors / spinner while running. Click to open the reasoning report (inferred triples grouped by rule).
 
 **10** **Clear inferred** (🗑) — removes all inferred triples without touching asserted data.
 
-**11** **Run reasoning** (▶) — triggers the OWL-RL reasoner. Inferred triples appear as amber dashed edges. Idempotent.
+**11** **Run reasoning** (▶) — triggers DL reasoning (Konclude). Inferred triples appear as amber dashed edges. Idempotent.
 
 ### Authoring toolbar (bottom left)
 
@@ -356,7 +356,7 @@ The app has two coupled layers:
 - **N3 RDF store** — source of truth. `addNode` / `addLink` write triples here.
 - **Reactodia canvas** — visual mirror. Nodes are *not* created automatically from triples; you must call `addNode` to place a subject on canvas. After adding triples, canvas links refresh automatically. Nodes start collapsed — call `expandNode` (with an IRI to expand one node, or no args to expand all) to reveal annotation property cards.
 
-OWL-RL reasoning writes inferred triples back to the store and refreshes the canvas.
+DL reasoning (Konclude) writes inferred triples back to the store and refreshes the canvas.
 
 ### Setup (Playwright / headless)
 
@@ -417,9 +417,9 @@ loadOntology (TBox)
 | Demo | Final state |
 |------|-------------|
 | **[FOAF social network](docs/mcp-demo/foaf-social-network.md)**<br>Build a social network, extend FOAF with employment classes, run reasoning | [![FOAF social network final state](docs/mcp-demo/foaf-social-network/04-frank-focus.svg)](docs/mcp-demo/foaf-social-network.md) |
-| **[OWL-RL reasoning](docs/mcp-demo/reasoning-demo.md)**<br>Build TBox + ABox, infer types via domain/range and transitivity | [![OWL-RL reasoning final state](docs/mcp-demo/reasoning-demo/04-dave-focus.svg)](docs/mcp-demo/reasoning-demo.md) |
+| **[DL reasoning (Konclude)](docs/mcp-demo/reasoning-demo.md)**<br>Build TBox + ABox, infer types via domain/range and transitivity | [![DL reasoning final state](docs/mcp-demo/reasoning-demo/04-dave-focus.svg)](docs/mcp-demo/reasoning-demo.md) |
 | **[Scene ontology](docs/mcp-demo/scene-ontology.md)**<br>Load an external ontology, author individuals, export Turtle | [![Scene ontology final state](docs/mcp-demo/scene-ontology/04-jake-focus.svg)](docs/mcp-demo/scene-ontology.md) |
-| **[Manchester Pizza Tutorial](docs/mcp-demo/pizza-tutorial.md)**<br>Full OWL pizza ontology — classes, disjointness, properties, OWL-RL reasoning | [![Manchester Pizza Tutorial final state](docs/mcp-demo/pizza-tutorial/20-owa-vegetarian-lesson.svg)](docs/mcp-demo/pizza-tutorial.md) |
+| **[Manchester Pizza Tutorial](docs/mcp-demo/pizza-tutorial.md)**<br>Full OWL pizza ontology — classes, disjointness, properties, DL reasoning | [![Manchester Pizza Tutorial final state](docs/mcp-demo/pizza-tutorial/20-owa-vegetarian-lesson.svg)](docs/mcp-demo/pizza-tutorial.md) |
 
 Regenerate:
 
@@ -494,10 +494,10 @@ iframe via `callToolOnStage()`. No relay popup needed. Example: `pizza-tutorial-
 | Video | Description |
 |-------|-------------|
 | [advert-intro.mp4](docs/demo-videos/advert-intro.mp4) | Relay bookmarklet — mock chat + Ontosphere side by side |
-| [foaf-social-network.mp4](docs/demo-videos/foaf-social-network.mp4) | AI builds a FOAF social graph with OWL-RL reasoning |
-| [reasoning-demo.mp4](docs/demo-videos/reasoning-demo.mp4) | AI builds an OWL ontology and runs OWL-RL reasoning |
+| [foaf-social-network.mp4](docs/demo-videos/foaf-social-network.mp4) | AI builds a FOAF social graph with DL reasoning |
+| [reasoning-demo.mp4](docs/demo-videos/reasoning-demo.mp4) | AI builds an OWL ontology and runs DL reasoning (Konclude) |
 | [scene-ontology.mp4](docs/demo-videos/scene-ontology.mp4) | AI builds a film scene ontology on BFO/RO upper ontology |
-| [pizza-tutorial.mp4](docs/demo-videos/pizza-tutorial.mp4) | Manchester Pizza Ontology — class hierarchy, disjointness, OWL-RL reasoning |
+| [pizza-tutorial.mp4](docs/demo-videos/pizza-tutorial.mp4) | Manchester Pizza Ontology — class hierarchy, disjointness, DL reasoning |
 | [pizza-tutorial-chat.mp4](docs/demo-videos/pizza-tutorial-chat.mp4) | OWL pizza tutorial as AI tutor lesson, side-by-side chat |
 
 To re-record all videos:

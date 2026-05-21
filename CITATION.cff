@@ -5,7 +5,7 @@ version: "1.2.0"
 abstract: >
   Ontosphere is a browser-based RDF/ontology knowledge graph editor. It loads RDF
   from local files, remote URLs, or SPARQL/Fuseki endpoints; lets users author
-  nodes and edges directly on the canvas; runs OWL-RL reasoning with visual
+  nodes and edges directly on the canvas; runs OWL 2 DL reasoning (via Konclude) with visual
   differentiation of inferred triples; and applies multi-algorithm layout
   (Dagre, ELK) and automatic clustering for large graphs. Additional features
   include namespace management with live URI renaming, a drag-and-drop workflow

@@ -2496,7 +2496,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       try {
         // Only copy data + ontology graphs — never feed previous inferred quads
         // back into the reasoner, which would accumulate spurious inferences on
-        // repeated runs (OWL-RL re-applies rules to already-inferred triples).
+        // repeated runs (N3 OWL-RL re-applies rules to already-inferred triples).
         const sourceGraphs = [
           DataFactory.namedNode("urn:vg:data"),
           DataFactory.namedNode("urn:vg:ontologies"),

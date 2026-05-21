@@ -32,7 +32,7 @@ async (page) => {
     // T2 — owl:ObjectProperty hasPart with rdfs:domain only (NO range)
     // Range must be omitted — declaring range=Pizza would cause prp-range to infer that ingredients
     // are pizzas, which is semantically wrong. Domain alone is sufficient for classification.
-    // CRITICAL: rdfs:domain — OWL-RL does NOT read owl:domain.
+    // CRITICAL: rdfs:domain — DL reasoner (Konclude) does NOT read owl:domain.
     'In OWL, the relationship between a pizza and its parts is an owl:ObjectProperty. Create ex:hasPart as an ObjectProperty on the canvas. Declare its domain using rdfs:domain pointing to ex:Pizza — this tells the reasoner that anything with a hasPart connection is a pizza. Do not declare a range — leaving it open keeps ingredients semantically clean. Important: use rdfs:domain, not owl:domain. Wait for my next question.',
 
     // T3 — named pizza subclasses: SalamiPizza, HawaiianPizza, MargheritaPizza
@@ -63,14 +63,14 @@ async (page) => {
     'Build ex:pizza2 as a Hawaiian pizza and ex:pizza3 as a Margherita pizza. For ex:pizza2: add ex:pineapple1 of type ex:PineappleTopping, ex:ham1 of type ex:HamTopping, and ex:base2 of type ex:DeepPanBase, then connect all three to ex:pizza2 via ex:hasPart. For ex:pizza3: add ex:tom1 of type ex:TomatoTopping, ex:mozz2 of type ex:MozzarellaTopping, and ex:base3 of type ex:ThinCrustBase, then connect all three to ex:pizza3 via ex:hasPart. Do not assert any class type on pizza2 or pizza3. Reveal all node properties and arrange the canvas. Wait for my next question.',
 
     // T9 — runReasoning
-    'The schema and all three pizzas are in place. Now apply OWL-RL reasoning to derive everything that can be inferred. Wait for my next question.',
+    'The schema and all three pizzas are in place. Now apply DL reasoning to derive everything that can be inferred. Wait for my next question.',
 
     // T10 — classification showcase via graph query
     // queryGraph covers urn:vg:data + urn:vg:inferred by default — model should reach for it
     // naturally when asked to "verify" classification. getNodeDetails is acceptable fallback.
     // cls-svf1: pizza1 hasPart salami1 ∧ salami1 type SalamiTopping → pizza1 type _:restriction
     // cax-eqc2: _:restriction subClassOf SalamiPizza → pizza1 type SalamiPizza
-    'The equivalentClass axioms we defined in the TBox should have been applied consistently across all three pizzas. Verify that the classification held: did each pizza receive the type its ingredient composition implies? Use whatever tool gives you the clearest proof — querying the graph or inspecting individual nodes. Show the evidence, state which types are inferred vs asserted, and trace the OWL-RL rule chain for at least one pizza.',
+    'The equivalentClass axioms we defined in the TBox should have been applied consistently across all three pizzas. Verify that the classification held: did each pizza receive the type its ingredient composition implies? Use whatever tool gives you the clearest proof — querying the graph or inspecting individual nodes. Show the evidence, state which types are inferred vs asserted, and trace the DL rule chain for at least one pizza.',
   ];
 
   // Reliable idle: content-length stability + relay queue drained.

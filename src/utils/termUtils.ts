@@ -185,6 +185,7 @@ export function toPrefixed(
 ): string {
   const target = normalizeString(iri, "toPrefixed.iri");
   if (target.startsWith("_:")) return target;
+  if (target.startsWith("urn:vg:bnode:")) return `_:${target.slice("urn:vg:bnode:".length)}`;
   const entry = findRegistryEntryForIri(target, registryInput);
   if (!entry) return target;
 
