@@ -281,31 +281,21 @@ class KoncludeReasoner {
       });
 
       const { tripleBuffer, strTableBuffer } = _encodeToBuffers(deskolemized);
-      // Slice before first transfer — ArrayBuffer is detached after transfer
-      const tripleBuffer2 = tripleBuffer.slice(0);
-      const strTableBuffer2 = strTableBuffer.slice(0);
 
-      // classification → TBox subClassOf/equivalentClass (OWL 2 DL hierarchy)
+      // realization runs TBox classification + ABox individual typing in one pass.
+      // Calling classification separately then realization drains the result buffer mid-sequence,
+      // leaving realization with no output — hence the single-pass approach mirrors materialize().
       await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer], [tripleBuffer, strTableBuffer]);
-      await this._call("classification", []);
-      const tboxBuf = (await this._call("getInferredTripleBuffer", [])) as ArrayBuffer;
-      const tboxQuads = _decodeBuffers(tboxBuf);
-
-      // realization → ABox rdf:type entailments; filter to type-only to avoid duplicating TBox
-      await this._call("loadTripleBuffer", [tripleBuffer2, strTableBuffer2], [tripleBuffer2, strTableBuffer2]);
       await this._call("realization", []);
-      const aboxBuf = (await this._call("getInferredTripleBuffer", [])) as ArrayBuffer;
-      const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-      const aboxQuads = _decodeBuffers(aboxBuf).filter((q) => q.predicate.value === RDF_TYPE);
-
-      const inferredQuads = [...tboxQuads, ...aboxQuads];
+      const resultBuf = (await this._call("getInferredTripleBuffer", [])) as ArrayBuffer;
+      const inferredQuads = _decodeBuffers(resultBuf);
 
       for (const q of inferredQuads) {
         if (sourceKeys.has(`${q.subject.value}\0${q.predicate.value}\0${q.object.value}`)) continue;
         store.addQuad(N3.DataFactory.quad(q.subject, q.predicate, q.object, inferredGraphNode));
       }
 
-      console.debug("[VG_REASONING_WORKER] Konclude inferred quads:", inferredQuads.length, `(${tboxQuads.length} TBox, ${aboxQuads.length} ABox)`);
+      console.debug("[VG_REASONING_WORKER] Konclude inferred quads:", inferredQuads.length);
     });
     this._queue = result.then(() => {}, () => {});
     return result;

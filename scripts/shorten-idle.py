@@ -153,7 +153,7 @@ def build_ffmpeg_cmd(
         if audio:
             audio_args = ["-c:a", "libvorbis", "-b:a", "128k"]
     else:
-        video_args = ["-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        video_args = ["-c:v", "libx264", "-crf", "24", "-preset", "fast",
                       "-profile:v", "high", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
 
     return [

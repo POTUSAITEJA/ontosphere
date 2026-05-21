@@ -83,6 +83,13 @@ export const WELL_KNOWN_PREFIXES = [
     ontologyUrl: "https://raw.githubusercontent.com/BFO-ontology/BFO-2020/master/21838-2/owl/bfo-core.owl",
   },
   {
+    prefix: "bfo2020-nt",
+    url: "http://purl.obolibrary.org/obo/",
+    name: "BFO 2020 No-Time - Basic Formal Ontology 2020 (non-temporalized)",
+    description: "BFO 2020 variant with non-temporalized properties — omits temporal relations, suitable for atemporal or synchronic domains",
+    ontologyUrl: "https://raw.githubusercontent.com/BFO-ontology/BFO-2020/refs/heads/master/21838-2/owl/profiles/atemporal/bfo-2020-without-some-all-times.ttl",
+  },
+  {
     prefix: "dcat",
     url: "http://www.w3.org/ns/dcat#",
     name: "DCAT - Data Catalog Vocabulary",
@@ -192,9 +199,10 @@ export const WELL_KNOWN_PREFIXES = [
   {
     prefix: "log",
     url: "https://w3id.org/pmd/log/",
-    name: "PMD LOG - PMD Laboratory Operations Graph",
-    description: "Laboratory workflows: instruments, measurements, samples and operations",
+    name: "PMD LOG - Platform Material Digital Logistics Application Ontology",
+    description: "Logistics and supply chain: organizations, shipments, transport and facilities; BFO- and IOF-conformant, extends PMDCo",
     ontologyUrl: "https://w3id.org/pmd/log",
+    packs: ["engineering"],
   },
   {
     prefix: "emmo",
@@ -568,6 +576,7 @@ const PACK_REASONS: Record<string, string> = {
   "engineering:prov": "Process provenance",
   "engineering:bfo": "Upper-level foundational classes",
   "engineering:pmdco": "Materials science processes and specimens",
+  "engineering:log": "Logistics and supply chain management",
   "legal:odrl": "Policies, permissions, prohibitions, obligations",
   "legal:cc": "Creative Commons license terms",
   "legal:dcterms": "Rights-holder metadata",

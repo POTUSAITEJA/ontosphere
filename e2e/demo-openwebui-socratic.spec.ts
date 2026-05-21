@@ -70,9 +70,9 @@ const AFTER_CAPTIONS = [
   'equivalentClass axioms loaded — pizza types defined by necessary-and-sufficient conditions.',
   'All TBox nodes expanded — asserted properties visible across the hierarchy.',
   'ABox view — pizza1 · pizza2 · pizza3 as bare NamedIndividuals, no class asserted.',
-  'pizza1 built — salami1 · mozz1 · base1 typed and linked via hasPart.',
-  'pizza2 (Hawaiian) built — pineapple1 · ham1 · base2 typed and linked via hasPart.',
-  'pizza3 (Margherita) built — tom1 · mozz2 · base3 typed and linked via hasPart.',
+  'pizza1 built — salami1 · mozz1 · base1 as NamedIndividuals, typed and linked via hasPart.',
+  'pizza2 (Hawaiian) built — pineapple1 · ham1 · base2 as NamedIndividuals, typed and linked via hasPart.',
+  'pizza3 (Margherita) built — tom1 · mozz2 · base3 as NamedIndividuals, typed and linked via hasPart.',
   'OWL-RL reasoning complete — inferred triples materialised in urn:vg:inferred.',
   'Classification! pizza1 → SalamiPizza · pizza2 → HawaiianPizza · pizza3 → MargheritaPizza — all inferred, none asserted.',
 ];
@@ -101,13 +101,13 @@ const TURNS = [
   'Everything so far is the TBox — the schema. Switch to the individuals view (ABox) and create three pizza individuals: ex:pizza1, ex:pizza2, and ex:pizza3. Give each only the owl:NamedIndividual type — do NOT assert any pizza class (not Pizza, not SalamiPizza, nothing). Only the three bare nodes. The reasoner will classify them once we add ingredients. Arrange. Wait for my next question.',
 
   // T7 — build pizza1 (Salami)
-  'Build ex:pizza1 as a Salami pizza. Add three ingredient individuals: ex:salami1 of type ex:SalamiTopping, ex:mozz1 of type ex:MozzarellaTopping, and ex:base1 of type ex:ThinCrustBase. Then add an ex:hasPart edge FROM ex:pizza1 TO each ingredient (subject=pizza1, object=ingredient). Do not assert any pizza class on ex:pizza1 — leave it untyped; the reasoner will classify it. Wait for my next question.',
+  'Build ex:pizza1 as a Salami pizza. Add three ingredient individuals — each must be declared as BOTH owl:NamedIndividual AND its specific type: ex:salami1 typed owl:NamedIndividual + ex:SalamiTopping, ex:mozz1 typed owl:NamedIndividual + ex:MozzarellaTopping, ex:base1 typed owl:NamedIndividual + ex:ThinCrustBase. Then add an ex:hasPart edge FROM ex:pizza1 TO each ingredient (subject=pizza1, object=ingredient). Do not assert any pizza class on ex:pizza1 — leave it untyped; the reasoner will classify it. Wait for my next question.',
 
   // T8 — build pizza2 (Hawaiian)
-  'Build ex:pizza2 as a Hawaiian pizza. Add ex:pineapple1 of type ex:PineappleTopping, ex:ham1 of type ex:HamTopping, and ex:base2 of type ex:DeepPanBase. Add ex:hasPart edges FROM ex:pizza2 TO each ingredient: pizza2→pineapple1, pizza2→ham1, pizza2→base2. Do not assert any class type on pizza2. Arrange. Wait for my next question.',
+  'Build ex:pizza2 as a Hawaiian pizza. Add three ingredient individuals — each typed as BOTH owl:NamedIndividual AND its specific type: ex:pineapple1 typed owl:NamedIndividual + ex:PineappleTopping, ex:ham1 typed owl:NamedIndividual + ex:HamTopping, ex:base2 typed owl:NamedIndividual + ex:DeepPanBase. Add ex:hasPart edges FROM ex:pizza2 TO each ingredient: pizza2→pineapple1, pizza2→ham1, pizza2→base2. Do not assert any class type on pizza2. Arrange. Wait for my next question.',
 
   // T9 — build pizza3 (Margherita) — explicit "pizza3 ONLY" to prevent model repeating pizza2
-  'Now focus ONLY on ex:pizza3 (the Margherita). ex:pizza2 is already finished — do not touch it. ex:pizza3 has no ingredients yet. Add ex:tom1 of type ex:TomatoTopping, ex:mozz2 of type ex:MozzarellaTopping, and ex:base3 of type ex:ThinCrustBase. Then add ex:hasPart edges with ex:pizza3 as subject: pizza3→tom1, pizza3→mozz2, pizza3→base3. Do not assert any class on pizza3. Arrange. Wait for my next question.',
+  'Now focus ONLY on ex:pizza3 (the Margherita). ex:pizza2 is already finished — do not touch it. ex:pizza3 has no ingredients yet. Add three ingredient individuals — each typed as BOTH owl:NamedIndividual AND its specific type: ex:tom1 typed owl:NamedIndividual + ex:TomatoTopping, ex:mozz2 typed owl:NamedIndividual + ex:MozzarellaTopping, ex:base3 typed owl:NamedIndividual + ex:ThinCrustBase. Then add ex:hasPart edges with ex:pizza3 as subject: pizza3→tom1, pizza3→mozz2, pizza3→base3. Do not assert any class on pizza3. Arrange. Wait for my next question.',
 
   // T10 — runReasoning
   'The schema and all three pizzas are in place. Now apply OWL-RL reasoning to derive everything that can be inferred. Wait for my next question.',

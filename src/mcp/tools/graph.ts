@@ -589,6 +589,12 @@ const help: McpTool = {
       '   Skip suggestOntologiesForTask and loadOntology unless explicitly requested — guided sessions provide all context through questions.',
       '',
       'COMMON MISTAKES',
+      'WRONG: addTriple({subjectIri:" :b0",...})  ← space-colon is NOT a blank node; this always fails',
+      'WRONG: addTriple({subjectIri:":b0",...})   ← colon-only prefix is NOT a blank node',
+      'RIGHT: addTriple({subjectIri:"_:b0",...})  ← blank nodes MUST start with underscore-colon _:',
+      'BLANK NODE RULE: blank-node labels are ALWAYS "_:label" (underscore then colon). ' +
+      'Use _:b0, _:b1, _:b2 … for OWL restrictions. One distinct label per restriction.',
+      '',
       'WRONG: addLink({...})  ← this tool does not exist; use addTriple for all RDF edges',
       'RIGHT: addTriple({subjectIri:"ex:A", predicateIri:"rdfs:subClassOf", objectIri:"ex:B"})',
       '',

@@ -207,6 +207,7 @@ export const mcpManifest: McpToolManifestEntry[] = [
       'IRI object → object-property edge, renders on canvas immediately (both nodes must already exist — call addNode first if needed). ' +
       'Literal object → annotation property (rdfs:comment, skos:definition, etc.), visible after expandNode. ' +
       'Use addNode (not addTriple) when creating an entity for the first time — addNode writes type+label atomically and navigates to the new node. ' +
+      'BLANK NODES: label MUST start with underscore-colon: "_:b0" NOT " :b0" NOT ":b0". ' +
       'OWL RESTRICTIONS via blank-node labels — 4 addTriple calls per restriction (use a DISTINCT label per restriction: _:b0, _:b1, _:b2 …): ' +
       'addTriple("_:b0","rdf:type","owl:Restriction") [MUST be owl:Restriction, NOT owl:Class] + ' +
       'addTriple("_:b0","owl:onProperty","ex:hasPart") + ' +
