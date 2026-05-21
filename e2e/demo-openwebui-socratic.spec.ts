@@ -297,9 +297,7 @@ async function clickSend(owuiPage: Page): Promise<void> {
 test('openwebui-socratic: Socratic pizza ontology — live qwen3:4b via OWUI relay', async ({ page, context }) => {
   test.setTimeout(2_700_000); // 45 min
 
-  // Start ffmpeg recording of the full Xvfb display before any windows appear.
-  const ffmpegProc = startRecording();
-  demoLog('ffmpeg recording started');
+  let ffmpegProc: ReturnType<typeof startRecording> | null = null;
 
   try {
     await context.exposeFunction('__demoLog__', (msg: string) => { demoLog(msg); });
@@ -373,6 +371,11 @@ test('openwebui-socratic: Socratic pizza ontology — live qwen3:4b via OWUI rel
       bounds: { left: 960, top: 0, width: 960, height: 1080 },
     });
     demoLog('step 3: both windows positioned');
+
+    // Start recording only after both windows are in their final positions
+    // so the URL-bar blur coordinates are always valid.
+    ffmpegProc = startRecording();
+    demoLog('ffmpeg recording started');
 
     // Wrap __mcpTools so tool calls are logged.
     await appPage.evaluate(() => {
@@ -624,8 +627,10 @@ test('openwebui-socratic: Socratic pizza ontology — live qwen3:4b via OWUI rel
       .find(p => p.url().includes('relay.html'))
       ?.close().catch(() => {});
 
-    demoLog('stopping ffmpeg recording…');
-    await stopRecording(ffmpegProc);
+    if (ffmpegProc) {
+      demoLog('stopping ffmpeg recording…');
+      await stopRecording(ffmpegProc);
+    }
 
     if (fs.existsSync(WEBM_PATH)) {
       const mb = (fs.statSync(WEBM_PATH).size / 1024 / 1024).toFixed(1);
