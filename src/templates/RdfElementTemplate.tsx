@@ -170,9 +170,9 @@ function RdfElementBody({ props }: { props: Reactodia.TemplateProps }) {
               padding: '3px 8px 0',
               fontSize: 10,
               color: 'var(--reactodia-paper-fg-muted, #6b7280)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              ...(isExpanded
+                ? { whiteSpace: 'normal', wordBreak: 'break-word' }
+                : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
             }}
           >
             {typeChips.map(({ display, hover }, i) => (
