@@ -90,7 +90,7 @@ describe('addNode', () => {
         { s: 'http://example.org/foo', p: 'http://www.w3.org/2000/01/rdf-schema#label', o: 'Foo' },
       ],
     });
-    expect(result).toEqual({ success: true, data: { iri: 'http://example.org/foo' } });
+    expect(result).toEqual({ success: true, data: { iri: 'http://example.org/foo', types: ['http://www.w3.org/2002/07/owl#Class'] } });
   });
 
   it('returns error when iri is missing', async () => {
