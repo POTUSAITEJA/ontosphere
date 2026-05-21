@@ -1,6 +1,7 @@
 // src/mcp/relayBridge.ts
 import { toast } from 'sonner';
 import type { McpResult } from './types';
+import { useAppConfigStore } from '../stores/appConfigStore';
 
 const CHANNEL_NAME = 'ontosphere-relay-v1';
 const RETRY_COUNT = 3;
@@ -145,7 +146,9 @@ async function buildCanvasSummary(
       .map(n => n.label || n.iri.split(/[/#]/).pop() || n.iri)
       .join(', ');
     const more = nodeCount > MAX_LABELS ? ` +${nodeCount - MAX_LABELS} more` : '';
-    return `Store: ${nodeCount} node${nodeCount !== 1 ? 's' : ''} (${labels}${more}), ${linkCount} link${linkCount !== 1 ? 's' : ''}`;
+    const viewMode = useAppConfigStore.getState().viewMode;
+    const viewLabel = viewMode === 'tbox' ? 'TBox' : 'ABox';
+    return `Store: ${nodeCount} node${nodeCount !== 1 ? 's' : ''} (${labels}${more}), ${linkCount} link${linkCount !== 1 ? 's' : ''} · view: ${viewLabel}`;
   } catch {
     return undefined;
   }
