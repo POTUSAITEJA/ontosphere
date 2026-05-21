@@ -10,7 +10,7 @@ The bookmarklet (`public/relay-bookmarklet.js`) bridges an OpenWebUI chat tab an
 
 ```
 OWUI chat output
-  → MutationObserver watches for backtick-wrapped JSON-RPC
+  → idle-poll (500 ms) scans page text for backtick-wrapped JSON-RPC
   → relay parses & forwards via BroadcastChannel("vg-relay")
   → Ontosphere tab receives, executes MCP tool, returns result
   → relay injects [Ontosphere — N tools ✓] back into OWUI input
@@ -272,7 +272,7 @@ The `pizza-demo-setup.js` approach is for **interactive MCP sessions** (live rel
 | `__vgInjectResult` undefined | `addScriptTag` failed or relay code fetch returned 404 — check Ontosphere is running |
 | Content injected but not submitted | Fallback `sendBtn.click()` should handle this; verify button selector |
 | Model outputs native tool call, no `[Ontosphere` result | Silent-ignore; inject correction message |
-| Injection during think phase, model echoes UUID | `isAiStreaming()` stop-button check prevents this; verify relay waited for idle |
+| Model echoes `[RESPONSE] <uuid>` | Injection uses wrong path — must use `execCommand('insertText')`, not `pasteText`/`setContent` |
 | Canvas empty after addNode succeeds | addNode adds OWL classes to TBox — switch to TBox view: `__mcpTools.setViewMode({mode:'tbox'})` |
 | Same tool calls silently skipped on re-inject | `dispatchedSigs` deduplication — start a new chat to reset (fresh page = fresh relay instance) |
 | INSTR example fires as real tool call | `RIGHT:` example contained live backtick JSON-RPC — use `TOOL_NAME`/`N` placeholders, never real IRIs |
