@@ -23,19 +23,24 @@ function findEntityElement(iri: string, model: Reactodia.DataDiagramModel): Reac
 
 const addNode: McpTool = {
   name: 'addNode',
-  description: 'Add an entity (node) to the canvas by IRI, with an optional RDF type and label.',
+  description: 'Add an entity (node) to the canvas by IRI, with optional RDF type(s) and label.',
   inputSchema: {
     type: 'object',
     properties: {
       iri: { type: 'string' },
-      typeIri: { type: 'string' },
+      typeIri: { type: 'string', description: 'Single rdf:type IRI. Use typeIris for multiple types.' },
+      typeIris: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'One or more rdf:type IRIs. Use this when an individual needs multiple types (e.g. ["owl:NamedIndividual","ex:SalamiTopping"]). Takes precedence over typeIri.',
+      },
       label: { type: 'string' },
     },
     required: ['iri'],
   },
   handler: async (params) => {
     try {
-      const raw = params as { iri?: string; subjectIri?: string; typeIri?: string; type?: string; label?: string };
+      const raw = params as { iri?: string; subjectIri?: string; typeIri?: string; typeIris?: string[]; type?: string; label?: string };
       if (!raw.iri && raw.subjectIri) raw.iri = raw.subjectIri;
       if (!raw.iri) return { success: false, error: 'iri is required' };
       const iri = expandIri(raw.iri);
@@ -46,16 +51,25 @@ const addNode: McpTool = {
           : ` You passed "${iri}".`;
         return { success: false, error: `Node IRI contains spaces and is not valid.${blankNodeHint}` };
       }
-      const typeIri = (raw.typeIri ?? raw.type) ? expandIri((raw.typeIri ?? raw.type)!) : undefined;
-      if (typeIri?.startsWith('Unknown prefix:')) return { success: false, error: typeIri };
+
+      // Resolve all type IRIs — typeIris array takes precedence over scalar typeIri/type
+      const rawTypes: string[] = raw.typeIris?.length
+        ? raw.typeIris
+        : (raw.typeIri ?? raw.type) ? [(raw.typeIri ?? raw.type)!] : [];
+      const typeIris: string[] = [];
+      for (const t of rawTypes) {
+        const expanded = expandIri(t);
+        if (expanded.startsWith('Unknown prefix:')) return { success: false, error: expanded };
+        typeIris.push(expanded);
+      }
       const { label } = raw;
 
-      // Batch both triples in one awaitable worker call so onSubjectsChange fires
-      // only once, after both rdf:type and rdfs:label are already in the store.
+      // Batch all triples in one awaitable worker call so onSubjectsChange fires
+      // only once, after all rdf:type and rdfs:label triples are already in the store.
       // Triples land in urn:vg:data → onSubjectsChange → filterByViewMode →
       // createElement in the correct view. No direct canvas mutation here.
       const adds: Array<{ s: string; p: string; o: string }> = [];
-      if (typeIri) adds.push({ s: iri, p: RDF_TYPE, o: typeIri });
+      for (const t of typeIris) adds.push({ s: iri, p: RDF_TYPE, o: t });
       if (label) adds.push({ s: iri, p: RDFS_LABEL, o: label });
       if (adds.length > 0) await rdfManager.applyBatch({ adds });
 
@@ -64,7 +78,7 @@ const addNode: McpTool = {
       const { navigateToIri } = getWorkspaceRefs();
       navigateToIri?.(iri);
 
-      return { success: true, data: { iri } };
+      return { success: true, data: { iri, types: typeIris } };
     } catch (e) {
       return { success: false, error: String(e) };
     }

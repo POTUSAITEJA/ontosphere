@@ -101,13 +101,13 @@ const TURNS = [
   'Everything so far is the TBox — the schema. Switch to the individuals view (ABox) and create three pizza individuals: ex:pizza1, ex:pizza2, and ex:pizza3. Give each only the owl:NamedIndividual type — do NOT assert any pizza class (not Pizza, not SalamiPizza, nothing). Only the three bare nodes. The reasoner will classify them once we add ingredients. Arrange. Wait for my next question.',
 
   // T7 — build pizza1 (Salami)
-  'Build ex:pizza1 as a Salami pizza. Add three ingredient individuals — each must be declared as BOTH owl:NamedIndividual AND its specific type: ex:salami1 typed owl:NamedIndividual + ex:SalamiTopping, ex:mozz1 typed owl:NamedIndividual + ex:MozzarellaTopping, ex:base1 typed owl:NamedIndividual + ex:ThinCrustBase. Then add an ex:hasPart edge FROM ex:pizza1 TO each ingredient (subject=pizza1, object=ingredient). Do not assert any pizza class on ex:pizza1 — leave it untyped; the reasoner will classify it. Wait for my next question.',
+  'Build ex:pizza1 as a Salami pizza. Add three ingredient individuals using addNode with typeIris (array): ex:salami1 with typeIris:["owl:NamedIndividual","ex:SalamiTopping"] label "salami1", ex:mozz1 with typeIris:["owl:NamedIndividual","ex:MozzarellaTopping"] label "mozz1", ex:base1 with typeIris:["owl:NamedIndividual","ex:ThinCrustBase"] label "base1". Then add an ex:hasPart edge FROM ex:pizza1 TO each ingredient. Do not assert any pizza class on ex:pizza1 — leave it untyped; the reasoner will classify it. Wait for my next question.',
 
   // T8 — build pizza2 (Hawaiian)
-  'Build ex:pizza2 as a Hawaiian pizza. Add three ingredient individuals — each typed as BOTH owl:NamedIndividual AND its specific type: ex:pineapple1 typed owl:NamedIndividual + ex:PineappleTopping, ex:ham1 typed owl:NamedIndividual + ex:HamTopping, ex:base2 typed owl:NamedIndividual + ex:DeepPanBase. Add ex:hasPart edges FROM ex:pizza2 TO each ingredient: pizza2→pineapple1, pizza2→ham1, pizza2→base2. Do not assert any class type on pizza2. Arrange. Wait for my next question.',
+  'Build ex:pizza2 as a Hawaiian pizza. Add three ingredient individuals using addNode with typeIris (array): ex:pineapple1 with typeIris:["owl:NamedIndividual","ex:PineappleTopping"] label "pineapple1", ex:ham1 with typeIris:["owl:NamedIndividual","ex:HamTopping"] label "ham1", ex:base2 with typeIris:["owl:NamedIndividual","ex:DeepPanBase"] label "base2". Add ex:hasPart edges FROM ex:pizza2 TO each ingredient. Do not assert any class type on pizza2. Arrange. Wait for my next question.',
 
   // T9 — build pizza3 (Margherita) — explicit "pizza3 ONLY" to prevent model repeating pizza2
-  'Now focus ONLY on ex:pizza3 (the Margherita). ex:pizza2 is already finished — do not touch it. ex:pizza3 has no ingredients yet. Add three ingredient individuals — each typed as BOTH owl:NamedIndividual AND its specific type: ex:tom1 typed owl:NamedIndividual + ex:TomatoTopping, ex:mozz2 typed owl:NamedIndividual + ex:MozzarellaTopping, ex:base3 typed owl:NamedIndividual + ex:ThinCrustBase. Then add ex:hasPart edges with ex:pizza3 as subject: pizza3→tom1, pizza3→mozz2, pizza3→base3. Do not assert any class on pizza3. Arrange. Wait for my next question.',
+  'Now focus ONLY on ex:pizza3 (the Margherita). ex:pizza2 is already finished — do not touch it. ex:pizza3 has no ingredients yet. Add three ingredient individuals using addNode with typeIris (array): ex:tom1 with typeIris:["owl:NamedIndividual","ex:TomatoTopping"] label "tom1", ex:mozz2 with typeIris:["owl:NamedIndividual","ex:MozzarellaTopping"] label "mozz2", ex:base3 with typeIris:["owl:NamedIndividual","ex:ThinCrustBase"] label "base3". Add ex:hasPart edges with ex:pizza3 as subject: pizza3→tom1, pizza3→mozz2, pizza3→base3. Do not assert any class on pizza3. Arrange. Wait for my next question.',
 
   // T10 — runReasoning
   'The schema and all three pizzas are in place. Now apply OWL-RL reasoning to derive everything that can be inferred. Wait for my next question.',
@@ -195,11 +195,13 @@ async function clearCaption(owuiPage: Page, appPage: Page | null): Promise<void>
   ]);
 }
 
-// isBusy checks the OWUI page: content-length growth OR relay has queued work.
-// Skips <details> subtrees so qwen3 CoT tokens don't block idle detection.
+// isBusy checks the OWUI page: content-length growth OR relay has queued work OR model still streaming.
+// Skips <details> subtrees so qwen3 CoT tokens don't block idle detection, but still checks
+// __vgIsStreaming so we don't declare done while the model is mid-CoT thinking between tool calls.
 async function isBusy(owuiPage: Page, prevLen: number): Promise<{ busy: boolean; len: number }> {
   const state = await owuiPage.evaluate(() => {
     const relayBusy = !((window as any).__vgIsRelayIdle?.() ?? true);
+    const streaming = (window as any).__vgIsStreaming?.() ?? false;
     let len = 0;
     function walk(node: Node) {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -210,10 +212,10 @@ async function isBusy(owuiPage: Page, prevLen: number): Promise<{ busy: boolean;
       }
     }
     walk(document.body);
-    return { relayBusy, len };
-  }).catch(() => ({ relayBusy: false, len: prevLen }));
+    return { relayBusy, streaming, len };
+  }).catch(() => ({ relayBusy: false, streaming: false, len: prevLen }));
   const growing = prevLen >= 0 && state.len !== prevLen;
-  return { busy: state.relayBusy || growing, len: state.len };
+  return { busy: state.relayBusy || state.streaming || growing, len: state.len };
 }
 
 async function waitIdle(owuiPage: Page, timeout = 300_000, stableMs = 3_000): Promise<boolean> {

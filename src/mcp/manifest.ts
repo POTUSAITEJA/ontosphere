@@ -154,12 +154,17 @@ export const mcpManifest: McpToolManifestEntry[] = [
   },
   {
     name: 'addNode',
-    description: 'Create a NEW entity on the canvas. Writes rdf:type + rdfs:label atomically so the canvas pipeline fires once, then auto-navigates to the new node. The node appears in the view matching its rdf:type (owl:Class → TBox; owl:ObjectProperty → TBox; owl:AnnotationProperty → TBox; owl:NamedIndividual or unknown → ABox). Object and annotation properties are first-class OWL entities — create them as nodes with typeIri=owl:ObjectProperty, then assert rdfs:domain and rdfs:range on them via addTriple. Use setViewMode before calling addNode. For 5+ individuals use loadRdf(turtle=...) instead. Use addTriple (not addNode) to add properties or relationships to an entity that already exists.',
+    description: 'Create a NEW entity on the canvas. Writes rdf:type(s) + rdfs:label atomically so the canvas pipeline fires once, then auto-navigates to the new node. The node appears in the view matching its rdf:type (owl:Class → TBox; owl:ObjectProperty → TBox; owl:AnnotationProperty → TBox; owl:NamedIndividual or unknown → ABox). To assign multiple types at once (e.g. owl:NamedIndividual + ex:SalamiTopping) use typeIris:[\"owl:NamedIndividual\",\"ex:SalamiTopping\"] — do NOT call addNode + addTriple separately for this. Object and annotation properties are first-class OWL entities — create them as nodes with typeIri=owl:ObjectProperty, then assert rdfs:domain and rdfs:range on them via addTriple. Use setViewMode before calling addNode. For 5+ individuals use loadRdf(turtle=...) instead. Use addTriple (not addNode) to add properties or relationships to an entity that already exists.',
     inputSchema: {
       type: 'object',
       properties: {
         iri: { type: 'string' },
-        typeIri: { type: 'string', description: 'IRI of the rdf:type class (e.g. foaf:Person)' },
+        typeIri: { type: 'string', description: 'Single rdf:type IRI. Use typeIris for multiple types.' },
+        typeIris: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'One or more rdf:type IRIs. Use when an individual needs multiple types, e.g. ["owl:NamedIndividual","ex:SalamiTopping"]. Takes precedence over typeIri.',
+        },
         label: { type: 'string', description: 'rdfs:label value for this individual' },
       },
       required: ['iri'],
