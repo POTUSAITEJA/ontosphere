@@ -12,13 +12,19 @@ export default defineConfig({
       use: {
         browserName: 'chromium',
         headless: false,
-        viewport: { width: 1920, height: 1080 },
-        video: { mode: 'on', size: { width: 1920, height: 1080 } },
+        viewport: { width: 960, height: 1080 },
+        video: { mode: 'off' },
         baseURL: 'http://localhost:8080',
         ignoreHTTPSErrors: true,
         launchOptions: {
-          // Required: allows cross-origin iframe access and self-signed TLS
-          args: ['--disable-web-security', '--ignore-certificate-errors', '--disable-features=BlockInsecurePrivateNetworkRequests'],
+          // --disable-web-security: allows cross-origin evaluate() into the OWUI page.
+          // --ignore-certificate-errors: OWUI uses a self-signed Fraunhofer internal CA.
+          // --disable-popup-blocking: relay bookmarklet opens relay.html as window.open popup.
+          args: [
+            '--disable-web-security',
+            '--ignore-certificate-errors',
+            '--disable-popup-blocking',
+          ],
         },
       },
     },
