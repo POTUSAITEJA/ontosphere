@@ -114,6 +114,7 @@ def build_ffmpeg_cmd(
     input_path: Path,
     output_path: Path,
     segments: list[tuple[float, float]],
+    extra_vf: str = '',
 ) -> list[str]:
     n = len(segments)
     parts: list[str] = []
@@ -130,12 +131,21 @@ def build_ffmpeg_cmd(
 
     if audio:
         parts.append(f"{''.join(concat_inputs)}concat=n={n}:v=1:a=1[outv][outa]")
-        map_args = ["-map", "[outv]", "-map", "[outa]"]
         audio_args = ["-c:a", "aac", "-b:a", "128k"]
     else:
         parts.append(f"{''.join(concat_inputs)}concat=n={n}:v=1:a=0[outv]")
-        map_args = ["-map", "[outv]"]
         audio_args = []
+
+    if extra_vf:
+        parts.append(f"[outv]{extra_vf}[vout_final]")
+        out_v_label = "vout_final"
+    else:
+        out_v_label = "outv"
+
+    if audio:
+        map_args = ["-map", f"[{out_v_label}]", "-map", "[outa]"]
+    else:
+        map_args = ["-map", f"[{out_v_label}]"]
 
     ext = output_path.suffix.lower()
     if ext == ".webm":
@@ -170,6 +180,7 @@ def main() -> None:
     sample_fps  = float(args[4]) if len(args) > 4 else 0.5
     noise_db    = float(args[5]) if len(args) > 5 else -30.0
     no_cut_last = bool(int(args[6])) if len(args) > 6 else False
+    extra_vf    = args[7] if len(args) > 7 else ''
 
     if not input_path.exists():
         print(f"Error: {input_path} not found")
@@ -199,7 +210,7 @@ def main() -> None:
     segments = build_keep_segments(freezes, total_dur, digest_sec, no_cut_last)
     print(f"Segments to keep: {len(segments)}")
 
-    cmd = build_ffmpeg_cmd(input_path, output_path, segments)
+    cmd = build_ffmpeg_cmd(input_path, output_path, segments, extra_vf)
     print(f"\nRunning ffmpeg …")
     result = subprocess.run(cmd)
 

@@ -4,7 +4,7 @@ import type { McpToolManifestEntry } from './types';
 export const mcpServerName = 'Ontosphere';
 
 export const mcpServerDescription =
-  'Browser-based RDF/ontology knowledge graph editor. ABox authoring, OWL-RL reasoning, layout, and export. All client-side, no backend.\n\n' +
+  'Browser-based RDF/ontology knowledge graph editor. ABox authoring, DL reasoning by Konclude, layout, and export. All client-side, no backend.\n\n' +
   'KEY RULES FOR AI AGENTS:\n' +
   '• Two canvas views — ABox (individuals) and TBox (classes/properties). addNode writes to the store; the canvas shows the node in the correct view automatically. Use setViewMode to switch.\n' +
   '• Ontology discovery first: loadOntology(query="use case") → loadOntology(url="<prefix>") × N → setNamespace × N. foaf: is pre-loaded. OWL/RDFS/RDF/XSD always available.\n' +
@@ -15,7 +15,7 @@ export const mcpServerDescription =
   '• Tool failed? Call help({tool:"<name>"}) for the exact parameter schema.\n\n' +
   'GRAPH ARCHITECTURE\n' +
   'urn:vg:data = asserted triples (all mutations go here)\n' +
-  'urn:vg:inferred = OWL-RL derived (runReasoning writes; clearInferred removes)\n' +
+  'urn:vg:inferred = DL-derived (Konclude; runReasoning writes; clearInferred removes)\n' +
   'urn:vg:shapes = SHACL constraints (loadShacl writes; validateGraph reads)\n\n' +
   'Pre-loaded prefixes: rdf: rdfs: owl: xsd: foaf: skos: dc: dcterms: schema: ex:\n' +
   'After loadOntology or setNamespace, those prefixes work in all tool IRI arguments.\n\n' +
@@ -91,7 +91,7 @@ export const mcpManifest: McpToolManifestEntry[] = [
   },
   {
     name: 'queryGraph',
-    description: 'Run a SPARQL query or update against the RDF store. Workspace namespace prefixes are injected automatically so you can use short prefix:local notation. Asserted data is in urn:vg:data; inferred triples (after runReasoning) are in urn:vg:inferred — plain BGP patterns match both. Supported forms: SELECT (returns {rows, total, truncated}), CONSTRUCT (returns {triples, total, truncated}), INSERT DATA, DELETE DATA, DELETE WHERE, DELETE…INSERT…WHERE (returns {updated:true}). Results are capped at limit (default 200, max 1000); truncated:true means more rows exist — use SPARQL OFFSET for pagination. For OWL-RL inference use runReasoning instead.',
+    description: 'Run a SPARQL query or update against the RDF store. Workspace namespace prefixes are injected automatically so you can use short prefix:local notation. Asserted data is in urn:vg:data; inferred triples (after runReasoning) are in urn:vg:inferred — plain BGP patterns match both. Supported forms: SELECT (returns {rows, total, truncated}), CONSTRUCT (returns {triples, total, truncated}), INSERT DATA, DELETE DATA, DELETE WHERE, DELETE…INSERT…WHERE (returns {updated:true}). Results are capped at limit (default 200, max 1000); truncated:true means more rows exist — use SPARQL OFFSET for pagination. For DL reasoning (Konclude) use runReasoning instead.',
     inputSchema: {
       type: 'object',
       required: ['sparql'],
@@ -297,7 +297,7 @@ export const mcpManifest: McpToolManifestEntry[] = [
   },
   {
     name: 'clearInferred',
-    description: 'Remove all OWL-RL derived (inferred) triples from the graph.',
+    description: 'Remove all DL-derived (Konclude-inferred) triples from the graph.',
     inputSchema: { type: 'object' },
   },
   {

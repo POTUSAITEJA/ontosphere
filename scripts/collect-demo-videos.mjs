@@ -67,6 +67,10 @@ for (const name of specNames) {
     // classification response — cutting it would remove the payoff of the demo.
     const mp4 = path.join(OUTPUT_DIR, `${name}.mp4`);
     const noCutLast = name === 'openwebui-socratic' ? '1' : '0';
+    // Blur OWUI server URL in the left window's address bar (x=160,y=33,w=620,h=36 in 1920×1080)
+    const extraVf = name === 'openwebui-socratic'
+      ? 'split[_bm][_bi];[_bi]crop=700:40:100:30,boxblur=8:2[_bl];[_bm][_bl]overlay=100:30'
+      : '';
     let mp4ok = false;
     try {
       execFileSync('python3', [
@@ -78,6 +82,7 @@ for (const name of specNames) {
         '0.5',         // sample fps (1 frame / 2s — ignores sub-2s animations)
         '-30',         // noise floor dB
         noCutLast,     // 1 = keep last freeze block at full length
+        extraVf,       // per-demo post-concat vf (blur, crop, etc.)
       ], { stdio: 'inherit' });
       const mp4size = (fs.statSync(mp4).size / 1024).toFixed(0);
       console.log(`✓ docs/demo-videos/${name}.mp4   (${mp4size} KB)`);

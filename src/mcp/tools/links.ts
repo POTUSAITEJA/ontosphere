@@ -35,10 +35,12 @@ export const linkTools: McpTool[] = [
         const rawS = raw.subjectIri ?? raw.subject ?? raw.s;
         const rawP = raw.predicateIri ?? raw.predicate ?? raw.p;
         const rawO = raw.objectIri ?? raw.object ?? raw.o;
-        const subjectIri = rawS ? expandIri(rawS) : undefined;
+        // Normalize ":bN" → "_:bN": model sometimes omits the underscore in blank-node labels
+        const normBlank = (v: string): string => /^:b\d+$/.test(v) ? `_:${v.slice(1)}` : v;
+        const subjectIri = rawS ? expandIri(normBlank(rawS)) : undefined;
         const predicateIri = rawP ? expandIri(rawP) : undefined;
         // objectIri may be a plain literal — only expand if it looks like a prefixed IRI
-        const objectIri = rawO ? expandIri(rawO) : undefined;
+        const objectIri = rawO ? expandIri(normBlank(rawO)) : undefined;
         if (!subjectIri || !predicateIri || !objectIri) {
           return { success: false as const, error: 'subjectIri, predicateIri, and objectIri are all required. Call help({tool:"addTriple"}) for the full schema.' };
         }
