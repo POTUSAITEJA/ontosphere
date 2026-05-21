@@ -618,6 +618,10 @@ export default function ReactodiaCanvas() {
       // Only track data-graph subjects and update canvas elements for data/inferred graphs
       if (!isDataGraph) return;
 
+      // removeGraph fires emitSubjects with the deleted subjects + their residual quads
+      // from other graphs. Canvas is already cleared; re-adding would resurface them.
+      if (meta?.reason === 'removeGraph') return;
+
       // Inferred-graph subjects include OWL vocabulary terms emitted by the reasoner
       // (owl:Thing, rdfs:Class, etc.). Only data-graph subjects belong in knownSubjects;
       // inferred-graph subjects must NOT be tracked or they'll flood the canvas on view-mode switch.
@@ -1099,11 +1103,22 @@ export default function ReactodiaCanvas() {
   const handleClearData = React.useCallback(() => {
     knownSubjects.clear();
     setIsClustered(false); actions.setIsClustered(false);
-    const model = modelRef.current;
-    if (!model) return;
+    rdfManager.removeGraph('urn:vg:data');
+    // Clear saved layouts/cluster state for both views so switching
+    // views after clear doesn't restore stale nodes via importLayout.
+    savedLayoutsByMode['abox'] = undefined;
+    savedLayoutsByMode['tbox'] = undefined;
+    savedClusterStateByMode['abox'] = undefined;
+    savedClusterStateByMode['tbox'] = undefined;
+    const ctx = contextRef.current;
+    if (!ctx) return;
     queueMicrotask(() => {
-      for (const el of [...model.elements]) {
-        model.removeElement(el.id);
+      const groups = ctx.model.elements.filter(
+        (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
+      );
+      if (groups.length) ctx.model.ungroupAll(groups);
+      for (const el of [...ctx.model.elements]) {
+        ctx.model.removeElement(el.id);
       }
     });
   }, []);

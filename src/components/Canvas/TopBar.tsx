@@ -162,7 +162,8 @@ export const TopBar: React.FC<TopBarProps> = ({
                                 className="glass-btn"
                                 style={{ fontSize: 12, padding: '3px 8px' }}
                                 onClick={() => {
-                                  removeAdditionalOntology(ontologyUrl);
+                                  const exactEntry = additionalOntologies.find(u => normalizeOntUrl(u) === normUrl);
+                                  removeAdditionalOntology(exactEntry ?? ontologyUrl);
                                   toast.success(`Removed ${ont?.name || 'ontology'} from autoload`);
                                 }}
                               >
