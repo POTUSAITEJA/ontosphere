@@ -24,6 +24,7 @@ export default defineConfig({
             '--disable-web-security',
             '--ignore-certificate-errors',
             '--disable-popup-blocking',
+            '--enable-features=SharedArrayBuffer',
           ],
         },
       },
