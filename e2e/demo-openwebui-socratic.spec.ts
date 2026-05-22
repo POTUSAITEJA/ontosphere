@@ -57,7 +57,7 @@ const TURN_TOPICS = [
   'Guide: build pizza1 — add Salami, Mozzarella, ThinCrust parts and hasPart links.',
   'Guide: build pizza2 (Hawaiian) — add parts and links.',
   'Guide: build pizza3 (Margherita) — add parts and links.',
-  'Guide: apply OWL-RL reasoning to derive all inferred triples.',
+  'Guide: apply reasoning to derive all inferred triples.',
   'Guide: inspect pizza1, pizza2, pizza3 — trace the classification inference chain.',
 ];
 
@@ -73,7 +73,7 @@ const AFTER_CAPTIONS = [
   'pizza1 built — salami1 · mozz1 · base1 as NamedIndividuals, typed and linked via hasPart.',
   'pizza2 (Hawaiian) built — pineapple1 · ham1 · base2 as NamedIndividuals, typed and linked via hasPart.',
   'pizza3 (Margherita) built — tom1 · mozz2 · base3 as NamedIndividuals, typed and linked via hasPart.',
-  'OWL-RL reasoning complete — inferred triples materialised in urn:vg:inferred.',
+  'reasoning complete — inferred triples materialised in urn:vg:inferred.',
   'Classification! pizza1 → SalamiPizza · pizza2 → HawaiianPizza · pizza3 → MargheritaPizza — all inferred, none asserted.',
 ];
 
@@ -110,10 +110,10 @@ const TURNS = [
   'Now focus ONLY on ex:pizza3 (the Margherita). ex:pizza2 is already finished — do not touch it. ex:pizza3 has no ingredients yet. Add three ingredient individuals using addNode with typeIris (array): ex:tom1 with typeIris:["owl:NamedIndividual","ex:TomatoTopping"] label "tom1", ex:mozz2 with typeIris:["owl:NamedIndividual","ex:MozzarellaTopping"] label "mozz2", ex:base3 with typeIris:["owl:NamedIndividual","ex:ThinCrustBase"] label "base3". Add ex:hasPart edges with ex:pizza3 as subject: pizza3→tom1, pizza3→mozz2, pizza3→base3. Do not assert any class on pizza3. Arrange. Wait for my next question.',
 
   // T10 — runReasoning
-  'The schema and all three pizzas are in place. Now apply OWL-RL reasoning to derive everything that can be inferred. Wait for my next question.',
+  'The schema and all three pizzas are in place. Now apply reasoning to derive everything that can be inferred. Wait for my next question.',
 
   // T11 — classification showcase via graph query
-  'The equivalentClass axioms we defined in the TBox should have been applied consistently across all three pizzas. Verify that the classification held: did each pizza receive the type its ingredient composition implies? Use whatever tool gives you the clearest proof — querying the graph or inspecting individual nodes. Show the evidence, state which types are inferred vs asserted, and trace the OWL-RL rule chain for at least one pizza.',
+  'The equivalentClass axioms we defined in the TBox should have been applied consistently across all three pizzas. Verify that the classification held: did each pizza receive the type its ingredient composition implies? Use whatever tool gives you the clearest proof — querying the graph or inspecting individual nodes. Show the evidence, state which types are inferred vs asserted, and trace the reasoning results for at least one pizza.',
 ];
 
 // ── ffmpeg recording ───────────────────────────────────────────────────────────
@@ -619,7 +619,7 @@ test('openwebui-socratic: Socratic pizza ontology — live qwen3:4b via OWUI rel
 
     // ── 13. End card ──────────────────────────────────────────────────────
     demoLog('all turns done — end card');
-    await caption(owuiPage, appPage, 'Pizza ontology — TBox · ABox · named pizza classes · equivalentClass axioms · OWL-RL classification — built through Socratic questioning alone');
+    await caption(owuiPage, appPage, 'Pizza ontology — TBox · ABox · named pizza classes · equivalentClass axioms · reasoning — built through Socratic questioning alone');
     await sleep(6_000);
     await clearCaption(owuiPage, appPage);
 
