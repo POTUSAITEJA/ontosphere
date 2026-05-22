@@ -366,7 +366,8 @@ document.getElementById('gpt-input').addEventListener('beforeinput', function (e
   if (!text) return;
   e.preventDefault();
   var el = document.getElementById('gpt-input');
-  el.textContent = (el.innerText || '') + text;
+  // Replace content (mirrors real ProseMirror selectAll+insertText behaviour).
+  el.textContent = text;
   el.dispatchEvent(new Event('input', { bubbles: true }));
 });
 document.getElementById('gpt-input').addEventListener('paste', function (e) {

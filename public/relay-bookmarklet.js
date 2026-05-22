@@ -256,55 +256,76 @@
         }, 400);
       }, 50);
     } else {
-      // TipTap/ProseMirror contenteditable (OWUI).
+      // Contenteditable — TipTap/OWUI or plain ProseMirror (e.g. ChatGPT).
       el.focus();
       waitForStreamEnd(5000, function () {
         setTimeout(function () {
           var target = findInput() || el;
-          var tiptap = target.editor;
-          if (!tiptap || !tiptap.commands || typeof tiptap.commands.setContent !== 'function') {
-            injectInProgress = false; return;
+          var t = target.editor;
+          var tiptap = (t && t.commands && typeof t.commands.setContent === 'function') ? t : null;
+
+          // ── Clear + insert ──────────────────────────────────────────────────
+          // TipTap: use its API to clear, then focus its underlying PM view.
+          // Plain ProseMirror / generic CE: selectAll replaces on insertText.
+          var domEl;
+          if (tiptap) {
+            tiptap.commands.focus();
+            // Clear via TipTap API so OWUI's reactive layer sees the right event chain.
+            // pasteText() / setContent() bypass the DOM event pipeline and cause OWUI
+            // to leak the message UUID into the outgoing request context.
+            tiptap.commands.clearContent(false);
+            domEl = tiptap.view.dom;
+          } else {
+            target.focus();
+            document.execCommand('selectAll', false);
+            domEl = target;
           }
-          tiptap.commands.focus();
-          // Clear existing content, then insert via browser-native execCommand so
-          // OWUI's reactive layer sees the same DOM event chain as real user typing.
-          // pasteText() bypasses the DOM event pipeline entirely and causes OWUI to
-          // leak the message UUID into the outgoing request context.
-          tiptap.commands.clearContent(false);
-          var domEl = tiptap.view.dom;
           domEl.focus();
           var inserted = document.execCommand('insertText', false, text);
           if (!inserted) {
-            // execCommand blocked (sandboxed iframe etc.) — fall back to pasteText
-            if (typeof tiptap.view.pasteText === 'function') {
-              tiptap.view.pasteText(text);
+            // execCommand blocked (sandboxed iframe, etc.)
+            if (tiptap) {
+              if (typeof tiptap.view.pasteText === 'function') {
+                tiptap.view.pasteText(text);
+              } else {
+                var htmlEscaped = text
+                  .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                tiptap.commands.setContent('<code>' + htmlEscaped + '</code>', false);
+              }
             } else {
-              var htmlEscaped = text
-                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-              tiptap.commands.setContent('<code>' + htmlEscaped + '</code>', false);
+              // Dispatch beforeinput so ProseMirror can handle it; textContent as last resort.
+              var bievt = new InputEvent('beforeinput', {
+                inputType: 'insertText', data: text, bubbles: true, cancelable: true,
+              });
+              domEl.dispatchEvent(bievt);
+              if (!(domEl.innerText || domEl.textContent || '').trim()) {
+                domEl.textContent = text;
+                domEl.dispatchEvent(new Event('input', { bubbles: true }));
+              }
             }
           }
-          // Delay: execCommand triggers ProseMirror reconciliation via MutationObserver
-          // (microtask). tryTipTap must run after that, or tp.isEmpty is still true
-          // and the loop exits thinking the content was already submitted.
-          var tpDeadline = Date.now() + 10000;
-          setTimeout(function tryTipTap() {
+
+          // ── Shared retry + submit loop ──────────────────────────────────────
+          // execCommand triggers ProseMirror reconciliation via MutationObserver
+          // (microtask). Retry must run after that, or isEmpty is still true.
+          // Works for TipTap (isEmpty API) and plain CE (innerText fallback).
+          var deadline = Date.now() + 10000;
+          setTimeout(function retry() {
             var inp = findInput() || target;
             var tp = inp.editor || tiptap;
-            var isEmpty = tp.isEmpty !== undefined ? tp.isEmpty
-              : !(tp.getText ? tp.getText().trim() : (inp.innerText || inp.textContent || '').trim());
+            var isEmpty = (tp && tp.isEmpty !== undefined) ? tp.isEmpty
+              : !(tp && tp.getText ? tp.getText().trim() : (inp.innerText || inp.textContent || '').trim());
             if (isEmpty) { injectInProgress = false; return; }
-            if (Date.now() >= tpDeadline) { injectInProgress = false; return; }
+            if (Date.now() >= deadline) { injectInProgress = false; return; }
             var btn = findSendButton(inp);
             if (btn && !btn.disabled) {
               btn.click();
-              // One click is enough for TipTap — release after brief delay.
-              // Retrying risks a second send when OWUI queues messages.
+              // One click is enough — retrying risks a double-send in queued UIs.
               setTimeout(function () { injectInProgress = false; }, 600);
               return;
             }
-            setTimeout(tryTipTap, 400);
+            setTimeout(retry, 400);
           }, 100);
         }, ANNOTATION_GUARD_MS);
       });

@@ -34,11 +34,11 @@ const bookmarkletSrc = fs.readFileSync(
   path.resolve(__dirname, '../public/relay-bookmarklet.js'), 'utf8',
 )
   .replace(
-    "var RELAY_ORIGIN = '__RELAY_ORIGIN__';",
+    /var RELAY_ORIGIN\s+=\s+'__RELAY_ORIGIN__';/,
     `var RELAY_ORIGIN = '${DEV_URL}';`,
   )
   .replace(
-    "var RELAY_URL    = '__RELAY_URL__';",
+    /var RELAY_URL\s+=\s+'__RELAY_URL__';/,
     `var RELAY_URL = '${DEV_URL}/relay.html';`,
   );
 
@@ -117,8 +117,8 @@ test.describe('relay — real end-to-end (dev server)', () => {
     expect(result).toContain('[Ontosphere — 1 tool ✓]');
     // IRI confirmed in result payload
     expect(result).toContain('http://example.org/Alice');
-    // Canvas summary from real app (e.g. "Canvas: 1 node (Alice), 0 links")
-    expect(result).toMatch(/Canvas:\s*\d+ node/);
+    // Store/Canvas summary from real app (e.g. "Store: 1 node (Alice), 2 links")
+    expect(result).toMatch(/(?:Canvas|Store):\s*\d+ node/);
   });
 
   // ── Verify node actually exists in Ontosphere ────────────────────────────
@@ -132,7 +132,7 @@ test.describe('relay — real end-to-end (dev server)', () => {
     const result = await getSubmittedResult(page);
     expect(result).toContain('[Ontosphere — 1 tool ✓]');
     expect(result).toContain('http://example.org/Alice');
-    expect(result).toMatch(/Canvas:\s*\d+ node/);
+    expect(result).toMatch(/(?:Canvas|Store):\s*\d+ node/);
   });
 
   // ── Batch: 3 nodes, all reach Ontosphere ────────────────────────────────
@@ -245,6 +245,10 @@ test.describe('relay — real end-to-end (dev server)', () => {
 
     const countAfterFirst = await page.locator('#chat-stream .msg-user').count();
 
+    // Close the first popup so the bookmarklet opens a fresh one on re-inject.
+    // If the popup is still open, openPopup() reuses it without firing a new
+    // 'popup' event, which would stall waitForEvent('popup') in injectBookmarklet.
+    await _popup1.close();
     // Re-inject — the call is already visible and pre-seeded, must not fire again.
     const _popup2 = await injectBookmarklet(page);
     await page.waitForTimeout(1500);

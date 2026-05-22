@@ -36,11 +36,11 @@ const bookmarkletSrc = fs.readFileSync(
   path.resolve(__dirname, '../public/relay-bookmarklet.js'), 'utf8',
 )
   .replace(
-    "var RELAY_ORIGIN = '__RELAY_ORIGIN__';",
+    /var RELAY_ORIGIN\s+=\s+'__RELAY_ORIGIN__';/,
     `var RELAY_ORIGIN = '${VG_URL}';`,
   )
   .replace(
-    "var RELAY_URL    = '__RELAY_URL__';",
+    /var RELAY_URL\s+=\s+'__RELAY_URL__';/,
     `var RELAY_URL = '${VG_URL}/relay.html';`,
   );
 
