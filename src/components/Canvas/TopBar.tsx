@@ -128,7 +128,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           <div className="space-y-2">
             <h4 className="font-medium text-sm">Loaded ontologies</h4>
             {loadedOntologies.length > 0 ? (
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                 {loadedOntologies.map((ont: any, idx: number) => {
                   const ontologyUrl = ont?.url || ont?.uri;
                   const normUrl = ontologyUrl ? normalizeOntUrl(ontologyUrl) : '';
