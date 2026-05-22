@@ -88,6 +88,7 @@ export const WELL_KNOWN_PREFIXES = [
     name: "BFO 2020 No-Time - Basic Formal Ontology 2020 (non-temporalized)",
     description: "BFO 2020 variant with non-temporalized properties — omits temporal relations, suitable for atemporal or synchronic domains",
     ontologyUrl: "https://raw.githubusercontent.com/BFO-ontology/BFO-2020/refs/heads/master/21838-2/owl/profiles/atemporal/bfo-2020-without-some-all-times.ttl",
+    packs: ["engineering"],
   },
   {
     prefix: "dcat",
@@ -575,6 +576,7 @@ const PACK_REASONS: Record<string, string> = {
   "engineering:unit": "Concrete SI units",
   "engineering:prov": "Process provenance",
   "engineering:bfo": "Upper-level foundational classes",
+  "engineering:bfo2020-nt": "BFO 2020 non-temporalized upper-level classes — preferred for atemporal material domains",
   "engineering:pmdco": "Materials science processes and specimens",
   "engineering:log": "Logistics and supply chain management",
   "legal:odrl": "Policies, permissions, prohibitions, obligations",
@@ -599,11 +601,16 @@ export function searchOntologyPacks(task: string): Array<OntologyPackSummary | O
   const hasMatches = scored.some(s => s.score > 0);
 
   if (!hasMatches) {
-    return ONTOLOGY_PACKS.map(pack => ({
-      packId: pack.id,
-      packName: pack.name,
-      description: pack.description,
-    }));
+    return ONTOLOGY_PACKS.map(pack => {
+      const ontologies = WELL_KNOWN_PREFIXES
+        .filter(e => (e as any).packs?.includes(pack.id))
+        .map(e => ({
+          prefix: e.prefix,
+          namespace: e.url,
+          reason: PACK_REASONS[`${pack.id}:${e.prefix}`] ?? "",
+        }));
+      return { packId: pack.id, packName: pack.name, description: pack.description, ontologies };
+    });
   }
 
   return scored

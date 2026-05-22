@@ -25,21 +25,21 @@ describe("ONTOLOGY_PACKS", () => {
 });
 
 describe("searchOntologyPacks", () => {
-  it("empty string returns all 9 packs as summary-only", () => {
+  it("empty string returns all 9 packs with full ontology details", () => {
     const result = searchOntologyPacks("");
     expect(result).toHaveLength(9);
     for (const pack of result) {
       expect(pack).toHaveProperty("packId");
       expect(pack).toHaveProperty("packName");
       expect(pack).toHaveProperty("description");
-      expect(pack).not.toHaveProperty("ontologies");
+      expect(pack).toHaveProperty("ontologies");
     }
   });
 
-  it("no-match returns all 9 packs summary-only", () => {
+  it("no-match returns all 9 packs with full ontology details", () => {
     const result = searchOntologyPacks("xyzzy-nonexistent-9999");
     expect(result).toHaveLength(9);
-    expect(result[0]).not.toHaveProperty("ontologies");
+    expect(result[0]).toHaveProperty("ontologies");
   });
 
   it("'mind map' returns notes-mindmap pack with ontologies", () => {
