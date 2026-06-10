@@ -222,7 +222,12 @@ class KoncludeReasoner {
 
     this.worker.addEventListener("message", (event: MessageEvent) => {
       const msg = event.data;
-      if ("type" in msg) return;
+      if ("type" in msg) {
+        if (msg.type === "log" && typeof msg.msg === "string") {
+          if (workerDebugEnabled) console.error("[Konclude]", msg.msg);
+        }
+        return;
+      }
       const entry = this.pending.get(msg.id);
       if (!entry) return;
       this.pending.delete(msg.id);
