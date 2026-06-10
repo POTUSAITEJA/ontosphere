@@ -296,7 +296,7 @@ class KoncludeReasoner {
         store.addQuad(N3.DataFactory.quad(q.subject, q.predicate, q.object, inferredGraphNode));
       }
 
-      console.debug("[VG_REASONING_WORKER] Konclude inferred quads:", inferredQuads.length);
+      debugLog("[VG_REASONING_WORKER] Konclude inferred quads:", inferredQuads.length);
     });
     this._queue = result.then(() => {}, () => {});
     return result;
@@ -519,6 +519,12 @@ export interface RdfWorkerRuntime {
   terminate: () => void;
 }
 
+let workerDebugEnabled = false;
+
+function debugLog(...args: unknown[]): void {
+  if (workerDebugEnabled) console.debug(...args);
+}
+
 export function createRdfWorkerRuntime(postMessage: (message: unknown) => void): RdfWorkerRuntime {
   (globalThis as any).Buffer = Buffer;
 
@@ -671,7 +677,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     try {
       post(message);
     } catch (err) {
-      console.debug("[rdfManager.worker] reasoningStage emission skipped", {
+      debugLog("[rdfManager.worker] reasoningStage emission skipped", {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -1104,7 +1110,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         counts[graphName] = (counts[graphName] || 0) + 1;
       }
     } catch (err) {
-      console.debug("[VG_REASONING_WORKER] collectGraphCountsFromStore failed", err);
+      debugLog("[VG_REASONING_WORKER] collectGraphCountsFromStore failed", err);
     }
     return counts;
   }
@@ -1129,7 +1135,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       stream.push(null);
       return stream;
     } catch (err) {
-      console.debug("[rdfManager.worker] createReadableFromString failed", err);
+      debugLog("[rdfManager.worker] createReadableFromString failed", err);
       return null;
     }
   }
@@ -1209,6 +1215,10 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             prefixes: Array.from(workerBlacklistPrefixes),
             uris: workerBlacklistUris.slice(),
           };
+          break;
+        case "setDebug":
+          workerDebugEnabled = !!(payload && typeof payload === "object" && (payload as { enabled?: unknown }).enabled);
+          result = { enabled: workerDebugEnabled };
           break;
         case "syncLoad": {
           const { DataFactory } = resolveN3();
@@ -1468,7 +1478,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
                   graphTerm,
                 ));
               } catch (err) {
-                console.debug("[rdfManager.worker] importSerialized.data failed", err);
+                debugLog("[rdfManager.worker] importSerialized.data failed", err);
               }
             });
 
@@ -1518,7 +1528,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               touchedSubjects.add(subjectTermToString(normalized.subject));
               addedSerialized.push(serializeQuad(normalized));
             } catch (err) {
-              console.debug("[rdfManager.worker] importSerialized.data failed", err);
+              debugLog("[rdfManager.worker] importSerialized.data failed", err);
             }
           }
 
@@ -1888,7 +1898,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               removed += 1;
               touchedSubjects.add(subjectTermToString(q.subject));
             } catch (err) {
-              console.debug("[rdfManager.worker] removeQuadsByNamespace remove failed", err);
+              debugLog("[rdfManager.worker] removeQuadsByNamespace remove failed", err);
             }
           }
           if (removed > 0) {
@@ -1962,7 +1972,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
                 touchedSubjects.add(subjectTermToString(q.subject));
               }
             } catch (err) {
-              console.debug("[rdfManager.worker] purgeNamespace removal failed", err);
+              debugLog("[rdfManager.worker] purgeNamespace removal failed", err);
             }
           }
           if (removed > 0) {
@@ -2046,7 +2056,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               renamed += 1;
               touchedSubjects.add(newS !== null ? newS : subjectTermToString(subj));
             } catch (err) {
-              console.debug("[rdfManager.worker] renameNamespaceUri failed for quad", err);
+              debugLog("[rdfManager.worker] renameNamespaceUri failed for quad", err);
             }
           }
 
@@ -2088,7 +2098,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           const emission = prepareSubjectEmissionFromSet(subjectSet, store, DataFactory);
           // Diagnostic: log total quad count across all subjects so we can verify inferred quads are included
           const totalQuadCount = Object.values(emission.quadsBySubject).reduce((s, qs) => s + qs.length, 0);
-          console.debug("[emitAllSubjects] subjects:", emission.subjects.length, "totalQuads:", totalQuadCount, "graph:", graphName);
+          debugLog("[emitAllSubjects] subjects:", emission.subjects.length, "totalQuads:", totalQuadCount, "graph:", graphName);
           if (emission.subjects.length > 0) {
             emitSubjects(
               emission.subjects,
@@ -2556,14 +2566,14 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
 
       try {
         const sabAvailable = typeof SharedArrayBuffer !== 'undefined';
-        console.debug("[VG_REASONING_WORKER] Konclude init", { sabAvailable, crossOriginIsolated: (globalThis as any).crossOriginIsolated });
+        debugLog("[VG_REASONING_WORKER] Konclude init", { sabAvailable, crossOriginIsolated: (globalThis as any).crossOriginIsolated });
         if (!sabAvailable) {
           throw new Error("SharedArrayBuffer unavailable — page needs HTTPS + COOP/COEP headers (or localhost). Use reasonerBackend='n3' as fallback.");
         }
         const konclude = getKoncludeReasoner();
         await konclude.ready;
         const kQuadCount = kWorkingStore.size ?? kWorkingStore.countQuads?.(null,null,null,null) ?? 0;
-        console.debug("[VG_REASONING_WORKER] Konclude input quads:", kQuadCount);
+        debugLog("[VG_REASONING_WORKER] Konclude input quads:", kQuadCount);
         reasoningStage({ type: "reasoningStage", id: msg.id, stage: "consistency-check", meta: { backend: 'konclude' } });
         const kStart = Date.now();
         // Phase 1: consistency check — populates cache in the Konclude instance so
@@ -2585,7 +2595,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           kReasonerDuration = Date.now() - kStart;
           kIsConsistent = false;
           kMipsErrors = mips.map(mipsToReasoningError);
-          console.debug("[VG_REASONING_WORKER] Konclude inconsistency detected, MIPS count:", mips.length);
+          debugLog("[VG_REASONING_WORKER] Konclude inconsistency detected, MIPS count:", mips.length);
           reasoningStage({ type: "reasoningStage", id: msg.id, stage: "inconsistent", meta: { durationMs: kReasonerDuration, mipsCount: mips.length } });
         }
       } catch (err) {
@@ -2600,7 +2610,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
 
       if (kUsedReasoner) {
         const rawInferred: Quad[] = kWorkingStore.getQuads(null, null, null, kInferredGraphTerm);
-        console.debug("[VG_REASONING_WORKER] Konclude rawInferred from store:", rawInferred.length);
+        debugLog("[VG_REASONING_WORKER] Konclude rawInferred from store:", rawInferred.length);
         for (const inferredQuad of skolemizeQuads(rawInferred, DataFactory)) {
           const key = quadKeyFromTerms(inferredQuad);
           if (!kAdditionSeen.has(key)) {
@@ -2740,13 +2750,13 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
 
     try {
       const countsBefore = collectGraphCountsFromStore(workingStore);
-      console.debug("[VG_REASONING_WORKER] quad counts before reasoning", {
+      debugLog("[VG_REASONING_WORKER] quad counts before reasoning", {
         id: msg.id,
         total: Object.values(countsBefore).reduce((acc, v) => acc + v, 0),
         counts: countsBefore,
       });
     } catch (err) {
-      console.debug("[VG_REASONING_WORKER] unable to log pre-reasoning counts", err);
+      debugLog("[VG_REASONING_WORKER] unable to log pre-reasoning counts", err);
     }
 
     const parser = ParserCls ? new (ParserCls as any)({ format: "text/n3" }) : null;
@@ -2857,7 +2867,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
 
     try {
       const totalRuleQuads = ruleDiagnostics.reduce((acc, item) => acc + item.quadCount, 0);
-      console.debug("[VG_REASONING_WORKER] ruleset load summary", {
+      debugLog("[VG_REASONING_WORKER] ruleset load summary", {
         id: msg.id,
         requested: rulesets,
         parsedRuleSets: ruleDiagnostics,
@@ -2913,7 +2923,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           stage: "reasoner-complete",
           meta: { durationMs: reasonerDuration, ruleQuadCount: totalRuleQuads },
         });
-        console.debug("[VG_REASONING_WORKER] reasoner run complete", {
+        debugLog("[VG_REASONING_WORKER] reasoner run complete", {
           id: msg.id,
           durationMs: reasonerDuration,
           ruleQuadCount: totalRuleQuads,
@@ -2933,7 +2943,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
 
     const capturedInsertions = captureReasonerInsertions();
 
-    console.debug("[VG_REASONING_WORKER] captured insertions summary", {
+    debugLog("[VG_REASONING_WORKER] captured insertions summary", {
       id: msg.id,
       capturedCount: capturedInsertions.length,
       usedReasoner,
@@ -3109,7 +3119,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       const countsAfter = collectGraphCountsFromStore(
         mutateSharedStore && sharedStoreRef ? sharedStoreRef : workingStore,
       );
-      console.debug("[VG_REASONING_WORKER] quad counts after reasoning", {
+      debugLog("[VG_REASONING_WORKER] quad counts after reasoning", {
         id: msg.id,
         durationMs,
         total: Object.values(countsAfter).reduce((acc, v) => acc + v, 0),
@@ -3119,7 +3129,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         ruleQuadCount: ruleDiagnostics.reduce((acc, item) => acc + item.quadCount, 0),
       });
     } catch (err) {
-      console.debug("[VG_REASONING_WORKER] unable to log post-reasoning counts", err);
+      debugLog("[VG_REASONING_WORKER] unable to log post-reasoning counts", err);
     }
 
     const result: ReasoningResultMessage = {

@@ -135,6 +135,7 @@ export type RDFWorkerCommandPayloads = {
     graphName?: string;
     limit?: number;
   };
+  setDebug: { enabled: boolean };
 };
 
 export const RDF_WORKER_COMMANDS = [
@@ -162,6 +163,7 @@ export const RDF_WORKER_COMMANDS = [
   "purgeNamespace",
   "renameNamespaceUri",
   "sparqlQuery",
+  "setDebug",
 ] as const;
 
 export type RDFWorkerCommandName = (typeof RDF_WORKER_COMMANDS)[number];
@@ -591,6 +593,10 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
     if (typeof limit !== "undefined") {
       invariant(typeof limit === "number", "sparqlQuery.limit must be a number when provided");
     }
+  },
+  setDebug(payload) {
+    assertPlainObject(payload, "setDebug payload must be an object");
+    assertBoolean((payload as { enabled: unknown }).enabled, "setDebug.enabled must be a boolean");
   },
 };
 

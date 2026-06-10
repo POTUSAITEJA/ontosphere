@@ -49,6 +49,7 @@ try {
    try { (window as any).__VG_DEBUG__ = Boolean(cfg?.debugAll); } catch (_) { void 0; }
    try { (window as any).__VG_LOG_RDF_WRITES = Boolean(cfg?.debugAll); } catch (_) { void 0; }
    try { (window as any).__VG_DEBUG_STACKS__ = Boolean(cfg?.debugAll); } catch (_) { void 0; }
+   try { rdfManager.setDebug(Boolean(cfg?.debugAll)); } catch (_) { void 0; }
 
    // Helper used by wrappers to determine whether VG_* messages should be emitted.
    const isVgMessage = (args: any[]) => {
@@ -92,6 +93,7 @@ try {
        try { (window as any).__VG_DEBUG__ = Boolean(v); } catch (_) { void 0; }
        try { (window as any).__VG_LOG_RDF_WRITES = Boolean(v); } catch (_) { void 0; }
        try { (window as any).__VG_DEBUG_STACKS__ = Boolean(v); } catch (_) { void 0; }
+       try { rdfManager.setDebug(Boolean(v)); } catch (_) { void 0; }
      });
      try { (window as any).__VG_DEBUG_SUBSCRIBE_UNSUB = unsub; } catch (_) { void 0; }
    } catch (_) { /* ignore subscribe failures */ }

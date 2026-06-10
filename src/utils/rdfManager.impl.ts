@@ -629,6 +629,10 @@ export class RDFManagerImpl {
     }
   }
 
+  setDebug(enabled: boolean): void {
+    void this.worker.call("setDebug", { enabled }).catch(() => {});
+  }
+
   onChange(cb: ChangeSubscriber): void {
     this.changeSubscribers.add(cb);
   }
