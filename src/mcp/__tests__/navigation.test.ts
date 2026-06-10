@@ -2,9 +2,14 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Create mocks in vi.hoisted so their implementations survive vi.clearAllMocks().
+const { mockFetchQuadsPage } = vi.hoisted(() => ({
+  mockFetchQuadsPage: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+}));
+
 vi.mock('@/utils/rdfManager', () => ({
   rdfManager: {
-    fetchQuadsPage: vi.fn(),
+    fetchQuadsPage: mockFetchQuadsPage,
   },
 }));
 
@@ -12,7 +17,6 @@ vi.mock('@/mcp/workspaceContext', () => ({
   getWorkspaceRefs: vi.fn(),
 }));
 
-import { rdfManager } from '@/utils/rdfManager';
 import { navigationTools } from '../tools/navigation';
 
 const getNeighbors = navigationTools.find(t => t.name === 'getNeighbors')!;
@@ -25,11 +29,12 @@ const RDFS_SUBCLASS = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
 const OWL_CLASS = 'http://www.w3.org/2002/07/owl#Class';
 
 function mockQuads(items: Array<{ subject: string; predicate: string; object: string }>) {
-  (rdfManager.fetchQuadsPage as ReturnType<typeof vi.fn>).mockResolvedValue({ items, total: items.length });
+  mockFetchQuadsPage.mockResolvedValue({ items, total: items.length });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockFetchQuadsPage.mockResolvedValue({ items: [], total: 0 });
 });
 
 // ---------------------------------------------------------------------------

@@ -2,21 +2,30 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Create mocks in vi.hoisted so their implementations survive vi.clearAllMocks().
+const { mockAddTriple, mockRemoveTriple, mockFetchQuadsPage, mockGetWorkspaceRefs } = vi.hoisted(() => ({
+  mockAddTriple: vi.fn().mockResolvedValue(undefined),
+  mockRemoveTriple: vi.fn().mockResolvedValue(undefined),
+  mockFetchQuadsPage: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+  mockGetWorkspaceRefs: vi.fn().mockReturnValue({
+    ctx: { model: { elements: [], links: [], requestLinks: vi.fn().mockResolvedValue(undefined) } },
+    navigateToIri: vi.fn(),
+  }),
+}));
+
 vi.mock('@/utils/rdfManager', () => ({
   rdfManager: {
-    addTriple: vi.fn(),
-    removeTriple: vi.fn(),
-    fetchQuadsPage: vi.fn(),
+    addTriple: mockAddTriple,
+    removeTriple: mockRemoveTriple,
+    fetchQuadsPage: mockFetchQuadsPage,
   },
 }));
 
-// Mock workspaceContext — addTriple needs getWorkspaceRefs for requestLinks + navigateToIri
 vi.mock('@/mcp/workspaceContext', () => ({
-  getWorkspaceRefs: vi.fn(),
+  getWorkspaceRefs: mockGetWorkspaceRefs,
 }));
 
 import { rdfManager } from '@/utils/rdfManager';
-import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import { linkTools } from '../tools/links';
 
 const addLink = linkTools.find((t) => t.name === 'addTriple')!;
@@ -25,10 +34,13 @@ const getLinks = linkTools.find((t) => t.name === 'getLinks')!;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(getWorkspaceRefs).mockReturnValue({
+  mockAddTriple.mockResolvedValue(undefined);
+  mockRemoveTriple.mockResolvedValue(undefined);
+  mockFetchQuadsPage.mockResolvedValue({ items: [], total: 0 });
+  mockGetWorkspaceRefs.mockReturnValue({
     ctx: { model: { elements: [], links: [], requestLinks: vi.fn().mockResolvedValue(undefined) } },
     navigateToIri: vi.fn(),
-  } as never);
+  });
 });
 
 describe('addTriple', () => {
@@ -38,7 +50,7 @@ describe('addTriple', () => {
       predicateIri: 'http://p',
       objectIri: 'http://o',
     });
-    expect(rdfManager.addTriple).toHaveBeenCalledWith('http://s', 'http://p', 'http://o');
+    expect(mockAddTriple).toHaveBeenCalledWith('http://s', 'http://p', 'http://o');
     expect(result).toEqual({
       success: true,
       data: { added: { s: 'http://s', p: 'http://p', o: 'http://o' } },
@@ -51,7 +63,7 @@ describe('addTriple', () => {
       success: false,
       error: 'subjectIri, predicateIri, and objectIri are all required. Call help({tool:"addTriple"}) for the full schema.',
     });
-    expect(rdfManager.addTriple).not.toHaveBeenCalled();
+    expect(mockAddTriple).not.toHaveBeenCalled();
   });
 
   it('returns error when params are null/undefined', async () => {
@@ -70,7 +82,7 @@ describe('removeLink', () => {
       predicateIri: 'http://p',
       objectIri: 'http://o',
     });
-    expect(rdfManager.removeTriple).toHaveBeenCalledWith('http://s', 'http://p', 'http://o');
+    expect(mockRemoveTriple).toHaveBeenCalledWith('http://s', 'http://p', 'http://o');
     expect(result).toEqual({
       success: true,
       data: { removed: { s: 'http://s', p: 'http://p', o: 'http://o' } },
@@ -83,7 +95,7 @@ describe('removeLink', () => {
       success: false,
       error: 'subjectIri, predicateIri, and objectIri are all required',
     });
-    expect(rdfManager.removeTriple).not.toHaveBeenCalled();
+    expect(mockRemoveTriple).not.toHaveBeenCalled();
   });
 });
 
@@ -93,10 +105,10 @@ describe('getLinks', () => {
       { subject: 'http://s1', predicate: 'http://p1', object: 'http://o1' },
       { subject: 'http://s2', predicate: 'http://p2', object: 'http://o2' },
     ];
-    vi.mocked(rdfManager.fetchQuadsPage).mockResolvedValue({ items: mockItems, total: 2 });
+    mockFetchQuadsPage.mockResolvedValue({ items: mockItems, total: 2 });
 
     const result = await getLinks.handler({ subjectIri: 'http://s1', limit: 50 });
-    expect(rdfManager.fetchQuadsPage).toHaveBeenCalledWith({
+    expect(mockFetchQuadsPage).toHaveBeenCalledWith({
       graphName: 'urn:vg:data',
       filter: { subject: 'http://s1', predicate: undefined, object: undefined },
       limit: 50,
@@ -113,9 +125,9 @@ describe('getLinks', () => {
   });
 
   it('defaults limit to 100 when not provided', async () => {
-    vi.mocked(rdfManager.fetchQuadsPage).mockResolvedValue({ items: [], total: 0 });
+    mockFetchQuadsPage.mockResolvedValue({ items: [], total: 0 });
     await getLinks.handler({});
-    expect(rdfManager.fetchQuadsPage).toHaveBeenCalledWith(
+    expect(mockFetchQuadsPage).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 100 })
     );
   });
