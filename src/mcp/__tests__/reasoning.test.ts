@@ -38,7 +38,7 @@ describe('runReasoning', () => {
   it('returns inferredTriples from meta.addedCount when available', async () => {
     mockRunReasoning.mockResolvedValueOnce({ meta: { addedCount: 42 } });
     const result = await tool('runReasoning').handler({});
-    expect(result).toEqual({ success: true, data: { inferredTriples: 42 } });
+    expect(result).toEqual({ success: true, data: { inferredTriples: 42, isConsistent: null, errors: [] } });
   });
 
   it('calls refs.runReasoning exactly once per invocation', async () => {
@@ -71,7 +71,7 @@ describe('runReasoning', () => {
       dataProvider: { clearInferred: mockClearInferred },
     });
     const result = await tool('runReasoning').handler({});
-    expect(result).toEqual({ success: true, data: { inferredTriples: 0 } });
+    expect(result).toEqual({ success: true, data: { inferredTriples: 0, isConsistent: null, errors: [] } });
   });
 
   it('falls back to inferences.length when meta.addedCount is absent', async () => {
@@ -79,7 +79,7 @@ describe('runReasoning', () => {
       inferences: [{ type: 'class', subject: 'a', predicate: 'b', object: 'c', confidence: 1 }],
     });
     const result = await tool('runReasoning').handler({});
-    expect(result).toEqual({ success: true, data: { inferredTriples: 1 } });
+    expect(result).toEqual({ success: true, data: { inferredTriples: 1, isConsistent: null, errors: [] } });
   });
 
   it('returns error if refs.runReasoning throws', async () => {
