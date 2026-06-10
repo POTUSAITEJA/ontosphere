@@ -9,7 +9,7 @@ const EXPORT_FORMATS = ['turtle', 'jsonld', 'rdfxml', 'svg', 'png'];
 // ---------------------------------------------------------------------------
 const runReasoning: McpTool = {
   name: 'runReasoning',
-  description: "Run OWL reasoning over the loaded graph and infer new triples. Default backend is 'konclude' (full OWL 2 DL). Pass reasonerBackend='n3' to use N3 rule-based inference instead. Pass clearBefore=true to clear previous inferences first.",
+  description: "Run OWL reasoning over the loaded graph and infer new triples. Default backend is 'konclude' (full OWL 2 DL). Pass reasonerBackend='n3' to use N3 rule-based inference instead. Pass clearBefore=true to clear previous inferences first. Response: { inferredTriples, isConsistent: boolean|null, errors: ReasoningError[] }. isConsistent=false means the ontology is logically contradictory — inferences were skipped and errors contains per-entity clash details (nodeId: individual IRI, rule, message). isConsistent=null when using the n3 backend or when validation was unavailable.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -30,7 +30,19 @@ const runReasoning: McpTool = {
       const result = await refs.runReasoning?.(backend);
       const inferredTriples = (result as any)?.meta?.addedCount ?? (result as any)?.inferences?.length ?? 0;
 
-      return { success: true, data: { inferredTriples } };
+      return {
+        success: true,
+        data: {
+          inferredTriples,
+          isConsistent: (result as any)?.isConsistent ?? null,
+          errors: ((result as any)?.errors ?? []).map((e: any) => ({
+            nodeId: e.nodeId ?? null,
+            rule: e.rule ?? 'unknown',
+            severity: e.severity ?? 'error',
+            message: e.message ?? '',
+          })),
+        },
+      };
     } catch (e) {
       return { success: false, error: String(e) };
     }

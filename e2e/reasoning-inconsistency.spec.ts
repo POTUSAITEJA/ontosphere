@@ -1,0 +1,114 @@
+/**
+ * OWL DL inconsistency detection end-to-end tests.
+ *
+ * Uses window.__mcpTools bridge (same pattern as reasoning-named-restriction.spec.ts).
+ * Loads fixtures inline via fs.readFileSync so no URL assumptions are needed.
+ *
+ * ?ontologies= (empty) prevents QUDT auto-loading, keeping the store small so the
+ * BlackBox MIPS algorithm runs on the fixture quads only (~26), not on 2000+ QUDT quads.
+ *
+ * Requires: npm run dev (http://localhost:8080) with SharedArrayBuffer enabled.
+ */
+
+import { test, expect, Page } from '@playwright/test';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const BASE_URL = (process.env.VG_URL ?? 'http://localhost:8080') + '?ontologies=';
+
+async function waitForMcpTools(page: Page) {
+  await page.waitForFunction(
+    () => !!(window as any).__mcpTools && typeof (window as any).__mcpTools['loadRdf'] === 'function',
+    { timeout: 20_000 },
+  );
+}
+
+async function call(page: Page, tool: string, params: object) {
+  return page.evaluate(
+    ([t, p]) => (window as any).__mcpTools[t](p),
+    [tool, params] as const,
+  );
+}
+
+test('MCP runReasoning: inconsistent TTL → isConsistent=false, errors with frank nodeId, inferredTriples=0', async ({ page }) => {
+  await page.goto(BASE_URL);
+  await waitForMcpTools(page);
+
+  const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
+  await call(page, 'loadRdf', { turtle });
+
+  const result = await call(page, 'runReasoning', {}) as any;
+  console.log('[TEST] runReasoning result:', JSON.stringify(result?.data));
+
+  expect(result?.success).toBe(true);
+  expect(result?.data?.isConsistent).toBe(false);
+  expect(result?.data?.errors?.length).toBeGreaterThan(0);
+  expect(result?.data?.inferredTriples).toBe(0);
+
+  const firstError = result?.data?.errors?.[0];
+  expect(firstError?.severity).toBe('critical');
+  expect(firstError?.nodeId).toMatch(/frank/i);
+});
+
+test('TopBar indicator: inconsistent TTL → button shows Inconsistent', async ({ page }) => {
+  await page.goto(BASE_URL);
+  await waitForMcpTools(page);
+
+  const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
+  await call(page, 'loadRdf', { turtle });
+  await call(page, 'runReasoning', {});
+
+  const button = page.locator('button.glass-btn--status-error');
+  await button.waitFor({ timeout: 10_000 });
+  const text = await button.textContent();
+  console.log('[TEST] TopBar button text:', text);
+  expect(text).toMatch(/Inconsistent/i);
+});
+
+test('Modal content: Summary shows OWL DL card, Errors tab shows affected node', async ({ page }) => {
+  await page.goto(BASE_URL);
+  await waitForMcpTools(page);
+
+  const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
+  await call(page, 'loadRdf', { turtle });
+  await call(page, 'runReasoning', {});
+
+  // Click the error button to open the modal
+  const button = page.locator('button.glass-btn--status-error');
+  await button.waitFor({ timeout: 10_000 });
+  await button.click();
+
+  const dialog = page.locator('[role="dialog"]');
+  await dialog.waitFor({ timeout: 10_000 });
+
+  // Summary tab should show the OWL DL inconsistency card
+  await expect(dialog.getByText('OWL DL inconsistency detected')).toBeVisible();
+
+  // Switch to Errors tab
+  await dialog.getByRole('tab', { name: /errors/i }).click();
+
+  // Should show "Affected: Node" with the individual IRI
+  await expect(dialog.getByText(/Affected:/i)).toBeVisible();
+  await expect(dialog.getByText(/frank/i).first()).toBeVisible();
+});
+
+test('Consistent sanity: reasoning-demo.ttl → isConsistent=true, errors=0, inferredTriples>0, TopBar Valid', async ({ page }) => {
+  await page.goto(BASE_URL);
+  await waitForMcpTools(page);
+
+  const turtle = fs.readFileSync(path.resolve('public/reasoning-demo.ttl'), 'utf-8');
+  await call(page, 'loadRdf', { turtle });
+
+  const result = await call(page, 'runReasoning', {}) as any;
+  console.log('[TEST] consistent runReasoning result:', JSON.stringify(result?.data));
+
+  expect(result?.success).toBe(true);
+  expect(result?.data?.isConsistent).toBe(true);
+  expect(result?.data?.errors?.length).toBe(0);
+  expect(result?.data?.inferredTriples).toBeGreaterThan(0);
+
+  const okButton = page.locator('button.glass-btn--status-ok');
+  await okButton.waitFor({ timeout: 10_000 });
+  const text = await okButton.textContent();
+  expect(text).toMatch(/Valid/i);
+});
