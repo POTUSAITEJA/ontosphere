@@ -49,7 +49,7 @@ Key capabilities
 - **TBox / ABox views**: toggle between ontology-level classes/properties (TBox) and data-level individuals (ABox).
 - **Layout engine**: multiple algorithms — Dagre (horizontal/vertical), ELK (layered, force, stress, radial), and Reactodia-default — all running in Web Workers so the UI stays responsive. Spacing is adjustable via a slider; re-layout triggers automatically when spacing changes.
 - **Clustering**: automatic grouping of large graphs on load. Three algorithms available — Label Propagation (default), Louvain, and K-Means. Threshold is configurable (default 100 nodes). Expand/collapse individual clusters or all at once from the toolbar.
-- **DL reasoning (Konclude)**: run OWL 2 DL inference in the browser and see inferred triples rendered as amber dashed edges; inferred types/annotations appear in amber italic. A reasoning report lists all inferred triples. Clear inferred triples any time without affecting asserted data.
+- **DL reasoning (Konclude)**: run OWL 2 DL inference in the browser and see inferred triples rendered as amber dashed edges; inferred types/annotations appear in amber italic. A reasoning report lists all inferred triples. Includes automatic OWL DL consistency checking — the Errors tab shows per-entity clash details when the ontology is contradictory. Clear inferred triples any time without affecting asserted data.
 - **Namespace management**: edit namespace URIs directly in the legend panel (rename propagates across all stored triples). Colour-coded namespace badges on nodes and edges.
 - Export the current graph as Turtle, RDF/XML, or JSON-LD.
 - **Workflow catalog**: drag reusable workflow template cards from the sidebar onto the canvas to instantiate connected subgraphs.
@@ -181,6 +181,8 @@ Reasoning
 
 Ontosphere runs OWL reasoning entirely in the browser via a pluggable backend. The default is **Konclude** (full OWL 2 DL). Inferred triples appear as amber dashed edges; inferred types and annotations appear in amber italic. A reasoning report lists all inferred triples. Reasoning is idempotent — running it again produces no additional triples. Use **Clear inferred** to remove all inferred triples without affecting asserted data. See [OWL 2 DL vs OWL-RL comparison](docs/reasoning-comparison.md) for a side-by-side visual example.
 
+**OWL DL consistency checking** runs automatically alongside inference (Konclude only). If the ontology is logically contradictory, reasoning is skipped and the report's **Errors** tab shows per-entity clash details (affected individual, violated axiom, description). An "OWL DL inconsistency detected" banner appears in the report. Common inconsistencies: an individual in two `owl:disjointWith` classes, an `owl:allValuesFrom` restriction violated by an asserted type, or an `owl:AsymmetricProperty` / `owl:IrreflexiveProperty` cycle. The N3 backend does not perform consistency checking (`isConsistent` is always `null`).
+
 ### Konclude (default — OWL 2 DL)
 
 [Konclude](https://www.derivo.de/products/konclude/) is a complete tableau reasoner for the description logic **SROIQ(D)** (OWL 2 DL), compiled to WebAssembly. It runs classification over the loaded ontology and writes `rdfs:subClassOf` and `owl:equivalentClass` inferences.
@@ -222,6 +224,11 @@ The demo (`public/reasoning-demo.ttl`) defines a Person → Employee → Manager
 11. **owl:propertyChainAxiom** — `hasGrandManager ← hasSupervisor ∘ hasSupervisor`: `carol→bob→alice` → `carol hasGrandManager alice`.
 12. **owl:unionOf** — `LeadershipTeam ≡ Executive ∪ Manager`: `alice` (Executive) and `dave` (inferred Manager) → inferred `LeadershipTeam`.
 13. **owl:sameAs** — `aliceCEO sameAs alice`: `aliceCEO` inherits all of `alice`'s inferred types including `Executive`.
+
+A separate **inconsistency demo** (`public/reasoning-demo-inconsistent.ttl`) shows the consistency checker in action:
+[Open inconsistency demo ↗](https://thhanke.github.io/ontosphere/?rdfUrl=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/reasoning-demo-inconsistent.ttl)
+
+`inc:frank` is asserted as both `inc:Employee` and `inc:Contractor`, which are declared `owl:disjointWith`. Running reasoning produces `isConsistent: false`, reasoning is skipped, and the report's Errors tab shows the disjointness clash on `frank`.
 
 CORS and proxies
 ----------------
@@ -410,7 +417,7 @@ loadOntology (TBox)
   → addLink ×N  (object-property triples, edges appear on canvas)
   → runLayout   (dagre-lr recommended)
   → expandNode  (reveal annotation property cards — omit iri to expand all)
-  → runReasoning (infer subClass / domain / range entailments)
+  → runReasoning (infer subClass / domain / range entailments; isConsistent=false signals contradiction)
   → fitCanvas + exportImage   (SVG snapshot, token-efficient)
   → exportGraph(turtle)       (final deliverable)
 ```
