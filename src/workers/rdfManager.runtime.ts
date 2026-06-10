@@ -27,10 +27,10 @@ import { QueryEngine } from "@comunica/query-sparql-rdfjs";
 const KONCLUDE_INFERRED_GRAPH_IRI = "urn:vg:inferred";
 
 // ---------------------------------------------------------------------------
-// Binary codec — verbatim from rdf-reasoner-konclude v0.2.0 ts/intern.ts.
+// Binary codec — verbatim from rdf-reasoner-konclude v0.3.0 ts/intern.ts.
 // Not exported from the package public API; inlined here to avoid importing
 // private dist paths. Coupled to the worker.js in public/rdf-reasoner-konclude/
-// — both come from the same package version. Pin: 0.2.0
+// — both come from the same package version. Pin: 0.3.0
 // ---------------------------------------------------------------------------
 
 const _enc = new TextEncoder();
@@ -178,7 +178,7 @@ function _decodeBuffers(combined: ArrayBuffer): N3.Quad[] {
 }
 
 // ---------------------------------------------------------------------------
-// KoncludeReasoner — adapted from RdfReasoner in rdf-reasoner-konclude v0.2.0.
+// KoncludeReasoner — adapted from RdfReasoner in rdf-reasoner-konclude v0.3.0.
 // Identical to upstream except the worker URL uses an absolute public path
 // instead of new URL("./worker.js", import.meta.url), which resolves
 // incorrectly inside Vite worker bundles.
@@ -196,7 +196,7 @@ class KoncludeReasoner {
     // resolves to the bundle URL inside a Vite worker, not the package directory.
     // BASE_URL is "/" in dev and "/ontosphere/" on GitHub Pages.
     // Increment v= when upgrading rdf-reasoner-konclude.
-    this.worker = new Worker(`${import.meta.env.BASE_URL}rdf-reasoner-konclude/worker.js?v=17`, { type: "module" });
+    this.worker = new Worker(`${import.meta.env.BASE_URL}rdf-reasoner-konclude/worker.js?v=19`, { type: "module" });
 
     let readyReject!: (reason: Error) => void;
     let readySettled = false;
@@ -285,7 +285,8 @@ class KoncludeReasoner {
       // realization runs TBox classification + ABox individual typing in one pass.
       // Calling classification separately then realization drains the result buffer mid-sequence,
       // leaving realization with no output — hence the single-pass approach mirrors materialize().
-      await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer], [tripleBuffer, strTableBuffer]);
+      // forRealization=true (3rd arg, added in 0.3.0) configures Konclude for ABox realization.
+      await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer, true], [tripleBuffer, strTableBuffer]);
       await this._call("realization", []);
       const resultBuf = (await this._call("getInferredTripleBuffer", [])) as ArrayBuffer;
       const inferredQuads = _decodeBuffers(resultBuf);
@@ -296,6 +297,123 @@ class KoncludeReasoner {
       }
 
       console.debug("[VG_REASONING_WORKER] Konclude inferred quads:", inferredQuads.length);
+    });
+    this._queue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  private async _checkInconsistencyDirect(candidates: N3.Quad[]): Promise<boolean> {
+    const BNODE_PREFIX = "urn:vg:bnode:";
+    const deskolemized = candidates.map((q) => {
+      const subj = q.subject.termType === "NamedNode" && q.subject.value.startsWith(BNODE_PREFIX)
+        ? N3.DataFactory.blankNode(q.subject.value.slice(BNODE_PREFIX.length))
+        : q.subject;
+      const obj = q.object.termType === "NamedNode" && q.object.value.startsWith(BNODE_PREFIX)
+        ? N3.DataFactory.blankNode(q.object.value.slice(BNODE_PREFIX.length))
+        : q.object;
+      if (subj === q.subject && obj === q.object) return q;
+      return N3.DataFactory.quad(subj, q.predicate, obj, q.graph);
+    });
+    const { tripleBuffer, strTableBuffer } = _encodeToBuffers(deskolemized);
+    await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer, false], [tripleBuffer, strTableBuffer]);
+    await this._call("classification", []);
+    const consistent = (await this._call("consistency", [])) as boolean;
+    return !consistent;
+  }
+
+  checkConsistency(store: N3.Store): Promise<boolean> {
+    const result = this._queue.then(async () => {
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred"]);
+      const candidates: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
+        const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
+        return !EXCLUDED_GRAPHS.has(g);
+      });
+      return !(await this._checkInconsistencyDirect(candidates));
+    });
+    this._queue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  explainInconsistency(store: N3.Store, maxJustifications = 1): Promise<N3.Quad[][]> {
+    const result = this._queue.then(async () => {
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred"]);
+      const allBase: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
+        const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
+        return !EXCLUDED_GRAPHS.has(g);
+      });
+
+      if (!(await this._checkInconsistencyDirect(allBase))) return [];
+      if (maxJustifications === 0) return [];
+
+      const allCandidates = allBase;
+
+      const justifications: N3.Quad[][] = [];
+
+      const findOneJustification = async (candidates: N3.Quad[]): Promise<N3.Quad[] | null> => {
+        let working = [...candidates];
+        let changed = true;
+        while (changed && working.length > 1) {
+          changed = false;
+          const mid = Math.floor(working.length / 2);
+          const firstHalf = working.slice(0, mid);
+          const secondHalf = working.slice(mid);
+          if (await this._checkInconsistencyDirect(firstHalf)) {
+            working = firstHalf; changed = true; continue;
+          }
+          if (await this._checkInconsistencyDirect(secondHalf)) {
+            working = secondHalf; changed = true; continue;
+          }
+          break;
+        }
+        let i = 0;
+        while (i < working.length) {
+          if (working.length === 1) break;
+          const without = [...working.slice(0, i), ...working.slice(i + 1)];
+          if (await this._checkInconsistencyDirect(without)) {
+            working = without;
+          } else {
+            i++;
+          }
+        }
+        return working;
+      };
+
+      const j1 = await findOneJustification(allCandidates);
+      if (!j1 || j1.length === 0) return [];
+      justifications.push(j1);
+
+      if (maxJustifications > 1) {
+        const hsQueue: Array<{ excluded: Set<string>; justification: N3.Quad[] }> = [
+          { excluded: new Set(), justification: j1 },
+        ];
+        const exploredExclusions = new Set<string>();
+        while (hsQueue.length > 0 && justifications.length < maxJustifications) {
+          const { excluded, justification: currentJ } = hsQueue.shift()!;
+          const excludedKey = [...excluded].sort().join("|");
+          if (exploredExclusions.has(excludedKey)) continue;
+          exploredExclusions.add(excludedKey);
+          for (const axiomInJ of currentJ) {
+            const newExcluded = new Set(excluded);
+            const axKey = `${axiomInJ.subject.value}\0${axiomInJ.predicate.value}\0${axiomInJ.object.value}`;
+            newExcluded.add(axKey);
+            const newExcludedKey = [...newExcluded].sort().join("|");
+            if (exploredExclusions.has(newExcludedKey)) continue;
+            const reduced = allCandidates.filter(q => !newExcluded.has(`${q.subject.value}\0${q.predicate.value}\0${q.object.value}`));
+            if (!(await this._checkInconsistencyDirect(reduced))) continue;
+            const jNew = await findOneJustification(reduced);
+            if (!jNew || jNew.length === 0) continue;
+            const jKey = jNew.map(q => `${q.subject.value}\0${q.predicate.value}\0${q.object.value}`).sort().join("|");
+            const alreadyFound = justifications.some(j => j.map(q => `${q.subject.value}\0${q.predicate.value}\0${q.object.value}`).sort().join("|") === jKey);
+            if (!alreadyFound) {
+              justifications.push(jNew);
+              if (justifications.length >= maxJustifications) break;
+              hsQueue.push({ excluded: newExcluded, justification: jNew });
+            }
+          }
+        }
+      }
+
+      return justifications;
     });
     this._queue = result.then(() => {}, () => {});
     return result;
@@ -378,6 +496,7 @@ type ReasoningResultMessage = {
   usedReasoner: boolean;
   workerDurationMs?: number;
   ruleQuadCount?: number;
+  isConsistent?: boolean | null;
 };
 
 type ReasoningErrorMessage = {
@@ -2282,6 +2401,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             addedCount: outcome.addedCount,
             workerDurationMs: outcome.workerDurationMs,
             ruleQuadCount: outcome.ruleQuadCount,
+            isConsistent: outcome.isConsistent,
           };
           break;
         }
@@ -2300,6 +2420,86 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         stack: errorStack,
       });
     }
+  }
+
+  function mipsToReasoningError(mips: N3.Quad[]): ReasoningError {
+    const RDF_TYPE_P = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    const OWL_NAMED_INDIVIDUAL = "http://www.w3.org/2002/07/owl#NamedIndividual";
+    const CLASH_PREDICATES = new Set([
+      "http://www.w3.org/2002/07/owl#disjointWith",
+      "http://www.w3.org/2002/07/owl#maxCardinality",
+      "http://www.w3.org/2002/07/owl#maxQualifiedCardinality",
+      "http://www.w3.org/2002/07/owl#complementOf",
+      "http://www.w3.org/2002/07/owl#AsymmetricProperty",
+    ]);
+
+    // Find nodeId: subject of rdf:type quad where object is a user-defined class
+    // (not an OWL/RDF/RDFS vocabulary term). This picks individuals, not class declarations.
+    let nodeId: string | undefined;
+    for (const q of mips) {
+      if (
+        q.predicate.value === RDF_TYPE_P &&
+        q.object.termType === "NamedNode" &&
+        !q.object.value.startsWith("http://www.w3.org/") &&
+        q.subject.termType === "NamedNode"
+      ) {
+        nodeId = q.subject.value;
+        break;
+      }
+    }
+    if (!nodeId) {
+      for (const q of mips) {
+        if (
+          q.predicate.value === RDF_TYPE_P &&
+          q.subject.termType === "NamedNode" &&
+          !q.subject.value.startsWith("http://www.w3.org/")
+        ) {
+          nodeId = q.subject.value;
+          break;
+        }
+      }
+    }
+    if (!nodeId) {
+      for (const q of mips) {
+        if (
+          q.subject.termType === "NamedNode" &&
+          !q.subject.value.startsWith("http://www.w3.org/")
+        ) {
+          nodeId = q.subject.value;
+          break;
+        }
+      }
+    }
+
+    let rule = "owl:inconsistency";
+    for (const q of mips) {
+      if (CLASH_PREDICATES.has(q.predicate.value)) {
+        const local = q.predicate.value.split(/[#/]/).pop() ?? q.predicate.value;
+        rule = `owl:${local}`;
+        break;
+      }
+    }
+
+    const abbrev = (iri: string): string => {
+      const known: Record<string, string> = {
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#": "rdf:",
+        "http://www.w3.org/2000/01/rdf-schema#": "rdfs:",
+        "http://www.w3.org/2002/07/owl#": "owl:",
+      };
+      for (const [ns, prefix] of Object.entries(known)) {
+        if (iri.startsWith(ns)) return prefix + iri.slice(ns.length);
+      }
+      return iri.split(/[#/]/).pop() ?? iri;
+    };
+
+    const nodeLocalName = nodeId ? abbrev(nodeId) : "unknown";
+    const axiomList = mips
+      .slice(0, 3)
+      .map(q => `${abbrev(q.subject.value)} ${abbrev(q.predicate.value)} ${abbrev(q.object.value)}`)
+      .join("; ");
+    const message = `Clash: ${nodeLocalName} — ${rule}. Involved axioms: ${axiomList}${mips.length > 3 ? ` (+${mips.length - 3} more)` : ""}`;
+
+    return { nodeId, rule, severity: "critical", message };
   }
 
   async function handleRunReasoning(
@@ -2350,6 +2550,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
 
       let kUsedReasoner = false;
       let kReasonerDuration = 0;
+      let kIsConsistent: boolean | null = null;
+      let kMipsErrors: ReasoningError[] = [];
       const kInferredGraphTerm = DataFactory.namedNode("urn:vg:inferred");
 
       try {
@@ -2362,12 +2564,23 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         await konclude.ready;
         const kQuadCount = kWorkingStore.size ?? kWorkingStore.countQuads?.(null,null,null,null) ?? 0;
         console.debug("[VG_REASONING_WORKER] Konclude input quads:", kQuadCount);
-        reasoningStage({ type: "reasoningStage", id: msg.id, stage: "reasoner-start", meta: { backend: 'konclude' } });
+        reasoningStage({ type: "reasoningStage", id: msg.id, stage: "consistency-check", meta: { backend: 'konclude' } });
         const kStart = Date.now();
-        await konclude.reason(kWorkingStore);
-        kReasonerDuration = Date.now() - kStart;
-        kUsedReasoner = true;
-        reasoningStage({ type: "reasoningStage", id: msg.id, stage: "reasoner-complete", meta: { durationMs: kReasonerDuration, backend: 'konclude' } });
+        const mips = await konclude.explainInconsistency(kWorkingStore, 1);
+        if (mips.length === 0) {
+          reasoningStage({ type: "reasoningStage", id: msg.id, stage: "reasoner-start", meta: { backend: 'konclude' } });
+          await konclude.reason(kWorkingStore);
+          kReasonerDuration = Date.now() - kStart;
+          kUsedReasoner = true;
+          kIsConsistent = true;
+          reasoningStage({ type: "reasoningStage", id: msg.id, stage: "reasoner-complete", meta: { durationMs: kReasonerDuration, backend: 'konclude' } });
+        } else {
+          kReasonerDuration = Date.now() - kStart;
+          kIsConsistent = false;
+          kMipsErrors = mips.map(mipsToReasoningError);
+          console.debug("[VG_REASONING_WORKER] Konclude inconsistency detected, MIPS count:", mips.length);
+          reasoningStage({ type: "reasoningStage", id: msg.id, stage: "inconsistent", meta: { durationMs: kReasonerDuration, mipsCount: mips.length } });
+        }
       } catch (err) {
         const errMsg = String((err as Error).message || err);
         console.error("[VG_REASONING_WORKER] Konclude failed:", errMsg);
@@ -2407,8 +2620,9 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         }
       }
 
-      const { warnings: kWarnings, errors: kErrors } = collectShaclResults(kAddedQuads);
-      if (!kUsedReasoner) {
+      const { warnings: kWarnings, errors: kShaclErrors } = collectShaclResults(kAddedQuads);
+      const kErrors: ReasoningError[] = [...kMipsErrors, ...kShaclErrors];
+      if (!kUsedReasoner && kIsConsistent === null) {
         kWarnings.push({
           message: "Konclude OWL DL reasoner unavailable. Requires SharedArrayBuffer (HTTPS or localhost). Switch to reasonerBackend='n3' for rule-based reasoning, or access via HTTPS.",
           rule: "konclude-unavailable",
@@ -2442,6 +2656,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         usedReasoner: kUsedReasoner,
         workerDurationMs: kReasonerDuration,
         ruleQuadCount: 0,
+        isConsistent: kIsConsistent,
       };
 
       if (emitResultEvent) {
@@ -2747,6 +2962,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         usedReasoner: false,
         workerDurationMs: 0,
         ruleQuadCount: ruleDiagnostics.reduce((acc, item) => acc + item.quadCount, 0),
+        isConsistent: null,
       };
 
       if (emitResultEvent) {
@@ -2912,6 +3128,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       usedReasoner,
       workerDurationMs: reasonerDuration,
       ruleQuadCount: ruleDiagnostics.reduce((acc, item) => acc + item.quadCount, 0),
+      isConsistent: null,
     };
 
     if (emitResultEvent) {

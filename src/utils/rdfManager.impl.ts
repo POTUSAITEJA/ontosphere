@@ -709,6 +709,7 @@ export class RDFManagerImpl {
       errors: Array.isArray(safe.errors) ? (safe.errors as ReasoningError[]) : [],
       warnings: Array.isArray(safe.warnings) ? (safe.warnings as ReasoningWarning[]) : [],
       inferences: Array.isArray(safe.inferences) ? (safe.inferences as ReasoningInference[]) : [],
+      isConsistent: typeof safe.isConsistent === "boolean" ? safe.isConsistent : null,
       meta: {
         usedReasoner: !!safe.usedReasoner,
         workerDurationMs: typeof safe.workerDurationMs === "number" ? safe.workerDurationMs : undefined,

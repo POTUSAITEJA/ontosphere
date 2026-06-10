@@ -31,6 +31,7 @@ export interface ReasoningResult {
   warnings: ReasoningWarning[];
   inferences: ReasoningInference[];
   inferredQuads?: { subject: string; predicate: string; object: string; graph?: string }[];
+  isConsistent?: boolean | null;
   meta?: {
     usedReasoner?: boolean;
     workerDurationMs?: number;

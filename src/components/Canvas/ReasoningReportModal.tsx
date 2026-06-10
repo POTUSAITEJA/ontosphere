@@ -251,6 +251,7 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
   }
 
   const { errors, warnings, inferences, status, duration, timestamp } = currentReasoning;
+  const isConsistent = currentReasoning?.isConsistent;
 
   const inferredCount = graphCounts['urn:vg:inferred'] || 0;
 
@@ -358,7 +359,23 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
               </Card>
             </div>
             
-            {status === 'completed' && errors.length === 0 && warnings.length === 0 && (
+            {isConsistent === false && (
+              <Card className="bg-destructive/10 border-destructive/20">
+                <CardContent className="pt-4">
+                  <div className="flex items-center gap-2 text-destructive">
+                    <XCircle className="w-5 h-5" />
+                    <span className="font-medium">OWL DL inconsistency detected</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    The ontology contains a logical contradiction.
+                    Inferred triples were not generated. See the Errors tab for the
+                    specific axioms involved.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
+            {status === 'completed' && errors.length === 0 && warnings.length === 0 && isConsistent !== false && (
               <Card className="bg-success/10 border-success/20">
                 <CardContent className="pt-4">
                   <div className="flex items-center gap-2 text-success">

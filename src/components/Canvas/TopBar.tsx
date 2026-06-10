@@ -221,7 +221,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 currentReasoning ? 'glass-btn--status-ok' : ''
               }`}
               onClick={onOpenReasoningReport}
-              title="View reasoning results"
+              title={currentReasoning?.isConsistent === false ? "OWL DL inconsistency — see reasoning report" : "View reasoning results"}
             >
               {isReasoning ? (
                 <>
@@ -231,7 +231,9 @@ export const TopBar: React.FC<TopBarProps> = ({
                   Reasoning…
                 </>
               ) : currentReasoning ? (
-                currentReasoning.errors?.length ? (
+                currentReasoning.isConsistent === false ? (
+                  <span>⊗ Inconsistent</span>
+                ) : currentReasoning.errors?.length ? (
                   <span>
                     ⚠ {currentReasoning.errors.length} Error{currentReasoning.errors.length !== 1 ? 's' : ''}
                   </span>

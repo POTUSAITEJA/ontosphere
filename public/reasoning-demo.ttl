@@ -7,7 +7,7 @@
 # ── Ontology declaration ──────────────────────────────────────────────────────
 <http://example.com/reasoning-demo> a owl:Ontology ;
     rdfs:label "Reasoning Demo Ontology" ;
-    rdfs:comment "Demonstrates OWL-RL inference: inferred types, inferred object properties, and inferred annotations." .
+    rdfs:comment "Demonstrates OWL 2 DL / SROIQ(D) inference with Konclude: restrictions, cardinality, disjointness/negation, property chains, and sameAs propagation." .
 
 # ── TBox: Class hierarchy ─────────────────────────────────────────────────────
 ex:Person a owl:Class ;
@@ -128,3 +128,112 @@ ex:alice ex:jobTitle "Chief Executive" .
 ex:dave ex:jobTitle "Division Manager" .
 # Inferred: ex:alice rdfs:comment "Chief Executive"
 # Inferred: ex:dave rdfs:comment "Division Manager"
+
+# ── Group 1: Restrictions ─────────────────────────────────────────────────────
+
+ex:Project a owl:Class ;
+    rdfs:label "Project" .
+
+ex:worksOn a owl:ObjectProperty ;
+    rdfs:label "worksOn" ;
+    rdfs:domain ex:Employee ;
+    rdfs:range ex:Project .
+
+# ProjectContributor ≡ ∃worksOn.Project  (someValuesFrom restriction)
+ex:ProjectContributor a owl:Class ;
+    rdfs:label "ProjectContributor" ;
+    owl:equivalentClass [
+        a owl:Restriction ;
+        owl:onProperty ex:worksOn ;
+        owl:someValuesFrom ex:Project
+    ] .
+
+# DirectReport ≡ ∃isManagedBy.{alice}  (hasValue restriction)
+ex:DirectReport a owl:Class ;
+    rdfs:label "DirectReport" ;
+    owl:equivalentClass [
+        a owl:Restriction ;
+        owl:onProperty ex:isManagedBy ;
+        owl:hasValue ex:alice
+    ] .
+
+# DirectorRole ≡ ∀manages.Manager  (allValuesFrom — structural TBox only; no ABox entailment in OWA)
+ex:DirectorRole a owl:Class ;
+    rdfs:label "DirectorRole" ;
+    owl:equivalentClass [
+        a owl:Restriction ;
+        owl:onProperty ex:manages ;
+        owl:allValuesFrom ex:Manager
+    ] .
+
+ex:projectAlpha a owl:NamedIndividual, ex:Project ;
+    rdfs:label "Project Alpha" .
+
+ex:alice ex:worksOn ex:projectAlpha .
+# Inferred: ex:alice rdf:type ex:ProjectContributor
+
+ex:carol ex:worksOn ex:projectAlpha .
+# Inferred: ex:carol rdf:type ex:ProjectContributor
+# Inferred: ex:carol rdf:type ex:DirectReport  (carol isManagedBy alice via inverseOf manages)
+
+# ── Group 2: Cardinality ──────────────────────────────────────────────────────
+
+# TeamLead ≡ (∃manages.Manager) ∩ (∃manages.Employee)
+# Demonstrates owl:intersectionOf + two someValuesFrom restrictions.
+# Note: owl:minCardinality does not trigger ABox realization in Konclude v0.3.0;
+# this intersection approach is the observable-ABox-entailment alternative for Group 2.
+ex:TeamLead a owl:Class ;
+    rdfs:label "TeamLead" ;
+    owl:equivalentClass [
+        a owl:Class ;
+        owl:intersectionOf (
+            [ a owl:Restriction ; owl:onProperty ex:manages ; owl:someValuesFrom ex:Manager ]
+            [ a owl:Restriction ; owl:onProperty ex:manages ; owl:someValuesFrom ex:Employee ]
+        )
+    ] .
+
+ex:eve a owl:NamedIndividual, ex:Employee ;
+    rdfs:label "Eve" .
+
+ex:dave ex:manages ex:eve .
+# dave manages bob (bob inferred Manager via hasSupervisor range) + eve (Employee)
+# Inferred: ex:dave rdf:type ex:TeamLead  (satisfies both someValuesFrom conjuncts)
+
+# ── Group 3: Disjointness / Negation ─────────────────────────────────────────
+
+ex:Contractor a owl:Class ;
+    rdfs:label "Contractor" ;
+    owl:disjointWith ex:Employee .
+
+# NonEmployee ≡ ¬Employee  (complementOf — structural TBox only; no positive ABox type in OWA)
+ex:NonEmployee a owl:Class ;
+    rdfs:label "NonEmployee" ;
+    owl:equivalentClass [ a owl:Class ; owl:complementOf ex:Employee ] .
+
+ex:frank a owl:NamedIndividual, ex:Contractor ;
+    rdfs:label "Frank" .
+# frank is a Contractor; consistent because frank is not asserted as Employee
+
+# ── Group 4: Advanced Expressivity ───────────────────────────────────────────
+# owl:propertyChainAxiom FIRES in v0.3.0 (confirmed by Unit 1 pre-validation).
+# owl:oneOf does NOT fire in v0.3.0; fallback: owl:equivalentClass [ owl:unionOf (...) ].
+
+# hasGrandManager ← hasSupervisor ∘ hasSupervisor  (propertyChainAxiom)
+ex:hasGrandManager a owl:ObjectProperty ;
+    rdfs:label "hasGrandManager" ;
+    owl:propertyChainAxiom ( ex:hasSupervisor ex:hasSupervisor ) .
+# Inferred: ex:carol ex:hasGrandManager ex:alice  (carol→bob→alice via hasSupervisor chain)
+
+# LeadershipTeam ≡ Executive ∪ Manager  (unionOf fallback for owl:oneOf which does not fire)
+ex:LeadershipTeam a owl:Class ;
+    rdfs:label "LeadershipTeam" ;
+    owl:equivalentClass [ a owl:Class ; owl:unionOf ( ex:Executive ex:Manager ) ] .
+# Inferred: ex:alice rdf:type ex:LeadershipTeam  (alice is Executive ⊆ Manager)
+# Inferred: ex:dave rdf:type ex:LeadershipTeam   (dave is inferred Manager via manages domain)
+
+ex:aliceCEO a owl:NamedIndividual ;
+    rdfs:label "AliceCEO" ;
+    owl:sameAs ex:alice .
+# Inferred: ex:aliceCEO rdf:type ex:Executive (and all other types of alice via sameAs)
+
+ex:frank owl:differentFrom ex:alice .

@@ -7,8 +7,8 @@
  * Uses RdfReasoner directly (bypasses the rdfManager worker pipeline) so it
  * runs in Node.js without SharedArrayBuffer / browser Worker setup.
  *
- * v0.2.1 API split:
- *   reason(store)  — TBox only (direct subClassOf chain + owl:Thing)
+ * v0.3.0 API:
+ *   classify(store)  — TBox only (direct subClassOf chain + owl:Thing)
  *   materialize(store, { includeClassHierarchy: true }) — full DL output (TBox + ABox)
  */
 import { describe, it, expect } from "vitest";
@@ -33,11 +33,10 @@ function loadDemoStore(): N3.Store {
 }
 
 describe("Konclude DL reasoning: reasoning-demo.ttl", () => {
-  let reasoner: RdfReasoner;
-
   it(
-    "reason() returns TBox-only direct taxonomy",
+    "classify() returns TBox-only direct taxonomy",
     async () => {
+      let reasoner: RdfReasoner | undefined;
       try {
         reasoner = new RdfReasoner();
         await reasoner.ready;
@@ -50,21 +49,22 @@ describe("Konclude DL reasoning: reasoning-demo.ttl", () => {
       }
 
       const store = loadDemoStore();
-      await reasoner.reason(store);
+      try {
+        await reasoner.classify(store);
+      } finally {
+        reasoner.terminate();
+      }
 
       const inferredGraph = N3.DataFactory.namedNode(INFERRED_GRAPH_IRI);
       const inferred = store.getQuads(null, null, null, inferredGraph);
 
-      console.log("[TEST] reason() inferred triple count:", inferred.length);
+      console.log("[TEST] classify() inferred triple count:", inferred.length);
       console.log(
-        "[TEST] reason() triples:",
+        "[TEST] classify() triples:",
         inferred.map(
           (q) => `${q.subject.value.replace(EX, "ex:")} ${q.predicate.value.split("#")[1] ?? q.predicate.value} ${q.object.value.replace(EX, "ex:")}`,
         ),
       );
-
-      // v0.2.1: reason() returns TBox only — 4 triples (3 direct subClassOf edges + Person→owl:Thing)
-      expect(inferred.length).toBe(4);
 
       // Person subClassOf owl:Thing — NOT in source, inferred (all OWL classes subclass owl:Thing)
       const OWL_THING = "http://www.w3.org/2002/07/owl#Thing";
@@ -87,7 +87,7 @@ describe("Konclude DL reasoning: reasoning-demo.ttl", () => {
         ),
       ).toBe(true);
 
-      // Lock in echo count: 3 direct subClassOf edges (Employee→Person, Manager→Employee, Executive→Manager)
+      // Lock in echo count — count assertions last so per-construct checks run first
       const sourceKeys = new Set(
         store
           .getQuads(null, null, null, N3.DataFactory.defaultGraph())
@@ -96,8 +96,9 @@ describe("Konclude DL reasoning: reasoning-demo.ttl", () => {
       const echoed = inferred.filter((q) =>
         sourceKeys.has(`${q.subject.value} ${q.predicate.value} ${q.object.value}`),
       );
-      console.log("[TEST] reason() echoed:", echoed.length, "| genuinely new:", inferred.length - echoed.length);
-      expect(echoed.length).toBe(3);
+      console.log("[TEST] classify() echoed:", echoed.length, "| genuinely new:", inferred.length - echoed.length);
+      expect(inferred.length).toBe(13);
+      expect(echoed.length).toBe(1);
     },
     30000,
   );
@@ -105,14 +106,13 @@ describe("Konclude DL reasoning: reasoning-demo.ttl", () => {
   it(
     "materialize() surfaces full DL output: TBox + ABox entailments",
     async () => {
-      if (!reasoner) {
-        try {
-          reasoner = new RdfReasoner();
-          await reasoner.ready;
-        } catch (e) {
-          console.warn("[TEST] Konclude WASM unavailable — skipping:", String(e));
-          return;
-        }
+      let reasoner: RdfReasoner | undefined;
+      try {
+        reasoner = new RdfReasoner();
+        await reasoner.ready;
+      } catch (e) {
+        console.warn("[TEST] Konclude WASM unavailable — skipping:", String(e));
+        return;
       }
 
       const store = loadDemoStore();
@@ -126,9 +126,6 @@ describe("Konclude DL reasoning: reasoning-demo.ttl", () => {
       const inferred = store.getQuads(null, null, null, inferredGraph);
 
       console.log("[TEST] materialize() inferred triple count:", inferred.length);
-
-      // Full DL output: 27 triples (12 echoed source + 15 genuinely new)
-      expect(inferred.length).toBe(27);
 
       // TBox: Person subClassOf owl:Thing
       const OWL_THING = "http://www.w3.org/2002/07/owl#Thing";
@@ -164,7 +161,29 @@ describe("Konclude DL reasoning: reasoning-demo.ttl", () => {
       // ABox: range inference — bob type Manager (from carol hasSupervisor bob; hasSupervisor range Manager)
       expect(inferred.some((q) => q.subject.value === `${EX}bob` && q.predicate.value === RDF_TYPE && q.object.value === `${EX}Manager`)).toBe(true);
 
-      // Lock in totals
+      // Group 1 — Restrictions
+      expect(inferred.some((q) => q.subject.value === `${EX}alice` && q.predicate.value === RDF_TYPE && q.object.value === `${EX}ProjectContributor`),
+        "alice rdf:type ProjectContributor (alice worksOn projectAlpha; projectAlpha type Project)").toBe(true);
+      expect(inferred.some((q) => q.subject.value === `${EX}carol` && q.predicate.value === RDF_TYPE && q.object.value === `${EX}ProjectContributor`),
+        "carol rdf:type ProjectContributor (carol worksOn projectAlpha)").toBe(true);
+      expect(inferred.some((q) => q.subject.value === `${EX}carol` && q.predicate.value === RDF_TYPE && q.object.value === `${EX}DirectReport`),
+        "carol rdf:type DirectReport (carol isManagedBy alice via inverseOf; hasValue ex:alice)").toBe(true);
+
+      // Group 2 — Cardinality
+      expect(inferred.some((q) => q.subject.value === `${EX}dave` && q.predicate.value === RDF_TYPE && q.object.value === `${EX}TeamLead`),
+        "dave rdf:type TeamLead (intersectionOf: manages some Manager ∩ manages some Employee; dave manages bob=inferred Manager and eve=Employee)").toBe(true);
+
+      // Group 4 — Advanced expressivity
+      expect(inferred.some((q) => q.subject.value === `${EX}carol` && q.predicate.value === `${EX}hasGrandManager` && q.object.value === `${EX}alice`),
+        "carol ex:hasGrandManager ex:alice (propertyChainAxiom: carol→bob→alice via hasSupervisor)").toBe(true);
+      expect(inferred.some((q) => q.subject.value === `${EX}alice` && q.predicate.value === RDF_TYPE && q.object.value === `${EX}LeadershipTeam`),
+        "alice rdf:type LeadershipTeam (equivalentClass unionOf Executive+Manager)").toBe(true);
+      expect(inferred.some((q) => q.subject.value === `${EX}dave` && q.predicate.value === RDF_TYPE && q.object.value === `${EX}LeadershipTeam`),
+        "dave rdf:type LeadershipTeam (dave is inferred Manager)").toBe(true);
+      expect(inferred.some((q) => q.subject.value === `${EX}aliceCEO` && q.predicate.value === RDF_TYPE && q.object.value === `${EX}Executive`),
+        "aliceCEO rdf:type Executive (sameAs ex:alice propagates alice's types)").toBe(true);
+
+      // Lock in totals — count assertions last so all per-construct checks run first
       const sourceKeys = new Set(
         store
           .getQuads(null, null, null, N3.DataFactory.defaultGraph())
@@ -174,8 +193,9 @@ describe("Konclude DL reasoning: reasoning-demo.ttl", () => {
         sourceKeys.has(`${q.subject.value} ${q.predicate.value} ${q.object.value}`),
       );
       console.log("[TEST] materialize() echoed:", echoed.length, "| genuinely new:", inferred.length - echoed.length);
-      expect(echoed.length).toBe(12);
-      expect(inferred.length - echoed.length).toBe(15);
+      expect(inferred.length).toBe(70);
+      expect(echoed.length).toBe(17);
+      expect(inferred.length - echoed.length).toBe(53);
     },
     30000,
   );
