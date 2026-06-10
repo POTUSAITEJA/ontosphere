@@ -720,6 +720,10 @@ export class RDFManagerImpl {
     };
   }
 
+  onReasoningStage(handler: (payload: { id: string; stage: string; meta?: Record<string, unknown> }) => void): () => void {
+    return this.worker.on('reasoningStage', handler);
+  }
+
   private mergePrefixes(input?: Record<string, string>, graphName?: string) {
     const targetGraph = graphName || DEFAULT_GRAPH;
     if (

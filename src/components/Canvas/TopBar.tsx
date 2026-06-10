@@ -14,6 +14,7 @@ interface TopBarProps {
   onClearInferred?: () => void;
   currentReasoning?: ReasoningResult | null;
   isReasoning?: boolean;
+  isInconsistentDetected?: boolean;
   isClustered?: boolean;
   onCluster?: () => void;
   onExpandAll?: () => void;
@@ -28,6 +29,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onClearInferred,
   currentReasoning = null,
   isReasoning = false,
+  isInconsistentDetected = false,
   isClustered = false,
   onCluster,
   onExpandAll,
@@ -224,12 +226,22 @@ export const TopBar: React.FC<TopBarProps> = ({
               title={currentReasoning?.isConsistent === false ? "OWL DL inconsistency — see reasoning report" : "View reasoning results"}
             >
               {isReasoning ? (
-                <>
-                  <svg width="12" height="12" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="32" strokeLinecap="round" />
-                  </svg>
-                  Reasoning…
-                </>
+                isInconsistentDetected ? (
+                  <>
+                    <span style={{ flexShrink: 0 }}>⊗ Inconsistent —</span>
+                    <svg width="12" height="12" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="32" strokeLinecap="round" />
+                    </svg>
+                    Explaining…
+                  </>
+                ) : (
+                  <>
+                    <svg width="12" height="12" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="32" strokeLinecap="round" />
+                    </svg>
+                    Reasoning…
+                  </>
+                )
               ) : currentReasoning ? (
                 currentReasoning.isConsistent === false ? (
                   <span>⊗ Inconsistent</span>

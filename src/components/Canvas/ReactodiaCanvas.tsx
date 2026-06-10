@@ -398,6 +398,7 @@ export default function ReactodiaCanvas() {
   const [loadOntologyOpen, setLoadOntologyOpen] = React.useState(false);
   const [ontologyUrlInput, setOntologyUrlInput] = React.useState('');
   const [isReasoning, setIsReasoning] = React.useState(false);
+  const [isInconsistentDetected, setIsInconsistentDetected] = React.useState(false);
   const [isClustered, setIsClustered] = React.useState(false);
   const [currentReasoning, setCurrentReasoning] = React.useState<ReasoningResult | null>(null);
   const [reasoningHistory, setReasoningHistory] = React.useState<ReasoningResult[]>([]);
@@ -1127,6 +1128,15 @@ export default function ReactodiaCanvas() {
     dataProvider.clearInferred();
     rdfManager.removeGraph('urn:vg:inferred');
     setCurrentReasoning(null);
+    setIsInconsistentDetected(false);
+    validationProvider.clearErrors();
+    const ctx = contextRef.current;
+    if (ctx) {
+      const visibleIris = new Set(
+        ctx.model.elements.map(el => el.id as Reactodia.ElementIri)
+      );
+      if (visibleIris.size > 0) ctx.editor.revalidateEntities(visibleIris);
+    }
     void rdfManager.emitAllSubjects('urn:vg:data');
   }, []);
 
@@ -1170,6 +1180,7 @@ export default function ReactodiaCanvas() {
 
   const handleRunReasoning = React.useCallback(async (reasonerBackend?: 'konclude' | 'n3') => {
     setIsReasoning(true);
+    setIsInconsistentDetected(false);
     try {
       const cfg = useAppConfigStore.getState().config;
       const rulesets = Array.isArray(cfg?.reasoningRulesets) ? cfg.reasoningRulesets : [];
@@ -1178,11 +1189,34 @@ export default function ReactodiaCanvas() {
       setCurrentReasoning(result);
       setReasoningHistory(h => [...h, result]);
       await handleApplyInferred();
+      // Highlight nodes with reasoning errors via the validation provider.
+      const errorMap = new Map<string, string[]>();
+      for (const err of result.errors ?? []) {
+        if (err.nodeId) {
+          const list = errorMap.get(err.nodeId) ?? [];
+          list.push(err.message);
+          errorMap.set(err.nodeId, list);
+        }
+      }
+      validationProvider.setErrors(errorMap);
+      const ctx = contextRef.current;
+      if (ctx && errorMap.size > 0) {
+        ctx.editor.revalidateEntities(new Set(errorMap.keys()) as ReadonlySet<Reactodia.ElementIri>);
+      }
       return result;
     } finally {
       setIsReasoning(false);
+      setIsInconsistentDetected(false);
     }
   }, [handleApplyInferred]);
+
+  React.useEffect(() => {
+    return rdfManager.onReasoningStage((payload) => {
+      if (payload.stage === 'inconsistent-detected') {
+        setIsInconsistentDetected(true);
+      }
+    });
+  }, []);
 
   React.useEffect(() => {
     registerReasoningCallback(handleRunReasoning);
@@ -1515,6 +1549,7 @@ export default function ReactodiaCanvas() {
                       onClearInferred={handleClearInferred}
                       currentReasoning={currentReasoning}
                       isReasoning={isReasoning}
+                      isInconsistentDetected={isInconsistentDetected}
                     />
                   </div>
                 </div>

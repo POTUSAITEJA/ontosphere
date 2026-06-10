@@ -2566,8 +2566,10 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         console.debug("[VG_REASONING_WORKER] Konclude input quads:", kQuadCount);
         reasoningStage({ type: "reasoningStage", id: msg.id, stage: "consistency-check", meta: { backend: 'konclude' } });
         const kStart = Date.now();
-        const mips = await konclude.explainInconsistency(kWorkingStore, 1);
-        if (mips.length === 0) {
+        // Phase 1: consistency check — populates cache in the Konclude instance so
+        // the subsequent explainInconsistency() call skips the redundant WASM round-trip.
+        const kConsistencyResult = await konclude.checkConsistency(kWorkingStore);
+        if (kConsistencyResult) {
           reasoningStage({ type: "reasoningStage", id: msg.id, stage: "reasoner-start", meta: { backend: 'konclude' } });
           await konclude.reason(kWorkingStore);
           kReasonerDuration = Date.now() - kStart;
@@ -2575,6 +2577,11 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           kIsConsistent = true;
           reasoningStage({ type: "reasoningStage", id: msg.id, stage: "reasoner-complete", meta: { durationMs: kReasonerDuration, backend: 'konclude' } });
         } else {
+          // Phase 2: ontology is inconsistent — emit stage so the UI can show the badge
+          // before the MIPS explanation run. explainInconsistency() hits the consistency
+          // cache set above, so no second WASM consistency call is made.
+          reasoningStage({ type: "reasoningStage", id: msg.id, stage: "inconsistent-detected", meta: { durationMs: Date.now() - kStart } });
+          const mips = await konclude.explainInconsistency(kWorkingStore, 1);
           kReasonerDuration = Date.now() - kStart;
           kIsConsistent = false;
           kMipsErrors = mips.map(mipsToReasoningError);
