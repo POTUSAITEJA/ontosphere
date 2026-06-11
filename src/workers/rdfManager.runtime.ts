@@ -196,7 +196,7 @@ class KoncludeReasoner {
     // resolves to the bundle URL inside a Vite worker, not the package directory.
     // BASE_URL is "/" in dev and "/ontosphere/" on GitHub Pages.
     // Increment v= when upgrading rdf-reasoner-konclude.
-    this.worker = new Worker(`${import.meta.env.BASE_URL}rdf-reasoner-konclude/worker.js?v=19`, { type: "module" });
+    this.worker = new Worker(`${import.meta.env.BASE_URL}rdf-reasoner-konclude/worker.js?v=20`, { type: "module" });
 
     let readyReject!: (reason: Error) => void;
     let readySettled = false;
