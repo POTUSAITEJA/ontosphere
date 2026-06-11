@@ -550,6 +550,8 @@ export default function ReactodiaCanvas() {
   const initialLayoutDone = React.useRef(false);
   const preClusterPositions = React.useRef<Map<string, Reactodia.Vector> | null>(null);
   const silentLayoutPositions = React.useRef<Map<string, Reactodia.Vector> | null>(null);
+  // Positions snapshotted before L2 structural fold — restored when navigating L2→L1
+  const preL2Positions = React.useRef<Map<string, Reactodia.Vector> | null>(null);
 
   // Resolved once at mount from ?loadImports URL param. false = imports disabled for this session.
   const loadImportsEnabledRef = React.useRef<boolean>(true);
@@ -851,18 +853,7 @@ export default function ReactodiaCanvas() {
           const controller = new AbortController();
           pendingLayoutController.current = controller;
 
-          // Apply L2 structural fold (subclass chains + OWL collections) before L3
-          const groupMap = dataProvider.getStructuralGroups();
-          const unpersistedIris = getUnpersistedIris(ctx);
-          const l2Count = applyL2Fold(ctx, model, groupMap, unpersistedIris);
-          if (l2Count > 0) {
-            console.debug('[canvas layout] L2 structural fold applied —', l2Count, 'groups created');
-            const canvas = ctx.view.findAnyCanvas();
-            if (canvas) canvas.renderingState.syncUpdate();
-            setIsL2Folded(true);
-          }
-
-          // Always apply L1 fold (annotations collapsed) on initial canvas load
+          // L1: collapse all annotations on initial load (small graphs stay here; big graphs advance to L3)
           applyL1ExpandedRef.current?.(false);
           setIsL1Folded(true);
 
@@ -975,6 +966,7 @@ export default function ReactodiaCanvas() {
     initialLayoutDone.current = false;
     preClusterPositions.current = null;
     silentLayoutPositions.current = null;
+    preL2Positions.current = null;
 
     dataProvider.setViewMode(mode);
     const filtered = dataProvider.filterByViewMode([...knownSubjects]);
@@ -1037,6 +1029,10 @@ export default function ReactodiaCanvas() {
         }
         if (filtered.length > 0) {
           await model.requestData();
+
+          // Reactodia elements default to expanded=false (annotations hidden) — mark L1 as applied.
+          setIsL1Folded(true);
+
           if (autoApplyLayout) {
             const entityCount = model.elements.filter(
               (el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement
@@ -1273,8 +1269,10 @@ export default function ReactodiaCanvas() {
 
   // Derived level: 0=∅ 1=L1 2=L2 3=L3
   const currentLevel = isL3Clustered ? 3 : isL2Folded ? 2 : isL1Folded ? 1 : 0;
+  // maxFoldLevel: 3 once clustering has run (L3 navigable), otherwise 2
+  const maxFoldLevel = isL3Clustered ? 3 : 2;
 
-  const canGoUp = currentLevel < 3 && !(currentLevel === 2 && clusteringAlgorithm === 'none');
+  const canGoUp = currentLevel < maxFoldLevel && !(currentLevel === 2 && clusteringAlgorithm === 'none');
   const canGoDown = currentLevel > 0;
 
   const handleLevelUp = React.useCallback(async () => {
@@ -1286,7 +1284,12 @@ export default function ReactodiaCanvas() {
       applyL1Expanded(false);
       setIsL1Folded(true);
     } else if (currentLevel === 1) {
-      // L1 → L2: fold structural groups
+      // L1 → L2: snapshot positions, then fold structural groups
+      preL2Positions.current = new Map(
+        model.elements
+          .filter((el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement)
+          .map(el => [el.data.id, el.position])
+      );
       const groupMap = dataProvider.getStructuralGroups();
       const unpersistedIris = getUnpersistedIris(ctx);
       const count = applyL2Fold(ctx, model, groupMap, unpersistedIris);
@@ -1304,31 +1307,57 @@ export default function ReactodiaCanvas() {
     const ctx = contextRef.current;
     if (!ctx) return;
     if (currentLevel === 3) {
-      // L3 → L2: ungroup all, clear L3, re-apply L2 fold
+      // L3 → L2: restore pre-cluster positions, ungroup all, re-apply L2 fold
+      const model = modelRef.current;
+      const saved = preClusterPositions.current;
+      const silentPos = silentLayoutPositions.current;
       const allGroups = ctx.model.elements.filter(
         (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
       );
       ctx.model.ungroupAll(allGroups);
       setIsClustered(false); actions.setIsClustered(false);
       setIsL3Clustered(false);
+      // Restore individual element positions from pre-cluster snapshot
+      if (model && (saved || silentPos)) {
+        for (const el of model.elements) {
+          if (!(el instanceof Reactodia.EntityElement)) continue;
+          const pos = silentPos?.get(el.data.id) ?? saved?.get(el.data.id);
+          if (pos) el.setPosition(pos);
+        }
+      }
       preClusterPositions.current = null;
       silentLayoutPositions.current = null;
-      // Re-apply L2 fold
-      const model = modelRef.current;
+      // Re-apply L2 fold (snapshot positions first)
       if (model) {
+        preL2Positions.current = new Map(
+          model.elements
+            .filter((el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement)
+            .map(el => [el.data.id, el.position])
+        );
         const groupMap = dataProvider.getStructuralGroups();
         const unpersistedIris = getUnpersistedIris(ctx);
         const count = applyL2Fold(ctx, model, groupMap, unpersistedIris);
         if (count > 0) setIsL2Folded(true);
       }
     } else if (currentLevel === 2) {
-      // L2 → L1: ungroup all, clear L2 — annotations stay collapsed from L1
+      // L2 → L1: ungroup all, restore pre-L2 positions
+      const model = modelRef.current;
+      const preL2 = preL2Positions.current;
       const allGroups = ctx.model.elements.filter(
         (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
       );
       ctx.model.ungroupAll(allGroups);
       setIsClustered(false); actions.setIsClustered(false);
       setIsL2Folded(false);
+      preL2Positions.current = null;
+      // Restore individual element positions from pre-L2 snapshot
+      if (model && preL2) {
+        for (const el of model.elements) {
+          if (!(el instanceof Reactodia.EntityElement)) continue;
+          const pos = preL2.get(el.data.id);
+          if (pos) el.setPosition(pos);
+        }
+      }
     } else if (currentLevel === 1) {
       // L1 → ∅: expand all annotations
       applyL1Expanded(true);
@@ -1343,6 +1372,7 @@ export default function ReactodiaCanvas() {
     setIsL3Clustered(false);
     setIsL2Folded(false);
     setIsL1Folded(false);
+    preL2Positions.current = null;
     rdfManager.removeGraph('urn:vg:data');
     // Clear saved layouts/cluster state for both views so switching
     // views after clear doesn't restore stale nodes via importLayout.
@@ -1781,6 +1811,7 @@ export default function ReactodiaCanvas() {
                       onViewModeChange={actions.setViewMode}
                       ontologyCount={ontologyCount}
                       foldLevel={currentLevel}
+                      maxFoldLevel={maxFoldLevel}
                       canLevelUp={canGoUp}
                       canLevelDown={canGoDown}
                       onLevelUp={handleLevelUp}

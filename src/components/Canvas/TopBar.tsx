@@ -16,6 +16,7 @@ interface TopBarProps {
   isReasoning?: boolean;
   isInconsistentDetected?: boolean;
   foldLevel?: number;       // 0=∅ 1=L1 2=L2 3=L3, default 0
+  maxFoldLevel?: number;    // max reachable level (2 normally, 3 after L3 ran)
   canLevelUp?: boolean;     // ► enabled
   canLevelDown?: boolean;   // ◄ enabled
   onLevelUp?: () => void;
@@ -33,6 +34,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   isReasoning = false,
   isInconsistentDetected = false,
   foldLevel = 0,
+  maxFoldLevel = 2,
   canLevelUp = false,
   canLevelDown = false,
   onLevelUp,
@@ -83,7 +85,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         >◄</button>
         <span
           className="reactodia-btn reactodia-btn-default glass-btn"
-          style={{ cursor: 'default', minWidth: 36, textAlign: 'center', fontSize: 11, padding: '5px 8px', borderRadius: 'unset' }}
+          style={{ cursor: 'default', minWidth: 40, textAlign: 'center', fontSize: 11, padding: '0 8px', borderRadius: 'unset', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
           title={
             foldLevel === 3 ? 'L3: community-detection clusters' :
             foldLevel === 2 ? 'L2: structural groups (subclass chains, OWL collections)' :
@@ -91,7 +93,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             '∅: fully expanded'
           }
         >
-          {foldLevel === 0 ? '∅' : `L${foldLevel}`}
+          {foldLevel === 0 ? '∅' : `${foldLevel}/${maxFoldLevel}`}
         </span>
         <button
           type="button"
