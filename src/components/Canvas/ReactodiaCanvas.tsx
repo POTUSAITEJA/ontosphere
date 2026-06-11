@@ -1275,25 +1275,24 @@ export default function ReactodiaCanvas() {
     setIsL2Folded(false);
   }, [handleExpandAll]);
 
-  const handleFoldL1 = React.useCallback(() => {
+  const applyL1Expanded = React.useCallback((expand: boolean) => {
     const model = modelRef.current;
     if (!model) return;
     for (const el of model.elements) {
       if (el instanceof Reactodia.EntityElement) {
-        model.history.execute(Reactodia.setElementExpanded(el, false));
+        model.history.execute(Reactodia.setElementExpanded(el, expand));
+      } else if (el instanceof Reactodia.EntityGroup) {
+        for (const item of el.items) {
+          if (item instanceof Reactodia.EntityElement) {
+            model.history.execute(Reactodia.setElementExpanded(item, expand));
+          }
+        }
       }
     }
   }, []);
 
-  const handleUnfoldL1 = React.useCallback(() => {
-    const model = modelRef.current;
-    if (!model) return;
-    for (const el of model.elements) {
-      if (el instanceof Reactodia.EntityElement) {
-        model.history.execute(Reactodia.setElementExpanded(el, true));
-      }
-    }
-  }, []);
+  const handleFoldL1 = React.useCallback(() => applyL1Expanded(false), [applyL1Expanded]);
+  const handleUnfoldL1 = React.useCallback(() => applyL1Expanded(true), [applyL1Expanded]);
 
   const handleClearData = React.useCallback(() => {
     knownSubjects.clear();
