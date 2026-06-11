@@ -83,9 +83,11 @@ export const TopBar: React.FC<TopBarProps> = ({
           disabled={!canLevelDown || !onLevelDown}
           onClick={onLevelDown}
         >◄</button>
-        <span
+        <button
+          type="button"
+          disabled
           className="reactodia-btn reactodia-btn-default glass-btn"
-          style={{ cursor: 'default', minWidth: 40, textAlign: 'center', fontSize: 11, padding: '0 8px', borderRadius: 'unset', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+          style={{ borderRadius: 'unset', minWidth: 40, textAlign: 'center', fontSize: 11, cursor: 'default', opacity: 1 }}
           title={
             foldLevel === 3 ? 'L3: community-detection clusters' :
             foldLevel === 2 ? 'L2: structural groups (subclass chains, OWL collections)' :
@@ -94,7 +96,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           }
         >
           {foldLevel === 0 ? '∅' : `${foldLevel}/${maxFoldLevel}`}
-        </span>
+        </button>
         <button
           type="button"
           className="reactodia-btn reactodia-btn-default glass-btn"
