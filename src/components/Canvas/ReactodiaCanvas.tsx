@@ -323,7 +323,7 @@ async function applyInitialGrouping(
 
 function getUnpersistedIris(ctx: Reactodia.WorkspaceContext): Set<string> {
   const result = new Set<string>();
-  const editor = (ctx as any).editor as Reactodia.EditorController | undefined;
+  const editor = ctx.editor;
   if (!editor?.authoringState?.elements) return result;
   for (const [iri, event] of editor.authoringState.elements) {
     if (event.type === 'entityAdd') result.add(iri);
@@ -418,7 +418,7 @@ function updateL2GroupsForNewElements(
 
   // Determine which root groups need updating because of the new IRIs
   const rootsToUpdate = new Set<string>();
-  for (const iri of newIris) {
+  for (const iri of newIriSet) {
     if (groupMap.has(iri)) rootsToUpdate.add(groupMap.get(iri)!); // iri is a member
     if (rootToMembers.has(iri)) rootsToUpdate.add(iri);             // iri is a root
   }
@@ -451,8 +451,6 @@ function updateL2GroupsForNewElements(
     ctx.model.group(allGroupEls);
     alreadyReformed.add(rootIri);
   }
-
-  void newIriSet; // suppress unused-variable warning
 }
 
 async function performInitialClustering(

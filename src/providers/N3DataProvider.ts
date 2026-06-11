@@ -342,6 +342,7 @@ export class N3DataProvider implements DataProvider {
     this.bNodeViewMap.clear();
     this.allSubjects.clear();
     this.inferredBySubject.clear();
+    this.structuralGroupCache = null;
   }
 
   getDomainRange(propertyIri: string): { domains: string[]; ranges: string[] } {
