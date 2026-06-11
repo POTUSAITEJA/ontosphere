@@ -207,7 +207,8 @@ const savedLayoutsByMode: Partial<Record<ViewMode, Reactodia.SerializedDiagram>>
 // the previous clustering state instead of treating every return as a first visit.
 interface SavedClusterState {
   isClustered: boolean;
-  isL3Clustered: boolean;
+  isL3Clustered: boolean; // has L3 ever run this view (drives maxFoldLevel, persists on level-down)
+  isL3Active: boolean;    // L3 groups currently on canvas (drives currentLevel)
   isL2Folded: boolean;
   isL1Folded: boolean;
   preClusterPositions: Map<string, Reactodia.Vector> | null;
@@ -537,8 +538,10 @@ export default function ReactodiaCanvas() {
   const [isReasoning, setIsReasoning] = React.useState(false);
   const [isInconsistentDetected, setIsInconsistentDetected] = React.useState(false);
   const [isClustered, setIsClustered] = React.useState(false);
-  // isL3Clustered: true only when L3 community-detection was explicitly applied (not just L2 structural groups)
+  // isL3Clustered: L3 has run this view session (persists on level-down, drives maxFoldLevel)
   const [isL3Clustered, setIsL3Clustered] = React.useState(false);
+  // isL3Active: L3 groups currently on canvas (cleared on level-down, drives currentLevel)
+  const [isL3Active, setIsL3Active] = React.useState(false);
   const [isL2Folded, setIsL2Folded] = React.useState(false);
   const [isL1Folded, setIsL1Folded] = React.useState(false);
   const [currentReasoning, setCurrentReasoning] = React.useState<ReasoningResult | null>(null);
@@ -881,7 +884,7 @@ export default function ReactodiaCanvas() {
                 preClusterPositions
               );
               setIsClustered(true); actions.setIsClustered(true);
-              setIsL3Clustered(true);
+              setIsL3Clustered(true); setIsL3Active(true);
             } else {
               console.debug('[canvas layout] calling ctx.performLayout (full, non-cluster)');
               try {
@@ -952,6 +955,7 @@ export default function ReactodiaCanvas() {
     savedClusterStateByMode[prevMode] = {
       isClustered,
       isL3Clustered,
+      isL3Active,
       isL2Folded,
       isL1Folded,
       preClusterPositions: preClusterPositions.current,
@@ -961,6 +965,7 @@ export default function ReactodiaCanvas() {
     // Reset clustering/ready state so they don't bleed into the new view
     setIsClustered(false); actions.setIsClustered(false);
     setIsL3Clustered(false);
+    setIsL3Active(false);
     setIsL2Folded(false);
     setIsL1Folded(false);
     actions.setCanvasReady(false);
@@ -1000,6 +1005,7 @@ export default function ReactodiaCanvas() {
           silentLayoutPositions.current = savedCluster.silentLayoutPositions;
           setIsClustered(savedCluster.isClustered); actions.setIsClustered(savedCluster.isClustered);
           setIsL3Clustered(savedCluster.isL3Clustered);
+          setIsL3Active(savedCluster.isL3Active);
           setIsL2Folded(savedCluster.isL2Folded);
           setIsL1Folded(savedCluster.isL1Folded);
           initialLayoutDone.current = true; // layout already exists — don't re-cluster
@@ -1046,7 +1052,7 @@ export default function ReactodiaCanvas() {
             if (shouldAutoCluster) {
               await performInitialClustering(ctx, model, cfg, layoutFn, silentLayoutPositions, preClusterPositions);
               setIsClustered(true); actions.setIsClustered(true);
-              setIsL3Clustered(true);
+              setIsL3Clustered(true); setIsL3Active(true);
             } else {
               // First time in mode: all nodes land at default positions — lay out only overlapping ones.
               const overlapping = findOverlappingEntities(model.elements, cfg.layoutSpacing);
@@ -1245,7 +1251,7 @@ export default function ReactodiaCanvas() {
       cfg.layoutAnimations
     );
     setIsClustered(true); actions.setIsClustered(true);
-    setIsL3Clustered(true);
+    setIsL3Clustered(true); setIsL3Active(true);
   }, [defaultLayout]);
 
   const applyL1Expanded = React.useCallback((expand: boolean) => {
@@ -1269,7 +1275,7 @@ export default function ReactodiaCanvas() {
   const clusteringAlgorithm = useAppConfigStore(s => s.config.clusteringAlgorithm);
 
   // Derived level: 0=∅ 1=L1 2=L2 3=L3
-  const currentLevel = isL3Clustered ? 3 : isL2Folded ? 2 : isL1Folded ? 1 : 0;
+  const currentLevel = isL3Active ? 3 : isL2Folded ? 2 : isL1Folded ? 1 : 0;
   // maxFoldLevel: 3 once clustering has run (L3 navigable), otherwise 2
   const maxFoldLevel = isL3Clustered ? 3 : 2;
 
@@ -1317,7 +1323,7 @@ export default function ReactodiaCanvas() {
       );
       ctx.model.ungroupAll(allGroups);
       setIsClustered(false); actions.setIsClustered(false);
-      setIsL3Clustered(false);
+      setIsL3Active(false);
       // Restore individual element positions from pre-cluster snapshot
       if (model && (saved || silentPos)) {
         for (const el of model.elements) {
@@ -1371,6 +1377,7 @@ export default function ReactodiaCanvas() {
     knownSubjects.clear();
     setIsClustered(false); actions.setIsClustered(false);
     setIsL3Clustered(false);
+    setIsL3Active(false);
     setIsL2Folded(false);
     setIsL1Folded(false);
     preL2Positions.current = null;

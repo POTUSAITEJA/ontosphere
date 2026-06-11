@@ -22,6 +22,8 @@ const OWL_COLLECTION_PREDICATES = new Set([
   "http://www.w3.org/2002/07/owl#disjointUnionOf",
   "http://www.w3.org/2002/07/owl#propertyChainAxiom",
   "http://www.w3.org/2002/07/owl#hasKey",
+  "http://www.w3.org/2003/11/swrl#body",
+  "http://www.w3.org/2003/11/swrl#head",
 ]);
 // TODO: extend subclass grouping to rdfs:subPropertyOf for property hierarchies
 
