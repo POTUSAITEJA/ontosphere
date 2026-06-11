@@ -209,6 +209,7 @@ interface SavedClusterState {
   isClustered: boolean;
   isL3Clustered: boolean;
   isL2Folded: boolean;
+  isL1Folded: boolean;
   preClusterPositions: Map<string, Reactodia.Vector> | null;
   silentLayoutPositions: Map<string, Reactodia.Vector> | null;
 }
@@ -482,8 +483,8 @@ async function performInitialClustering(
 
   await applyInitialGrouping(ctx, canvas, cfg.clusteringAlgorithm as 'louvain' | 'label-propagation' | 'kmeans', entityElements, relationLinks);
 
-  // Snapshot pre-cluster positions so handleExpandAll has a fallback
-  // if the silent background layout has not completed when user expands.
+  // Snapshot pre-cluster positions as a fallback
+  // if the silent background layout has not completed when user levels down.
   preClusterPositions.current = new Map(
     entityElements.map(el => [el.data.id, { ...el.position }])
   );
@@ -538,10 +539,12 @@ export default function ReactodiaCanvas() {
   // isL3Clustered: true only when L3 community-detection was explicitly applied (not just L2 structural groups)
   const [isL3Clustered, setIsL3Clustered] = React.useState(false);
   const [isL2Folded, setIsL2Folded] = React.useState(false);
+  const [isL1Folded, setIsL1Folded] = React.useState(false);
   const [currentReasoning, setCurrentReasoning] = React.useState<ReasoningResult | null>(null);
   const [reasoningHistory, setReasoningHistory] = React.useState<ReasoningResult[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const performLayoutRef = React.useRef<(() => Promise<void>) | null>(null);
+  const applyL1ExpandedRef = React.useRef<((expand: boolean) => void) | null>(null);
   const pendingLayoutController = React.useRef<AbortController | null>(null);
   const layoutDebounceTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialLayoutDone = React.useRef(false);
@@ -859,6 +862,10 @@ export default function ReactodiaCanvas() {
             setIsL2Folded(true);
           }
 
+          // Always apply L1 fold (annotations collapsed) on initial canvas load
+          applyL1ExpandedRef.current?.(false);
+          setIsL1Folded(true);
+
           const entityCount = model.elements.filter(
             (el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement
           ).length;
@@ -954,6 +961,7 @@ export default function ReactodiaCanvas() {
       isClustered,
       isL3Clustered,
       isL2Folded,
+      isL1Folded,
       preClusterPositions: preClusterPositions.current,
       silentLayoutPositions: silentLayoutPositions.current,
     };
@@ -962,6 +970,7 @@ export default function ReactodiaCanvas() {
     setIsClustered(false); actions.setIsClustered(false);
     setIsL3Clustered(false);
     setIsL2Folded(false);
+    setIsL1Folded(false);
     actions.setCanvasReady(false);
     initialLayoutDone.current = false;
     preClusterPositions.current = null;
@@ -999,6 +1008,7 @@ export default function ReactodiaCanvas() {
           setIsClustered(savedCluster.isClustered); actions.setIsClustered(savedCluster.isClustered);
           setIsL3Clustered(savedCluster.isL3Clustered);
           setIsL2Folded(savedCluster.isL2Folded);
+          setIsL1Folded(savedCluster.isL1Folded);
           initialLayoutDone.current = true; // layout already exists — don't re-cluster
           actions.setCanvasReady(true);
         }
@@ -1241,54 +1251,6 @@ export default function ReactodiaCanvas() {
     setIsL3Clustered(true);
   }, [defaultLayout]);
 
-  const handleExpandAll = React.useCallback(async () => {
-    const ctx = contextRef.current;
-    if (!ctx) return;
-    const canvas = ctx.view.findAnyCanvas();
-    if (!canvas) return;
-    const groups = ctx.model.elements.filter(
-      (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
-    );
-    if (groups.length === 0) return;
-    setIsClustered(false); actions.setIsClustered(false);
-    setIsL3Clustered(false);
-    setIsL2Folded(false);
-    const saved = preClusterPositions.current;
-    const silentPos = silentLayoutPositions.current;
-    preClusterPositions.current = null;
-    silentLayoutPositions.current = null;
-    // Ungroup all groups synchronously (no animation yet).
-    ctx.model.ungroupAll(groups);
-    canvas.renderingState.syncUpdate();
-    // Animate each element back to its pre-cluster position in one pass.
-    await canvas.animateGraph(() => {
-      for (const el of ctx.model.elements) {
-        if (!(el instanceof Reactodia.EntityElement)) continue;
-        // Prefer silent-layout positions (better than pre-cluster snapshot)
-        const pos = silentPos?.get(el.data.id) ?? saved?.get(el.data.id);
-        if (pos) el.setPosition(pos);
-      }
-    });
-    actions.setCanvasReady(true);
-  }, [actions]);
-
-  const handleFoldL2 = React.useCallback(() => {
-    const model = modelRef.current;
-    const ctx = contextRef.current;
-    if (!model || !ctx) return;
-    const groupMap = dataProvider.getStructuralGroups();
-    const unpersistedIris = getUnpersistedIris(ctx);
-    const count = applyL2Fold(ctx, model, groupMap, unpersistedIris);
-    if (count > 0) {
-      setIsL2Folded(true);
-    }
-  }, []);
-
-  const handleUnfoldL2 = React.useCallback(async () => {
-    await handleExpandAll();
-    setIsL2Folded(false);
-  }, [handleExpandAll]);
-
   const applyL1Expanded = React.useCallback((expand: boolean) => {
     const model = modelRef.current;
     if (!model) return;
@@ -1304,15 +1266,83 @@ export default function ReactodiaCanvas() {
       }
     }
   }, []);
+  // Keep ref in sync so effects with empty deps can call applyL1Expanded
+  applyL1ExpandedRef.current = applyL1Expanded;
 
-  const handleFoldL1 = React.useCallback(() => applyL1Expanded(false), [applyL1Expanded]);
-  const handleUnfoldL1 = React.useCallback(() => applyL1Expanded(true), [applyL1Expanded]);
+  const clusteringAlgorithm = useAppConfigStore(s => s.config.clusteringAlgorithm);
+
+  // Derived level: 0=∅ 1=L1 2=L2 3=L3
+  const currentLevel = isL3Clustered ? 3 : isL2Folded ? 2 : isL1Folded ? 1 : 0;
+
+  const canGoUp = currentLevel < 3 && !(currentLevel === 2 && clusteringAlgorithm === 'none');
+  const canGoDown = currentLevel > 0;
+
+  const handleLevelUp = React.useCallback(async () => {
+    const ctx = contextRef.current;
+    const model = modelRef.current;
+    if (!ctx || !model) return;
+    if (currentLevel === 0) {
+      // ∅ → L1: collapse annotations
+      applyL1Expanded(false);
+      setIsL1Folded(true);
+    } else if (currentLevel === 1) {
+      // L1 → L2: fold structural groups
+      const groupMap = dataProvider.getStructuralGroups();
+      const unpersistedIris = getUnpersistedIris(ctx);
+      const count = applyL2Fold(ctx, model, groupMap, unpersistedIris);
+      if (count > 0) setIsL2Folded(true);
+    } else if (currentLevel === 2) {
+      // L2 → L3: apply community-detection clustering
+      const cfg = useAppConfigStore.getState().config;
+      if (cfg.clusteringAlgorithm === 'none') return;
+      await handleCluster();
+    }
+    // L3: already at max — do nothing
+  }, [currentLevel, applyL1Expanded, handleCluster]);
+
+  const handleLevelDown = React.useCallback(async () => {
+    const ctx = contextRef.current;
+    if (!ctx) return;
+    if (currentLevel === 3) {
+      // L3 → L2: ungroup all, clear L3, re-apply L2 fold
+      const allGroups = ctx.model.elements.filter(
+        (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
+      );
+      ctx.model.ungroupAll(allGroups);
+      setIsClustered(false); actions.setIsClustered(false);
+      setIsL3Clustered(false);
+      preClusterPositions.current = null;
+      silentLayoutPositions.current = null;
+      // Re-apply L2 fold
+      const model = modelRef.current;
+      if (model) {
+        const groupMap = dataProvider.getStructuralGroups();
+        const unpersistedIris = getUnpersistedIris(ctx);
+        const count = applyL2Fold(ctx, model, groupMap, unpersistedIris);
+        if (count > 0) setIsL2Folded(true);
+      }
+    } else if (currentLevel === 2) {
+      // L2 → L1: ungroup all, clear L2 — annotations stay collapsed from L1
+      const allGroups = ctx.model.elements.filter(
+        (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
+      );
+      ctx.model.ungroupAll(allGroups);
+      setIsClustered(false); actions.setIsClustered(false);
+      setIsL2Folded(false);
+    } else if (currentLevel === 1) {
+      // L1 → ∅: expand all annotations
+      applyL1Expanded(true);
+      setIsL1Folded(false);
+    }
+    // L0: already at min — do nothing
+  }, [currentLevel, applyL1Expanded, actions]);
 
   const handleClearData = React.useCallback(() => {
     knownSubjects.clear();
     setIsClustered(false); actions.setIsClustered(false);
     setIsL3Clustered(false);
     setIsL2Folded(false);
+    setIsL1Folded(false);
     rdfManager.removeGraph('urn:vg:data');
     // Clear saved layouts/cluster state for both views so switching
     // views after clear doesn't restore stale nodes via importLayout.
@@ -1750,15 +1780,11 @@ export default function ReactodiaCanvas() {
                       viewMode={canvasState.viewMode as 'abox' | 'tbox'}
                       onViewModeChange={actions.setViewMode}
                       ontologyCount={ontologyCount}
-                      isClustered={isClustered}
-                      isL3Clustered={isL3Clustered}
-                      onCluster={handleCluster}
-                      onExpandAll={handleExpandAll}
-                      isL2Folded={isL2Folded}
-                      onFoldL2={handleFoldL2}
-                      onUnfoldL2={handleUnfoldL2}
-                      onFoldL1={handleFoldL1}
-                      onUnfoldL1={handleUnfoldL1}
+                      foldLevel={currentLevel}
+                      canLevelUp={canGoUp}
+                      canLevelDown={canGoDown}
+                      onLevelUp={handleLevelUp}
+                      onLevelDown={handleLevelDown}
                       onOpenReasoningReport={() => actions.toggleReasoningReport(true)}
                       onRunReason={handleRunReasoning}
                       onClearInferred={handleClearInferred}
