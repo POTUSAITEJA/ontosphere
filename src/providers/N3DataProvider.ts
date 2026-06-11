@@ -195,6 +195,7 @@ export class N3DataProvider implements DataProvider {
   });
   private viewMode: ViewMode = 'abox';
   private typeMap = new Map<string, Set<string>>();
+  private bNodeViewMap = new Map<string, 'tbox' | 'abox'>();
   /**
    * All subject IRIs eligible for the search index.
    *
@@ -238,7 +239,6 @@ export class N3DataProvider implements DataProvider {
         q.predicate.termType === 'NamedNode' &&
         q.predicate.value === RDF_TYPE &&
         q.subject.termType === 'NamedNode' &&
-        !q.subject.value.startsWith(SKOLEM_PREFIX) &&
         q.object.termType === 'NamedNode' &&
         !q.object.value.startsWith(SKOLEM_PREFIX)
       ) {
@@ -252,6 +252,28 @@ export class N3DataProvider implements DataProvider {
         if (!entry) { entry = { predicates: new Set(), triples: new Set() }; this.inferredBySubject.set(subj, entry); }
         entry.predicates.add(q.predicate.value);
         entry.triples.add(`${q.predicate.value}\x00${objectKey(q.object)}`);
+      }
+    }
+    // Propagate TBox/ABox view to untyped blank-node objects (list nodes, etc.).
+    // Fixed-point: repeat until no new assignments (typically 2–3 passes for OWL lists).
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const q of arr) {
+        if (q.object.termType !== 'NamedNode' || !q.object.value.startsWith(SKOLEM_PREFIX)) continue;
+        const objIri = q.object.value;
+        if (this.bNodeViewMap.has(objIri)) continue;
+        if (q.subject.termType !== 'NamedNode') continue;
+        const subjIri = q.subject.value;
+        const subjTypes = this.typeMap.get(subjIri);
+        let view: 'tbox' | 'abox' | undefined;
+        if (subjTypes) {
+          if ([...subjTypes].some(t => ALL_TBOX_TYPES.has(t as ElementTypeIri))) view = 'tbox';
+          else if ([...subjTypes].some(t => ABOX_TYPES.has(t))) view = 'abox';
+        } else if (subjIri.startsWith(SKOLEM_PREFIX)) {
+          view = this.bNodeViewMap.get(subjIri);
+        }
+        if (view) { this.bNodeViewMap.set(objIri, view); changed = true; }
       }
     }
     // Only feed schema-allowed graphs into the inner Reactodia store so
@@ -311,6 +333,7 @@ export class N3DataProvider implements DataProvider {
   clear(): void {
     this.inner.clear();
     this.typeMap.clear();
+    this.bNodeViewMap.clear();
     this.allSubjects.clear();
     this.inferredBySubject.clear();
   }
@@ -333,6 +356,10 @@ export class N3DataProvider implements DataProvider {
   filterByViewMode(iris: string[]): string[] {
     return iris.filter(iri => {
       const types = this.typeMap.get(iri);
+      if (!types && iri.startsWith(SKOLEM_PREFIX)) {
+        const view = this.bNodeViewMap.get(iri) ?? 'tbox';
+        return view === this.viewMode;
+      }
       return this.matchesViewMode(types ? [...types] as ElementTypeIri[] : []);
     });
   }
