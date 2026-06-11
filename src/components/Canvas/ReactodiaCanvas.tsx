@@ -1257,6 +1257,44 @@ export default function ReactodiaCanvas() {
     actions.setCanvasReady(true);
   }, [actions]);
 
+  const handleFoldL2 = React.useCallback(() => {
+    const model = modelRef.current;
+    const ctx = contextRef.current;
+    if (!model || !ctx) return;
+    const groupMap = dataProvider.getStructuralGroups();
+    const unpersistedIris = getUnpersistedIris(ctx);
+    const count = applyL2Fold(ctx, model, groupMap, unpersistedIris);
+    if (count > 0) {
+      setIsL2Folded(true);
+      setIsClustered(true); actions.setIsClustered(true);
+    }
+  }, [actions]);
+
+  const handleUnfoldL2 = React.useCallback(async () => {
+    await handleExpandAll();
+    setIsL2Folded(false);
+  }, [handleExpandAll]);
+
+  const handleFoldL1 = React.useCallback(() => {
+    const model = modelRef.current;
+    if (!model) return;
+    for (const el of model.elements) {
+      if (el instanceof Reactodia.EntityElement) {
+        model.history.execute(Reactodia.setElementExpanded(el, false));
+      }
+    }
+  }, []);
+
+  const handleUnfoldL1 = React.useCallback(() => {
+    const model = modelRef.current;
+    if (!model) return;
+    for (const el of model.elements) {
+      if (el instanceof Reactodia.EntityElement) {
+        model.history.execute(Reactodia.setElementExpanded(el, true));
+      }
+    }
+  }, []);
+
   const handleClearData = React.useCallback(() => {
     knownSubjects.clear();
     setIsClustered(false); actions.setIsClustered(false);
@@ -1701,6 +1739,11 @@ export default function ReactodiaCanvas() {
                       isClustered={isClustered}
                       onCluster={handleCluster}
                       onExpandAll={handleExpandAll}
+                      isL2Folded={isL2Folded}
+                      onFoldL2={handleFoldL2}
+                      onUnfoldL2={handleUnfoldL2}
+                      onFoldL1={handleFoldL1}
+                      onUnfoldL1={handleUnfoldL1}
                       onOpenReasoningReport={() => actions.toggleReasoningReport(true)}
                       onRunReason={handleRunReasoning}
                       onClearInferred={handleClearInferred}

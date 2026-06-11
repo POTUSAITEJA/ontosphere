@@ -18,6 +18,11 @@ interface TopBarProps {
   isClustered?: boolean;
   onCluster?: () => void;
   onExpandAll?: () => void;
+  isL2Folded?: boolean;
+  onFoldL2?: () => void;
+  onUnfoldL2?: () => void;
+  onFoldL1?: () => void;
+  onUnfoldL1?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -33,6 +38,11 @@ export const TopBar: React.FC<TopBarProps> = ({
   isClustered = false,
   onCluster,
   onExpandAll,
+  isL2Folded = false,
+  onFoldL2,
+  onUnfoldL2,
+  onFoldL1,
+  onUnfoldL1,
 }) => {
   const config = useAppConfigStore((s) => s.config);
   const clusteringAlgorithm = useAppConfigStore(s => s.config.clusteringAlgorithm);
@@ -55,6 +65,15 @@ export const TopBar: React.FC<TopBarProps> = ({
       gap: '4px',
       minWidth: 'max-content',
     }}>
+      {/* Level badge */}
+      <span
+        className="reactodia-btn reactodia-btn-default glass-btn"
+        style={{ cursor: 'default', minWidth: 36, textAlign: 'center', fontSize: 11, padding: '5px 8px' }}
+        title="Current fold level"
+      >
+        {isClustered ? 'L3' : isL2Folded ? 'L2' : '∅'}
+      </span>
+
       {/* Clustering controls */}
       <div className="reactodia-btn-group reactodia-btn-group-sm">
         <select
@@ -87,6 +106,37 @@ export const TopBar: React.FC<TopBarProps> = ({
           onClick={onExpandAll}
         >
           Expand All
+        </button>
+        <button
+          type="button"
+          className={`reactodia-btn reactodia-btn-default glass-btn${isL2Folded ? ' glass-btn--active' : ''}`}
+          title={isL2Folded ? 'Unfold structural groups (subclass chains, OWL collections)' : 'Fold structural groups'}
+          onClick={isL2Folded ? onUnfoldL2 : onFoldL2}
+          disabled={isL2Folded ? !onUnfoldL2 : !onFoldL2}
+        >
+          {isL2Folded ? 'Unfold L2' : 'Fold L2'}
+        </button>
+      </div>
+
+      {/* L1 annotation fold controls */}
+      <div className="reactodia-btn-group reactodia-btn-group-sm">
+        <button
+          type="button"
+          className="reactodia-btn reactodia-btn-default glass-btn"
+          title="Collapse all annotation properties"
+          onClick={onFoldL1}
+          disabled={!onFoldL1}
+        >
+          Fold L1
+        </button>
+        <button
+          type="button"
+          className="reactodia-btn reactodia-btn-default glass-btn"
+          title="Expand all annotation properties"
+          onClick={onUnfoldL1}
+          disabled={!onUnfoldL1}
+        >
+          Unfold L1
         </button>
       </div>
 
