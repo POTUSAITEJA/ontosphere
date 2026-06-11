@@ -19,6 +19,7 @@ const OWL_COLLECTION_PREDICATES = new Set([
   "http://www.w3.org/2002/07/owl#propertyChainAxiom",
   "http://www.w3.org/2002/07/owl#hasKey",
 ]);
+// TODO: extend subclass grouping to rdfs:subPropertyOf for property hierarchies
 
 /** Returns a map of non-root member IRIs → their group root IRI. */
 export function computeStructuralGroups(
@@ -76,18 +77,25 @@ export function computeStructuralGroups(
 
   // ── 2. Subclass chains ──────────────────────────────────────────────────────
 
+  const rootCache = new Map<string, string | undefined>();
+
   /**
    * Walk up the subclass chain to find the transitive root.
    * Returns undefined if the node is the root (no parent) or if a cycle is
    * detected that would make the node its own root.
    */
   function findRoot(iri: string): string | undefined {
+    if (rootCache.has(iri)) {
+      return rootCache.get(iri);
+    }
+
     const visited = new Set<string>();
     let current = iri;
 
     while (true) {
       if (visited.has(current)) {
         // Cycle detected — the starting node has no distinct root
+        rootCache.set(iri, undefined);
         return undefined;
       }
       visited.add(current);
@@ -95,6 +103,7 @@ export function computeStructuralGroups(
       const parent = subclassParent.get(current);
       if (parent === undefined) {
         // current IS the root
+        rootCache.set(iri, current);
         return current;
       }
       current = parent;

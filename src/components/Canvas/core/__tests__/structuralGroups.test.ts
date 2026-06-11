@@ -4,7 +4,6 @@
 import { describe, it, expect } from "vitest";
 import {
   computeStructuralGroups,
-  type StructuralGroupMap,
 } from "../structuralGroups";
 import type { WorkerQuad } from "../../../../utils/rdfSerialization";
 
