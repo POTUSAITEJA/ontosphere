@@ -86,8 +86,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           type="button"
           disabled
-          className="reactodia-btn reactodia-btn-default glass-btn"
-          style={{ borderRadius: 'unset', minWidth: 40, textAlign: 'center', fontSize: 11, cursor: 'default', opacity: 1 }}
+          className="reactodia-btn reactodia-btn-default"
+          style={{ borderRadius: 'unset', minWidth: 40, textAlign: 'center', fontSize: 12 }}
           title={
             foldLevel === 3 ? 'L3: community-detection clusters' :
             foldLevel === 2 ? 'L2: structural groups (subclass chains, OWL collections)' :

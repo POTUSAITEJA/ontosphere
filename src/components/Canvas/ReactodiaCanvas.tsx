@@ -381,8 +381,8 @@ function updateL2GroupsForNewElements(
   newIris: string[],
   groupMap: StructuralGroupMap,
   unpersistedIris: ReadonlySet<string>
-): void {
-  if (newIris.length === 0 || groupMap.size === 0) return;
+): number {
+  if (newIris.length === 0 || groupMap.size === 0) return 0;
 
   // Invert: rootIri → Set<memberIri>
   const rootToMembers = new Map<string, Set<string>>();
@@ -454,6 +454,7 @@ function updateL2GroupsForNewElements(
     ctx.model.group(allGroupEls);
     alreadyReformed.add(rootIri);
   }
+  return alreadyReformed.size;
 }
 
 async function performInitialClustering(
@@ -823,8 +824,8 @@ export default function ReactodiaCanvas() {
           const groupMap = dataProvider.getStructuralGroups();
           if (groupMap.size > 0) {
             const unpersistedIris = getUnpersistedIris(ctx);
-            updateL2GroupsForNewElements(ctx, model, addedFiltered, groupMap, unpersistedIris);
-            setIsL2Folded(true);
+            const l2Count = updateL2GroupsForNewElements(ctx, model, addedFiltered, groupMap, unpersistedIris);
+            if (l2Count > 0) setIsL2Folded(true);
           }
         }
 
