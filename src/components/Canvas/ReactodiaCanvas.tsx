@@ -29,6 +29,7 @@ import ResizableNamespaceLegend from './ResizableNamespaceLegend';
 import { useAppConfigStore } from '@/stores/appConfigStore';
 import { getLayoutFunction } from './layout/getLayoutFunction';
 import { applyCanvasClustering, clearCanvasClustering } from './core/clusteringService';
+import { computeStructuralGroups } from './core/structuralGroups';
 import { runSilentLayout, type SilentLayoutEdge } from './layout/silentLayout';
 import type { ClusterNode, ClusterEdge } from './core/clusterAlgorithms/types';
 import { computeClustersLabelPropagation } from './core/clusterAlgorithms/labelPropagation';
@@ -320,6 +321,45 @@ async function applyInitialGrouping(
   canvas.renderingState.syncUpdate();
 }
 
+function applyL2Fold(
+  ctx: Reactodia.WorkspaceContext,
+  model: Reactodia.DataDiagramModel,
+  allQuads: WorkerQuad[]
+): number {
+  if (allQuads.length === 0) return 0;
+  const groupMap = computeStructuralGroups(allQuads);
+  if (groupMap.size === 0) return 0;
+
+  // Invert: rootIri → Set<memberIri>
+  const rootToMembers = new Map<string, Set<string>>();
+  for (const [memberIri, rootIri] of groupMap) {
+    if (!rootToMembers.has(rootIri)) rootToMembers.set(rootIri, new Set());
+    rootToMembers.get(rootIri)!.add(memberIri);
+  }
+
+  const elementByIri = new Map<string, Reactodia.EntityElement>();
+  for (const el of model.elements) {
+    if (el instanceof Reactodia.EntityElement) {
+      elementByIri.set(el.data.id, el);
+    }
+  }
+
+  let groupsCreated = 0;
+  for (const [rootIri, memberIris] of rootToMembers) {
+    const rootEl = elementByIri.get(rootIri);
+    if (!rootEl) continue; // root not on canvas, skip
+    const members: Reactodia.EntityElement[] = [rootEl];
+    for (const mIri of memberIris) {
+      const el = elementByIri.get(mIri);
+      if (el) members.push(el);
+    }
+    if (members.length < 2) continue; // nothing to fold
+    ctx.model.group(members);
+    groupsCreated++;
+  }
+  return groupsCreated;
+}
+
 async function performInitialClustering(
   ctx: Reactodia.WorkspaceContext,
   model: Reactodia.DataDiagramModel,
@@ -400,6 +440,8 @@ export default function ReactodiaCanvas() {
   const [isReasoning, setIsReasoning] = React.useState(false);
   const [isInconsistentDetected, setIsInconsistentDetected] = React.useState(false);
   const [isClustered, setIsClustered] = React.useState(false);
+  const [isL2Folded, setIsL2Folded] = React.useState(false);
+  const allQuadsRef = React.useRef<WorkerQuad[]>([]);
   const [currentReasoning, setCurrentReasoning] = React.useState<ReasoningResult | null>(null);
   const [reasoningHistory, setReasoningHistory] = React.useState<ReasoningResult[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -616,6 +658,17 @@ export default function ReactodiaCanvas() {
         }
       }
 
+      // Accumulate all quads for L2 structural group computation.
+      // MUST run before the !isDataGraph guard because rdfs:subClassOf triples
+      // (needed for subclass chain detection) come from the ontology graph.
+      if (quads && quads.length > 0) {
+        if (isFullRefresh) {
+          allQuadsRef.current = [...quads];
+        } else {
+          allQuadsRef.current = allQuadsRef.current.concat(quads);
+        }
+      }
+
       // Only track data-graph subjects and update canvas elements for data/inferred graphs
       if (!isDataGraph) return;
 
@@ -699,6 +752,16 @@ export default function ReactodiaCanvas() {
         if (isFullRefresh) {
           const controller = new AbortController();
           pendingLayoutController.current = controller;
+
+          // Apply L2 structural fold (subclass chains + OWL collections) before L3
+          const l2Count = applyL2Fold(ctx, model, allQuadsRef.current);
+          if (l2Count > 0) {
+            console.debug('[canvas layout] L2 structural fold applied —', l2Count, 'groups created');
+            const canvas = ctx.view.findAnyCanvas();
+            if (canvas) canvas.renderingState.syncUpdate();
+            setIsL2Folded(true);
+          }
+
           const entityCount = model.elements.filter(
             (el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement
           ).length;
@@ -797,6 +860,7 @@ export default function ReactodiaCanvas() {
 
     // Reset clustering/ready state so they don't bleed into the new view
     setIsClustered(false); actions.setIsClustered(false);
+    setIsL2Folded(false);
     actions.setCanvasReady(false);
     initialLayoutDone.current = false;
     preClusterPositions.current = null;
@@ -1082,6 +1146,7 @@ export default function ReactodiaCanvas() {
     );
     if (groups.length === 0) return;
     setIsClustered(false); actions.setIsClustered(false);
+    setIsL2Folded(false);
     const saved = preClusterPositions.current;
     const silentPos = silentLayoutPositions.current;
     preClusterPositions.current = null;
@@ -1104,6 +1169,8 @@ export default function ReactodiaCanvas() {
   const handleClearData = React.useCallback(() => {
     knownSubjects.clear();
     setIsClustered(false); actions.setIsClustered(false);
+    setIsL2Folded(false);
+    allQuadsRef.current = [];
     rdfManager.removeGraph('urn:vg:data');
     // Clear saved layouts/cluster state for both views so switching
     // views after clear doesn't restore stale nodes via importLayout.
