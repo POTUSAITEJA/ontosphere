@@ -207,6 +207,8 @@ const savedLayoutsByMode: Partial<Record<ViewMode, Reactodia.SerializedDiagram>>
 // the previous clustering state instead of treating every return as a first visit.
 interface SavedClusterState {
   isClustered: boolean;
+  isL3Clustered: boolean;
+  isL2Folded: boolean;
   preClusterPositions: Map<string, Reactodia.Vector> | null;
   silentLayoutPositions: Map<string, Reactodia.Vector> | null;
 }
@@ -533,7 +535,8 @@ export default function ReactodiaCanvas() {
   const [isReasoning, setIsReasoning] = React.useState(false);
   const [isInconsistentDetected, setIsInconsistentDetected] = React.useState(false);
   const [isClustered, setIsClustered] = React.useState(false);
-  // TODO(Step 5): wire isL2Folded to appConfigStore so TopBar level badge can read it
+  // isL3Clustered: true only when L3 community-detection was explicitly applied (not just L2 structural groups)
+  const [isL3Clustered, setIsL3Clustered] = React.useState(false);
   const [isL2Folded, setIsL2Folded] = React.useState(false);
   const [currentReasoning, setCurrentReasoning] = React.useState<ReasoningResult | null>(null);
   const [reasoningHistory, setReasoningHistory] = React.useState<ReasoningResult[]>([]);
@@ -813,8 +816,11 @@ export default function ReactodiaCanvas() {
         // L2 incremental fold: classify newly arrived elements into structural groups
         if (!isFullRefresh && addedFiltered.length > 0) {
           const groupMap = dataProvider.getStructuralGroups();
-          const unpersistedIris = getUnpersistedIris(ctx);
-          updateL2GroupsForNewElements(ctx, model, addedFiltered, groupMap, unpersistedIris);
+          if (groupMap.size > 0) {
+            const unpersistedIris = getUnpersistedIris(ctx);
+            updateL2GroupsForNewElements(ctx, model, addedFiltered, groupMap, unpersistedIris);
+            setIsL2Folded(true);
+          }
         }
 
         // For a full refresh the elements were already added by the prior importSerialized
@@ -876,6 +882,7 @@ export default function ReactodiaCanvas() {
                 preClusterPositions
               );
               setIsClustered(true); actions.setIsClustered(true);
+              setIsL3Clustered(true);
             } else {
               console.debug('[canvas layout] calling ctx.performLayout (full, non-cluster)');
               try {
@@ -945,12 +952,15 @@ export default function ReactodiaCanvas() {
     savedLayoutsByMode[prevMode] = model.exportLayout();
     savedClusterStateByMode[prevMode] = {
       isClustered,
+      isL3Clustered,
+      isL2Folded,
       preClusterPositions: preClusterPositions.current,
       silentLayoutPositions: silentLayoutPositions.current,
     };
 
     // Reset clustering/ready state so they don't bleed into the new view
     setIsClustered(false); actions.setIsClustered(false);
+    setIsL3Clustered(false);
     setIsL2Folded(false);
     actions.setCanvasReady(false);
     initialLayoutDone.current = false;
@@ -987,6 +997,8 @@ export default function ReactodiaCanvas() {
           preClusterPositions.current = savedCluster.preClusterPositions;
           silentLayoutPositions.current = savedCluster.silentLayoutPositions;
           setIsClustered(savedCluster.isClustered); actions.setIsClustered(savedCluster.isClustered);
+          setIsL3Clustered(savedCluster.isL3Clustered);
+          setIsL2Folded(savedCluster.isL2Folded);
           initialLayoutDone.current = true; // layout already exists — don't re-cluster
           actions.setCanvasReady(true);
         }
@@ -1027,6 +1039,7 @@ export default function ReactodiaCanvas() {
             if (shouldAutoCluster) {
               await performInitialClustering(ctx, model, cfg, layoutFn, silentLayoutPositions, preClusterPositions);
               setIsClustered(true); actions.setIsClustered(true);
+              setIsL3Clustered(true);
             } else {
               // First time in mode: all nodes land at default positions — lay out only overlapping ones.
               const overlapping = findOverlappingEntities(model.elements, cfg.layoutSpacing);
@@ -1225,6 +1238,7 @@ export default function ReactodiaCanvas() {
       cfg.layoutAnimations
     );
     setIsClustered(true); actions.setIsClustered(true);
+    setIsL3Clustered(true);
   }, [defaultLayout]);
 
   const handleExpandAll = React.useCallback(async () => {
@@ -1237,6 +1251,7 @@ export default function ReactodiaCanvas() {
     );
     if (groups.length === 0) return;
     setIsClustered(false); actions.setIsClustered(false);
+    setIsL3Clustered(false);
     setIsL2Folded(false);
     const saved = preClusterPositions.current;
     const silentPos = silentLayoutPositions.current;
@@ -1266,9 +1281,8 @@ export default function ReactodiaCanvas() {
     const count = applyL2Fold(ctx, model, groupMap, unpersistedIris);
     if (count > 0) {
       setIsL2Folded(true);
-      setIsClustered(true); actions.setIsClustered(true);
     }
-  }, [actions]);
+  }, []);
 
   const handleUnfoldL2 = React.useCallback(async () => {
     await handleExpandAll();
@@ -1297,6 +1311,7 @@ export default function ReactodiaCanvas() {
   const handleClearData = React.useCallback(() => {
     knownSubjects.clear();
     setIsClustered(false); actions.setIsClustered(false);
+    setIsL3Clustered(false);
     setIsL2Folded(false);
     rdfManager.removeGraph('urn:vg:data');
     // Clear saved layouts/cluster state for both views so switching
@@ -1736,6 +1751,7 @@ export default function ReactodiaCanvas() {
                       onViewModeChange={actions.setViewMode}
                       ontologyCount={ontologyCount}
                       isClustered={isClustered}
+                      isL3Clustered={isL3Clustered}
                       onCluster={handleCluster}
                       onExpandAll={handleExpandAll}
                       isL2Folded={isL2Folded}

@@ -16,6 +16,7 @@ interface TopBarProps {
   isReasoning?: boolean;
   isInconsistentDetected?: boolean;
   isClustered?: boolean;
+  isL3Clustered?: boolean;
   onCluster?: () => void;
   onExpandAll?: () => void;
   isL2Folded?: boolean;
@@ -36,6 +37,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   isReasoning = false,
   isInconsistentDetected = false,
   isClustered = false,
+  isL3Clustered = false,
   onCluster,
   onExpandAll,
   isL2Folded = false,
@@ -71,7 +73,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         style={{ cursor: 'default', minWidth: 36, textAlign: 'center', fontSize: 11, padding: '5px 8px' }}
         title="Current fold level"
       >
-        {isClustered ? 'L3' : isL2Folded ? 'L2' : '∅'}
+        {isL3Clustered ? 'L3' : isL2Folded ? 'L2' : '∅'}
       </span>
 
       {/* Clustering controls */}
