@@ -130,8 +130,6 @@ const defaultConfig: AppConfig = {
     "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     "http://www.w3.org/2000/01/rdf-schema#",
     "http://www.w3.org/ns/prov#",
-    "http://purl.org/net/p-plan#",
-    "http://qudt.org/schema/qudt/",
   ],
   autoDiscoverOntologies: true,
   persistedAutoload: true,
