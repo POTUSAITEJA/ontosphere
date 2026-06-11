@@ -344,16 +344,19 @@ function applyL2Fold(
     }
   }
 
+  const alreadyGrouped = new Set<string>();
   let groupsCreated = 0;
   for (const [rootIri, memberIris] of rootToMembers) {
     const rootEl = elementByIri.get(rootIri);
-    if (!rootEl) continue; // root not on canvas, skip
+    if (!rootEl || alreadyGrouped.has(rootIri)) continue;
     const members: Reactodia.EntityElement[] = [rootEl];
     for (const mIri of memberIris) {
+      if (alreadyGrouped.has(mIri)) continue;
       const el = elementByIri.get(mIri);
       if (el) members.push(el);
     }
     if (members.length < 2) continue; // nothing to fold
+    for (const m of members) alreadyGrouped.add(m.data.id);
     ctx.model.group(members);
     groupsCreated++;
   }
@@ -440,6 +443,7 @@ export default function ReactodiaCanvas() {
   const [isReasoning, setIsReasoning] = React.useState(false);
   const [isInconsistentDetected, setIsInconsistentDetected] = React.useState(false);
   const [isClustered, setIsClustered] = React.useState(false);
+  // TODO(Step 5): wire isL2Folded to appConfigStore so TopBar level badge can read it
   const [isL2Folded, setIsL2Folded] = React.useState(false);
   const allQuadsRef = React.useRef<WorkerQuad[]>([]);
   const [currentReasoning, setCurrentReasoning] = React.useState<ReasoningResult | null>(null);
@@ -665,7 +669,7 @@ export default function ReactodiaCanvas() {
         if (isFullRefresh) {
           allQuadsRef.current = [...quads];
         } else {
-          allQuadsRef.current = allQuadsRef.current.concat(quads);
+          allQuadsRef.current.push(...quads);
         }
       }
 
