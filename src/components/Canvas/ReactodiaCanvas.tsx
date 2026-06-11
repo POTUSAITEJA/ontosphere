@@ -363,6 +363,88 @@ function applyL2Fold(
   return groupsCreated;
 }
 
+function updateL2GroupsForNewElements(
+  ctx: Reactodia.WorkspaceContext,
+  model: Reactodia.DataDiagramModel,
+  newIris: string[],
+  allQuads: WorkerQuad[]
+): void {
+  if (newIris.length === 0 || allQuads.length === 0) return;
+  const groupMap = computeStructuralGroups(allQuads);
+  if (groupMap.size === 0) return;
+
+  // Invert: rootIri → Set<memberIri>
+  const rootToMembers = new Map<string, Set<string>>();
+  for (const [memberIri, rootIri] of groupMap) {
+    if (!rootToMembers.has(rootIri)) rootToMembers.set(rootIri, new Set());
+    rootToMembers.get(rootIri)!.add(memberIri);
+  }
+
+  const newIriSet = new Set(newIris);
+
+  // Build canvas state: standalone elements + which EntityGroup each IRI lives in
+  const standaloneByIri = new Map<string, Reactodia.EntityElement>();
+  const groupByMemberIri = new Map<string, Reactodia.EntityGroup>();
+  for (const el of model.elements) {
+    if (el instanceof Reactodia.EntityElement) {
+      standaloneByIri.set(el.data.id, el);
+    } else if (el instanceof Reactodia.EntityGroup) {
+      for (const item of el.items) {
+        groupByMemberIri.set(item.data.id, el);
+      }
+    }
+  }
+
+  // Helper: resolve an IRI to its EntityElement whether standalone or inside a group
+  const resolveEl = (iri: string): Reactodia.EntityElement | undefined => {
+    const standalone = standaloneByIri.get(iri);
+    if (standalone) return standalone;
+    const grp = groupByMemberIri.get(iri);
+    if (!grp) return undefined;
+    return grp.items.find((item): item is Reactodia.EntityElement =>
+      item instanceof Reactodia.EntityElement && item.data.id === iri
+    );
+  };
+
+  // Determine which root groups need updating because of the new IRIs
+  const rootsToUpdate = new Set<string>();
+  for (const iri of newIris) {
+    if (groupMap.has(iri)) rootsToUpdate.add(groupMap.get(iri)!); // iri is a member
+    if (rootToMembers.has(iri)) rootsToUpdate.add(iri);             // iri is a root
+  }
+
+  const alreadyReformed = new Set<string>(); // guard against double reform
+
+  for (const rootIri of rootsToUpdate) {
+    if (alreadyReformed.has(rootIri)) continue;
+    const memberIris = rootToMembers.get(rootIri) ?? new Set<string>();
+
+    const rootEl = resolveEl(rootIri);
+    if (!rootEl) continue;
+
+    // Collect all on-canvas elements for this group
+    const allGroupEls: Reactodia.EntityElement[] = [rootEl];
+    for (const mIri of memberIris) {
+      const el = resolveEl(mIri);
+      if (el) allGroupEls.push(el);
+    }
+    if (allGroupEls.length < 2) continue;
+
+    // Ungroup any existing EntityGroup for this root so we can reform with new members
+    const existingGroup = groupByMemberIri.get(rootIri);
+    if (existingGroup) {
+      ctx.model.ungroupAll([existingGroup]);
+      // After ungroupAll, the items are back as standalone EntityElements.
+      // The refs in allGroupEls are still valid (same objects).
+    }
+
+    ctx.model.group(allGroupEls);
+    alreadyReformed.add(rootIri);
+  }
+
+  void newIriSet; // suppress unused-variable warning
+}
+
 async function performInitialClustering(
   ctx: Reactodia.WorkspaceContext,
   model: Reactodia.DataDiagramModel,
@@ -731,6 +813,11 @@ export default function ReactodiaCanvas() {
         }
 
         await model.requestData();
+
+        // L2 incremental fold: classify newly arrived elements into structural groups
+        if (!isFullRefresh && addedFiltered.length > 0) {
+          updateL2GroupsForNewElements(ctx, model, addedFiltered, allQuadsRef.current);
+        }
 
         // For a full refresh the elements were already added by the prior importSerialized
         // burst, so addedFiltered can be empty even though the canvas is fully populated.
