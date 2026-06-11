@@ -29,7 +29,7 @@ import ResizableNamespaceLegend from './ResizableNamespaceLegend';
 import { useAppConfigStore } from '@/stores/appConfigStore';
 import { getLayoutFunction } from './layout/getLayoutFunction';
 import { applyCanvasClustering, clearCanvasClustering } from './core/clusteringService';
-import { computeStructuralGroups } from './core/structuralGroups';
+import type { StructuralGroupMap } from './core/structuralGroups';
 import { runSilentLayout, type SilentLayoutEdge } from './layout/silentLayout';
 import type { ClusterNode, ClusterEdge } from './core/clusterAlgorithms/types';
 import { computeClustersLabelPropagation } from './core/clusterAlgorithms/labelPropagation';
@@ -321,13 +321,22 @@ async function applyInitialGrouping(
   canvas.renderingState.syncUpdate();
 }
 
+function getUnpersistedIris(ctx: Reactodia.WorkspaceContext): Set<string> {
+  const result = new Set<string>();
+  const editor = (ctx as any).editor as Reactodia.EditorController | undefined;
+  if (!editor?.authoringState?.elements) return result;
+  for (const [iri, event] of editor.authoringState.elements) {
+    if (event.type === 'entityAdd') result.add(iri);
+  }
+  return result;
+}
+
 function applyL2Fold(
   ctx: Reactodia.WorkspaceContext,
   model: Reactodia.DataDiagramModel,
-  allQuads: WorkerQuad[]
+  groupMap: StructuralGroupMap,
+  unpersistedIris: ReadonlySet<string>
 ): number {
-  if (allQuads.length === 0) return 0;
-  const groupMap = computeStructuralGroups(allQuads);
   if (groupMap.size === 0) return 0;
 
   // Invert: rootIri → Set<memberIri>
@@ -339,7 +348,7 @@ function applyL2Fold(
 
   const elementByIri = new Map<string, Reactodia.EntityElement>();
   for (const el of model.elements) {
-    if (el instanceof Reactodia.EntityElement) {
+    if (el instanceof Reactodia.EntityElement && !unpersistedIris.has(el.data.id)) {
       elementByIri.set(el.data.id, el);
     }
   }
@@ -367,11 +376,10 @@ function updateL2GroupsForNewElements(
   ctx: Reactodia.WorkspaceContext,
   model: Reactodia.DataDiagramModel,
   newIris: string[],
-  allQuads: WorkerQuad[]
+  groupMap: StructuralGroupMap,
+  unpersistedIris: ReadonlySet<string>
 ): void {
-  if (newIris.length === 0 || allQuads.length === 0) return;
-  const groupMap = computeStructuralGroups(allQuads);
-  if (groupMap.size === 0) return;
+  if (newIris.length === 0 || groupMap.size === 0) return;
 
   // Invert: rootIri → Set<memberIri>
   const rootToMembers = new Map<string, Set<string>>();
@@ -386,11 +394,13 @@ function updateL2GroupsForNewElements(
   const standaloneByIri = new Map<string, Reactodia.EntityElement>();
   const groupByMemberIri = new Map<string, Reactodia.EntityGroup>();
   for (const el of model.elements) {
-    if (el instanceof Reactodia.EntityElement) {
+    if (el instanceof Reactodia.EntityElement && !unpersistedIris.has(el.data.id)) {
       standaloneByIri.set(el.data.id, el);
     } else if (el instanceof Reactodia.EntityGroup) {
       for (const item of el.items) {
-        groupByMemberIri.set(item.data.id, el);
+        if (!unpersistedIris.has(item.data.id)) {
+          groupByMemberIri.set(item.data.id, el);
+        }
       }
     }
   }
@@ -527,7 +537,6 @@ export default function ReactodiaCanvas() {
   const [isClustered, setIsClustered] = React.useState(false);
   // TODO(Step 5): wire isL2Folded to appConfigStore so TopBar level badge can read it
   const [isL2Folded, setIsL2Folded] = React.useState(false);
-  const allQuadsRef = React.useRef<WorkerQuad[]>([]);
   const [currentReasoning, setCurrentReasoning] = React.useState<ReasoningResult | null>(null);
   const [reasoningHistory, setReasoningHistory] = React.useState<ReasoningResult[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -744,17 +753,6 @@ export default function ReactodiaCanvas() {
         }
       }
 
-      // Accumulate all quads for L2 structural group computation.
-      // MUST run before the !isDataGraph guard because rdfs:subClassOf triples
-      // (needed for subclass chain detection) come from the ontology graph.
-      if (quads && quads.length > 0) {
-        if (isFullRefresh) {
-          allQuadsRef.current = [...quads];
-        } else {
-          allQuadsRef.current.push(...quads);
-        }
-      }
-
       // Only track data-graph subjects and update canvas elements for data/inferred graphs
       if (!isDataGraph) return;
 
@@ -816,7 +814,9 @@ export default function ReactodiaCanvas() {
 
         // L2 incremental fold: classify newly arrived elements into structural groups
         if (!isFullRefresh && addedFiltered.length > 0) {
-          updateL2GroupsForNewElements(ctx, model, addedFiltered, allQuadsRef.current);
+          const groupMap = dataProvider.getStructuralGroups();
+          const unpersistedIris = getUnpersistedIris(ctx);
+          updateL2GroupsForNewElements(ctx, model, addedFiltered, groupMap, unpersistedIris);
         }
 
         // For a full refresh the elements were already added by the prior importSerialized
@@ -845,7 +845,9 @@ export default function ReactodiaCanvas() {
           pendingLayoutController.current = controller;
 
           // Apply L2 structural fold (subclass chains + OWL collections) before L3
-          const l2Count = applyL2Fold(ctx, model, allQuadsRef.current);
+          const groupMap = dataProvider.getStructuralGroups();
+          const unpersistedIris = getUnpersistedIris(ctx);
+          const l2Count = applyL2Fold(ctx, model, groupMap, unpersistedIris);
           if (l2Count > 0) {
             console.debug('[canvas layout] L2 structural fold applied —', l2Count, 'groups created');
             const canvas = ctx.view.findAnyCanvas();
@@ -1261,7 +1263,6 @@ export default function ReactodiaCanvas() {
     knownSubjects.clear();
     setIsClustered(false); actions.setIsClustered(false);
     setIsL2Folded(false);
-    allQuadsRef.current = [];
     rdfManager.removeGraph('urn:vg:data');
     // Clear saved layouts/cluster state for both views so switching
     // views after clear doesn't restore stale nodes via importLayout.

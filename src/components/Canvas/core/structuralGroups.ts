@@ -1,8 +1,12 @@
 // src/components/Canvas/core/structuralGroups.ts
 
-import type { WorkerQuad } from "../../../utils/rdfSerialization";
-
 export type StructuralGroupMap = Map<string, string>; // memberIri → groupRootIri
+
+export interface RdfQuadLike {
+  subject: { termType: string; value: string };
+  predicate: { termType: string; value: string };
+  object: { termType: string; value: string };
+}
 
 const RDFS_SUBCLASS_OF =
   "http://www.w3.org/2000/01/rdf-schema#subClassOf";
@@ -23,7 +27,7 @@ const OWL_COLLECTION_PREDICATES = new Set([
 
 /** Returns a map of non-root member IRIs → their group root IRI. */
 export function computeStructuralGroups(
-  allQuads: readonly WorkerQuad[],
+  allQuads: readonly RdfQuadLike[],
 ): StructuralGroupMap {
   // ── 1. Build indexes ────────────────────────────────────────────────────────
 

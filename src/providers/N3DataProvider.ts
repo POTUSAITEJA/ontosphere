@@ -7,6 +7,7 @@ import {
   Rdf,
 } from '@reactodia/workspace';
 import { toPrefixed } from '../utils/termUtils';
+import { computeStructuralGroups, type RdfQuadLike, type StructuralGroupMap } from '../components/Canvas/core/structuralGroups';
 
 const EMPTY_LINKS: ReadonlySet<LinkTypeIri> = new Set();
 
@@ -196,6 +197,7 @@ export class N3DataProvider implements DataProvider {
   private viewMode: ViewMode = 'abox';
   private typeMap = new Map<string, Set<string>>();
   private bNodeViewMap = new Map<string, 'tbox' | 'abox'>();
+  private structuralGroupCache: StructuralGroupMap | null = null;
   /**
    * All subject IRIs eligible for the search index.
    *
@@ -281,6 +283,7 @@ export class N3DataProvider implements DataProvider {
     if (addToSchema) {
       this.inner.addGraph(arr);
     }
+    this.structuralGroupCache = null;
   }
 
   /**
@@ -299,6 +302,7 @@ export class N3DataProvider implements DataProvider {
       this.typeMap.delete(iri);
       this.inferredBySubject.delete(iri);
     }
+    this.structuralGroupCache = null;
     this.addGraph(newQuads, graphName);
   }
 
@@ -312,6 +316,7 @@ export class N3DataProvider implements DataProvider {
         dataset.delete(q);
       }
     }
+    this.structuralGroupCache = null;
   }
 
   removeSubjects(iris: string[]): void {
@@ -328,6 +333,7 @@ export class N3DataProvider implements DataProvider {
         }
       }
     }
+    this.structuralGroupCache = null;
   }
 
   clear(): void {
@@ -524,6 +530,18 @@ export class N3DataProvider implements DataProvider {
    *  to decide whether validateLinks is needed on importLayout. */
   hasInferredData(): boolean {
     return this.inferredBySubject.size > 0;
+  }
+
+  /** Compute (and cache) the structural group map from all quads in the inner dataset. */
+  getStructuralGroups(): StructuralGroupMap {
+    if (this.structuralGroupCache) return this.structuralGroupCache;
+    const dataset = (this.inner as any).dataset;
+    if (!dataset || typeof dataset.iterateMatches !== 'function') {
+      return new Map();
+    }
+    const allQuads = [...dataset.iterateMatches(null, null, null)] as RdfQuadLike[];
+    this.structuralGroupCache = computeStructuralGroups(allQuads);
+    return this.structuralGroupCache;
   }
 
   connectedLinkStats(p: { elementId: ElementIri; inexactCount?: boolean; signal?: AbortSignal }): Promise<DataProviderLinkCount[]> {
