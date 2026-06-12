@@ -567,13 +567,18 @@ export class ClusterLevelManager {
     const state = this._cachedClusterState;
     if (!canvas || !state?.length) return;
 
-    // Snapshot L2 group positions before animation — keyed by items[0].data.id
-    // to match the lookup key used in _animateToLevel2.
-    this._savedL2Positions = new Map(
-      model.elements
-        .filter((el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup)
-        .flatMap(el => el.items[0] ? [[el.items[0].data.id as string, { ...el.position }]] : [])
-    );
+    // Snapshot ALL L2 element positions (groups and standalone entities)
+    // so the full set can be restored when navigating back down to L2.
+    const savedL2 = new Map<string, Reactodia.Vector>();
+    for (const el of model.elements) {
+      if (el instanceof Reactodia.EntityGroup) {
+        const firstItem = el.items[0];
+        if (firstItem) savedL2.set(firstItem.data.id as string, { ...el.position });
+      } else if (el instanceof Reactodia.EntityElement) {
+        savedL2.set(el.data.id as string, { ...el.position });
+      }
+    }
+    this._savedL2Positions = savedL2;
 
     // Map entity IRI → its L2 EntityGroup
     const entityToGroup = new Map<string, Reactodia.EntityGroup>();
@@ -610,7 +615,7 @@ export class ClusterLevelManager {
     });
   }
 
-  /** Animate L2 groups to saved/pre-computed positions after L3→L2 transition. */
+  /** Animate L2 elements to saved/pre-computed positions after L3→L2 transition. */
   private async _animateToLevel2(ctx: Reactodia.WorkspaceContext): Promise<void> {
     const canvas = ctx.view.findAnyCanvas();
     const l2Positions = this._savedL2Positions ?? this._precomputedPositions?.l2;
@@ -618,10 +623,15 @@ export class ClusterLevelManager {
     canvas.renderingState.syncUpdate();
     await canvas.animateGraph(() => {
       for (const el of ctx.model.elements) {
-        if (!(el instanceof Reactodia.EntityGroup)) continue;
-        const firstItem = el.items[0];
-        const pos = firstItem ? l2Positions.get(firstItem.data.id as string) : undefined;
-        if (pos) el.setPosition(pos);
+        if (el instanceof Reactodia.EntityGroup) {
+          const firstItem = el.items[0];
+          const pos = firstItem ? l2Positions.get(firstItem.data.id as string) : undefined;
+          if (pos) el.setPosition(pos);
+        } else if (el instanceof Reactodia.EntityElement) {
+          // Standalone entities at L2 (not in any structural group) also need positioning.
+          const pos = l2Positions.get(el.data.id as string);
+          if (pos) el.setPosition(pos);
+        }
       }
     });
   }

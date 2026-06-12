@@ -591,8 +591,11 @@ function scheduleSilentLayoutWorker(
         l1Positions = await runSilentLayout(layoutFn, allEntityIris, l1Edges);
       }
 
-      clusterMgr.setPrecomputedPositions({ l1: l1Positions, l2: l2Positions });
-      console.debug(`[Canvas] Silent layout complete — L1: ${l1Positions.size}, L2: ${l2Positions.size} positions`);
+      // l2AllPositions covers both structural group roots AND standalone entities at L2.
+      // l2Positions (roots only) is kept for callers that only need the group-root subset,
+      // but we pass the full map so _animateToLevel2 can also position standalone EntityElements.
+      clusterMgr.setPrecomputedPositions({ l1: l1Positions, l2: l2AllPositions });
+      console.debug(`[Canvas] Silent layout complete — L1: ${l1Positions.size}, L2: ${l2AllPositions.size} positions (${l2Positions.size} group roots)`);
     } catch (err) {
       console.warn('[Canvas] Silent layout failed:', err);
     }
