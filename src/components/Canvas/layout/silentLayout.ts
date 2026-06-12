@@ -36,10 +36,11 @@ export async function runSilentLayout(
 ): Promise<Map<string, Vector>> {
   if (iris.length === 0) return new Map();
 
-  // Build LayoutGraph
-  const nodes: LayoutGraph['nodes'] = {};
+  // Build LayoutGraph — use a mutable Record then cast since LayoutGraph['nodes']
+  // has a readonly index signature.
+  const nodesMutable: Record<string, { types: []; fixed?: boolean }> = {};
   for (const id of iris) {
-    nodes[id] = options?.fixed?.has(id) ? { types: [], fixed: true } : { types: [] };
+    nodesMutable[id] = options?.fixed?.has(id) ? { types: [], fixed: true } : { types: [] };
   }
 
   const irisSet = new Set(iris);
@@ -47,7 +48,7 @@ export async function runSilentLayout(
     .filter(e => irisSet.has(e.source) && irisSet.has(e.target))
     .map(e => ({ type: '' as any, source: e.source, target: e.target }));
 
-  const graph: LayoutGraph = { nodes, links };
+  const graph: LayoutGraph = { nodes: nodesMutable as LayoutGraph['nodes'], links };
 
   // Build LayoutState with known or default sizes and optional seed positions
   const bounds: Record<string, { x: number; y: number; width: number; height: number }> = {};
@@ -66,11 +67,18 @@ export async function runSilentLayout(
   // Run layout in worker (non-blocking by construction)
   const result = await layoutFn(graph, state);
 
-  // Convert bounds to position map (top-left corner)
+  // Convert bounds to position map (top-left corner).
+  // LayoutNode.fixed is declared in the type but ignored by the layout engine at
+  // runtime — manually restore fixed nodes to their seed positions afterwards.
   const positions = new Map<string, Vector>();
   for (const id of iris) {
-    const b = result.bounds[id];
-    if (b) positions.set(id, { x: b.x, y: b.y });
+    if (options?.fixed?.has(id) && options.seeds?.has(id)) {
+      const seed = options.seeds.get(id)!;
+      positions.set(id, { x: seed.x, y: seed.y });
+    } else {
+      const b = result.bounds[id];
+      if (b) positions.set(id, { x: b.x, y: b.y });
+    }
   }
   return positions;
 }
