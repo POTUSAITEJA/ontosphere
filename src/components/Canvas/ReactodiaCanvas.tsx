@@ -436,17 +436,28 @@ function scheduleSilentLayoutWorker(
         if (rootIri) entityMemberToRoot.set(entityIri, rootIri);
       }
 
-      // L2 group roots = unique roots covering ≥1 canvas entity.
+      // L2 group roots = roots that are ALSO canvas entities.
+      // A root that is not on canvas means applyL2Fold will skip its group (rootEl not found),
+      // so its members remain as standalone EntityElements at L2 — they must NOT be treated
+      // as group roots in the layout (no canvas node to position them).
       const canvasRootIrisSet = new Set<string>();
-      for (const rootIri of entityMemberToRoot.values()) canvasRootIrisSet.add(rootIri);
+      for (const rootIri of entityMemberToRoot.values()) {
+        if (allEntityIriSet.has(rootIri)) canvasRootIrisSet.add(rootIri);
+      }
       const l2GroupRootIris = [...canvasRootIrisSet];
 
-      // L2 standalones = entities that are neither group members NOR group roots.
-      // computeStructuralGroups never emits root→root self-entries, so root-entities
-      // are absent from entityMemberToRoot and must be excluded via canvasRootIrisSet.
-      const l2StandaloneIris = allEntityIris.filter(
-        iri => !entityMemberToRoot.has(iri) && !canvasRootIrisSet.has(iri)
-      );
+      // L2 standalones = entities that appear as standalone EntityElements at L2:
+      // 1. Not in any structural group AND not a canvas root.
+      // 2. OR in a structural group whose root is NOT a canvas entity — applyL2Fold
+      //    skips groups whose root isn't on canvas, so these members land standalone.
+      // computeStructuralGroups never emits root→root self-entries, so canvas roots
+      // (in canvasRootIrisSet) must be excluded explicitly.
+      const l2StandaloneIris = allEntityIris.filter(iri => {
+        if (canvasRootIrisSet.has(iri)) return false;        // IS a canvas root → in l2GroupRootIris
+        const rootIri = entityMemberToRoot.get(iri);
+        if (!rootIri) return true;                           // no structural group → standalone
+        return !allEntityIriSet.has(rootIri);               // root not on canvas → standalone at L2
+      });
 
       // L2–L2 edges: collapse entity edges to root pairs.
       const l2Edges: SilentLayoutEdge[] = [];
