@@ -625,11 +625,12 @@ export class ClusterLevelManager {
       for (const el of ctx.model.elements) {
         if (el instanceof Reactodia.EntityGroup) {
           const firstItem = el.items[0];
-          const pos = firstItem ? l2Positions.get(firstItem.data.id as string) : undefined;
+          const key = firstItem?.data.id as string | undefined;
+          const pos = key ? l2Positions.get(key) : undefined;
           if (pos) el.setPosition(pos);
         } else if (el instanceof Reactodia.EntityElement) {
-          // Standalone entities at L2 (not in any structural group) also need positioning.
-          const pos = l2Positions.get(el.data.id as string);
+          const iri = el.data.id as string;
+          const pos = l2Positions.get(iri);
           if (pos) el.setPosition(pos);
         }
       }
