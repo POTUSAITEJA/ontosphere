@@ -1,6 +1,12 @@
 // src/components/Canvas/core/structuralGroups.ts
 
 export type StructuralGroupMap = Map<string, string>; // memberIri → groupRootIri
+export type SubclassParentMap = Map<string, string>;  // childIri → directParentIri
+
+export interface StructuralGroupResult {
+  groupMap: StructuralGroupMap;
+  subclassParent: SubclassParentMap;
+}
 
 export interface RdfQuadLike {
   subject: { termType: string; value: string };
@@ -27,10 +33,10 @@ const OWL_COLLECTION_PREDICATES = new Set([
 ]);
 // TODO: extend subclass grouping to rdfs:subPropertyOf for property hierarchies
 
-/** Returns a map of non-root member IRIs → their group root IRI. */
+/** Returns group membership map and raw subclass parent map. */
 export function computeStructuralGroups(
   allQuads: readonly RdfQuadLike[],
-): StructuralGroupMap {
+): StructuralGroupResult {
   // ── 1. Build indexes ────────────────────────────────────────────────────────
 
   // subClassOf: child IRI → first parent IRI (NamedNodes only)
@@ -138,6 +144,75 @@ export function computeStructuralGroups(
       result.set(current, classIri);
 
       current = restNext.get(current);
+    }
+  }
+
+  return { groupMap: result, subclassParent };
+}
+
+/**
+ * Re-root a structural group map so every root is an on-canvas IRI.
+ *
+ * When a root isn't on canvas, walk down the subclass tree and find the
+ * first descendants that ARE on canvas — each becomes a sub-group root
+ * owning only its own on-canvas subclass descendants.
+ */
+export function rerootForCanvas(
+  groupMap: StructuralGroupMap,
+  subclassParent: SubclassParentMap,
+  onCanvas: ReadonlySet<string>,
+): StructuralGroupMap {
+  // Build children map (parent → children) from parent map
+  const children = new Map<string, string[]>();
+  for (const [child, parent] of subclassParent) {
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent)!.push(child);
+  }
+
+  // Collect off-canvas roots
+  const rootToMembers = new Map<string, Set<string>>();
+  for (const [member, root] of groupMap) {
+    if (!rootToMembers.has(root)) rootToMembers.set(root, new Set());
+    rootToMembers.get(root)!.add(member);
+  }
+
+  const result: StructuralGroupMap = new Map(groupMap);
+
+  for (const [root, members] of rootToMembers) {
+    if (onCanvas.has(root)) continue; // root on canvas — keep as-is
+
+    // Walk down from the off-canvas root to find on-canvas sub-roots.
+    // Each on-canvas node in the subtree becomes a sub-root owning its
+    // own on-canvas descendants.
+    const subRoots = new Map<string, string[]>(); // subRoot → members
+
+    function assignSubRoot(iri: string, currentSubRoot: string | null): void {
+      const isOnCanvas = onCanvas.has(iri) && members.has(iri);
+      if (isOnCanvas) {
+        currentSubRoot = iri;
+      }
+      if (currentSubRoot && iri !== currentSubRoot && isOnCanvas) {
+        if (!subRoots.has(currentSubRoot)) subRoots.set(currentSubRoot, []);
+        subRoots.get(currentSubRoot)!.push(iri);
+      }
+      for (const child of children.get(iri) ?? []) {
+        assignSubRoot(child, currentSubRoot);
+      }
+    }
+
+    assignSubRoot(root, null);
+
+    // Rewrite groupMap entries: members of sub-roots point to their sub-root
+    for (const [subRoot, subMembers] of subRoots) {
+      for (const m of subMembers) {
+        result.set(m, subRoot);
+      }
+      // Sub-root itself is no longer a member of the old root
+      result.delete(subRoot);
+    }
+    // Members not claimed by any sub-root become standalone — remove mapping
+    for (const m of members) {
+      if (result.get(m) === root) result.delete(m);
     }
   }
 

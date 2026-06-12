@@ -182,7 +182,7 @@ export const ConfigurationPanel = ({
         reactFlowInstance.setNodes(cleanedNodes);
         reactFlowInstance.setEdges(cleanedEdges);
 
-        console.log('[ConfigPanel] Cleared cluster state:', {
+        console.log('[VG_UI] Cleared cluster state:', {
           removedNodes: currentNodes.length - cleanedNodes.length,
           removedEdges: currentEdges.length - cleanedEdges.length,
         });

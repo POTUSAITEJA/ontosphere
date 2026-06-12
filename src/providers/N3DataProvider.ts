@@ -7,7 +7,7 @@ import {
   Rdf,
 } from '@reactodia/workspace';
 import { toPrefixed } from '../utils/termUtils';
-import { computeStructuralGroups, type RdfQuadLike, type StructuralGroupMap } from '../components/Canvas/core/structuralGroups';
+import { computeStructuralGroups, type RdfQuadLike, type StructuralGroupMap, type StructuralGroupResult } from '../components/Canvas/core/structuralGroups';
 import { computeClustersLabelPropagation } from '../components/Canvas/core/clusterAlgorithms/labelPropagation';
 import { computeClustersLouvainNgraph } from '../components/Canvas/core/clusterAlgorithms/louvainNgraph';
 import type { ClusterNode, ClusterEdge } from '../components/Canvas/core/clusterAlgorithms/types';
@@ -217,7 +217,7 @@ export class N3DataProvider implements DataProvider {
   private viewMode: ViewMode = 'abox';
   private typeMap = new Map<string, Set<string>>();
   private bNodeViewMap = new Map<string, 'tbox' | 'abox'>();
-  private structuralGroupCache: StructuralGroupMap | null = null;
+  private structuralGroupCache: StructuralGroupResult | null = null;
   private communityGroupsCache = new Map<string, CommunityClusterEntry[]>();
   /**
    * All subject IRIs eligible for the search index.
@@ -636,12 +636,12 @@ export class N3DataProvider implements DataProvider {
     return this.inferredBySubject.size > 0;
   }
 
-  /** Compute (and cache) the structural group map from all quads in the inner dataset. */
-  getStructuralGroups(): StructuralGroupMap {
+  /** Compute (and cache) structural groups from all quads in the inner dataset. */
+  getStructuralGroups(): StructuralGroupResult {
     if (this.structuralGroupCache) return this.structuralGroupCache;
     const dataset = (this.inner as any).dataset;
     if (!dataset || typeof dataset.iterateMatches !== 'function') {
-      return new Map();
+      return { groupMap: new Map(), subclassParent: new Map() };
     }
     const allQuads = [...dataset.iterateMatches(null, null, null)] as RdfQuadLike[];
     this.structuralGroupCache = computeStructuralGroups(allQuads);

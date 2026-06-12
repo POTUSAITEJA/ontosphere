@@ -15,7 +15,7 @@ export function computeClustersLouvainNgraph(
   edges: ClusterEdge[],
   options: ClusterAlgorithmOptions
 ): ClusterResult {
-  console.log('[Louvain] Starting clustering:', { nodeCount: nodes.length, edgeCount: edges.length });
+  console.log('[VG_CLUSTER] [Louvain] Starting clustering:', { nodeCount: nodes.length, edgeCount: edges.length });
 
   const graph = createGraph();
   for (const node of nodes) graph.addNode(node.id);
@@ -67,7 +67,7 @@ export function computeClustersLouvainNgraph(
     communityGroups.get(cid)!.push(...(nodeToOriginals.get(n.id) ?? [String(n.id)]));
   });
 
-  console.log('[Louvain] Communities:', { total: communityGroups.size });
+  console.log('[VG_CLUSTER] [Louvain] Communities:', { total: communityGroups.size });
 
   return buildClusters(nodes, communityGroups);
 }

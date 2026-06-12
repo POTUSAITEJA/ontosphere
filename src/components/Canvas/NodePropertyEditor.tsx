@@ -530,7 +530,7 @@ export const NodePropertyEditor = ({
         // Use objectTerm directly if available (preserved from mapper)
         if (p && p.objectTerm && typeof p.objectTerm === 'object' && 'termType' in p.objectTerm) {
           objTerm = p.objectTerm;
-          console.debug("[NodePropertyEditor] Using preserved objectTerm for removal:", {
+          console.debug("[VG_EDIT] Using preserved objectTerm for removal:", {
             value: p.value,
             objectTerm: objTerm,
             hasDatatype: !!objTerm.datatype,
@@ -539,7 +539,7 @@ export const NodePropertyEditor = ({
         } else {
           // Fallback: reconstruct from value/type
           objTerm = valueToTerm(p.value, p.lang ? `@${p.lang}` : p.type);
-          console.debug("[NodePropertyEditor] Reconstructed objectTerm for removal:", {
+          console.debug("[VG_EDIT] Reconstructed objectTerm for removal:", {
             value: p.value,
             type: p.type,
             objectTerm: objTerm
@@ -607,7 +607,7 @@ export const NodePropertyEditor = ({
     // Apply batch (manager will accept Term objects directly)
     try {
       try {
-        console.debug("[NodePropertyEditor] applyBatch payload", {
+        console.debug("[VG_EDIT] applyBatch payload", {
           subject: subjIri,
           removes: removesPrepared,
           adds: addsPrepared,
@@ -651,7 +651,7 @@ export const NodePropertyEditor = ({
           // CRITICAL: Expand prefixed IRI to full IRI before deletion
           // The worker needs the full IRI to match against stored Terms
           const expandedIri = expandIriIfNeeded(String(nodeIri));
-          console.debug("[NodePropertyEditor] Deleting node:", {
+          console.debug("[VG_EDIT] Deleting node:", {
             original: nodeIri,
             expanded: expandedIri
           });
@@ -1042,10 +1042,10 @@ export const NodePropertyEditorContent = ({
       addsPrepared.push({ subject: subjectTerm, predicate: namedNode(RDF_TYPE), object: namedNode(expandIriIfNeeded(t)) });
     }
 
-    console.debug("[NodePropertyEditorContent] applyBatch", { subject: subjIri, removes: removesPrepared, adds: addsPrepared });
+    console.debug("[VG_EDIT] applyBatch", { subject: subjIri, removes: removesPrepared, adds: addsPrepared });
     try {
       await (mgr as any).applyBatch({ removes: removesPrepared, adds: addsPrepared }, "urn:vg:data");
-      console.debug("[NodePropertyEditorContent] applyBatch resolved ok");
+      console.debug("[VG_EDIT] applyBatch resolved ok");
     } catch (err) {
       console.error("[NodePropertyEditorContent] applyBatch failed", err);
       return;

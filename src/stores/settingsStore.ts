@@ -254,7 +254,7 @@ export const useSettingsStore = create<SettingsStore>()(
       version: SETTINGS_VERSION,
       storage: createJSONStorage(resolveStateStorage),
       migrate: (persistedState: unknown, version: number) => {
-        console.log('[Settings] Running migration from version', version, 'to', SETTINGS_VERSION);
+        console.log('[VG_SETTINGS] Running migration from version', version, 'to', SETTINGS_VERSION);
         
         // Handle invalid persisted state - CLEAR localStorage on failure
         if (!isPlainObject(persistedState)) {
@@ -289,7 +289,7 @@ export const useSettingsStore = create<SettingsStore>()(
         // Normalize and validate the migrated settings - CLEAR localStorage on failure
         try {
           const normalized = normalizeSettingsInput(payload.settings, "persistedSettings");
-          console.log('[Settings] Migration completed successfully');
+          console.log('[VG_SETTINGS] Migration completed successfully');
           return { settings: normalized };
         } catch (error) {
           console.error('[Settings] Migration failed, clearing localStorage and using defaults:', error);

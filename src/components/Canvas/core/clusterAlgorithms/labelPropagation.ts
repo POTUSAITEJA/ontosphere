@@ -21,7 +21,7 @@ export function computeClustersLabelPropagation(
   edges: ClusterEdge[],
   options: ClusterAlgorithmOptions
 ): ClusterResult {
-  console.log('[LabelPropagation] Starting clustering:', {
+  console.log('[VG_CLUSTER] [LabelPropagation] Starting clustering:', {
     nodeCount: nodes.length,
     edgeCount: edges.length,
   });
@@ -48,7 +48,7 @@ export function computeClustersLabelPropagation(
     }
   }
 
-  console.log('[LabelPropagation] Graph created:', {
+  console.log('[VG_CLUSTER] [LabelPropagation] Graph created:', {
     nodeCount: graph.getNodesCount(),
     linksCount: graph.getLinksCount(),
   });
@@ -56,7 +56,7 @@ export function computeClustersLabelPropagation(
   // slpa(graph, T, r): T = iterations (≥20), r = community threshold (0–1)
   const result = slpa(graph, 20, 0.1);
 
-  console.log('[LabelPropagation] SLPA complete:', {
+  console.log('[VG_CLUSTER] [LabelPropagation] SLPA complete:', {
     communitiesCount: result?.communities ? Object.keys(result.communities).length : 0,
   });
 

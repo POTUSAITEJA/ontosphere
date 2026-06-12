@@ -36,7 +36,7 @@ export async function applyCanvasClustering(
   );
 
   if (entityElements.length < 2) {
-    console.log('[ClusteringService] Too few elements to cluster:', entityElements.length);
+    console.log('[VG_CLUSTER] [ClusteringService] Too few elements to cluster:', entityElements.length);
     return [];
   }
 
@@ -62,14 +62,14 @@ export async function applyCanvasClustering(
 
   const { clusters } = selectClusteringAlgorithm(algorithm, clusterNodes, clusterEdges, { threshold: 2 });
 
-  console.log('[ClusteringService] Clusters computed:', {
+  console.log('[VG_CLUSTER] [ClusteringService] Clusters computed:', {
     algorithm,
     clusterCount: clusters.size,
     elementCount: entityElements.length,
   });
 
   if (clusters.size === 0) {
-    console.log('[ClusteringService] No clusters produced — skipping group creation');
+    console.log('[VG_CLUSTER] [ClusteringService] No clusters produced — skipping group creation');
     return [];
   }
 
@@ -139,7 +139,7 @@ export async function applyCanvasClustering(
     });
   }
 
-  console.log('[ClusteringService] Grouping complete');
+  console.log('[VG_CLUSTER] [ClusteringService] Grouping complete');
   return entityGroups;
 }
 
@@ -154,7 +154,7 @@ export function clearCanvasClustering(model: Reactodia.DataDiagramModel): Reacto
   );
   if (groups.length === 0) return [];
   const ungrouped = model.ungroupAll(groups);
-  console.log('[ClusteringService] Cleared', groups.length, 'groups, released', ungrouped.length, 'elements');
+  console.log('[VG_CLUSTER] [ClusteringService] Cleared', groups.length, 'groups, released', ungrouped.length, 'elements');
   return ungrouped;
 }
 

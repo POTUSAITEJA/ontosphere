@@ -123,7 +123,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   }, [workflowCatalogEnabled, loadTemplates]);
 
   const handleDragStart = (template: WorkflowTemplate) => {
-    console.log('[LeftSidebar] Drag started:', template.label);
+    console.log('[VG_UI] Drag started:', template.label);
   };
 
   return (

@@ -194,7 +194,7 @@ async function handleCall(
   let result: McpResult;
   try {
     result = await handler(params);
-    console.info('[RelayBridge] Tool result:', tool, JSON.stringify(result).slice(0, 300));
+    console.info('[VG_RELAY] Tool result:', tool, JSON.stringify(result).slice(0, 300));
   } catch (err) {
     clearInterval(pingInterval);
     const error = err instanceof Error ? err.message : String(err);
@@ -276,7 +276,7 @@ export function startRelayBridge(): () => void {
       appReady = true;
       if (pendingCalls.length > 0) {
         const next = pendingCalls.shift()!;
-        console.info('[RelayBridge] Dispatching next queued call:', next.tool, '(', pendingCalls.length, 'remaining)');
+        console.info('[VG_RELAY] Dispatching next queued call:', next.tool, '(', pendingCalls.length, 'remaining)');
         dispatch(next.tool, next.params, next.requestId, next.isLast);
       }
     }).catch(err => {
@@ -287,7 +287,7 @@ export function startRelayBridge(): () => void {
 
   channel.onmessage = (event: MessageEvent) => {
     const msg = event.data;
-    console.info('[RelayBridge] BC message received:', JSON.stringify(msg));
+    console.info('[VG_RELAY] BC message received:', JSON.stringify(msg));
 
     if (msg?.type === 'vg-ready') {
       // Initial vg-ready from workspaceContext signals the app is ready for first call
@@ -295,7 +295,7 @@ export function startRelayBridge(): () => void {
         appReady = true;
         if (pendingCalls.length > 0) {
           const next = pendingCalls.shift()!;
-          console.info('[RelayBridge] App ready — dispatching first queued call:', next.tool);
+          console.info('[VG_RELAY] App ready — dispatching first queued call:', next.tool);
           dispatch(next.tool, next.params, next.requestId, next.isLast);
         }
       }
@@ -318,7 +318,7 @@ export function startRelayBridge(): () => void {
     const isLast = (msg as { isLast?: boolean }).isLast === true;
 
     if (!appReady) {
-      console.info('[RelayBridge] App not ready — queuing call:', tool);
+      console.info('[VG_RELAY] App not ready — queuing call:', tool);
       pendingCalls.push({ tool, params, requestId, isLast });
       return;
     }
@@ -326,11 +326,11 @@ export function startRelayBridge(): () => void {
     dispatch(tool, params, requestId, isLast);
   };
 
-  console.info('[RelayBridge] Listening on BroadcastChannel:', CHANNEL_NAME);
+  console.info('[VG_RELAY] Listening on BroadcastChannel:', CHANNEL_NAME);
 
   return () => {
     clearInterval(staleCheck);
     channel.close();
-    console.info('[RelayBridge] Channel closed.');
+    console.info('[VG_RELAY] Channel closed.');
   };
 }

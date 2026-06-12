@@ -14,7 +14,7 @@
 
 import * as Reactodia from '@reactodia/workspace';
 import type { N3DataProvider, ViewMode, CommunityClusterEntry } from '@/providers/N3DataProvider';
-import type { StructuralGroupMap } from './structuralGroups';
+import { rerootForCanvas, type StructuralGroupMap, type SubclassParentMap } from './structuralGroups';
 import { computeClustersLabelPropagation } from './clusterAlgorithms/labelPropagation';
 import { computeClustersLouvainNgraph } from './clusterAlgorithms/louvainNgraph';
 import { computeClustersKmeans } from './clusterAlgorithms/kmeans';
@@ -280,7 +280,8 @@ export class ClusterLevelManager {
     if (!ctx || !model) return null;
 
     if (this._currentLevel === 1) {
-      const groupMap = this._dataProvider?.getStructuralGroups();
+      const result = this._dataProvider?.getStructuralGroups();
+      const groupMap = result?.groupMap;
       if (!groupMap || groupMap.size === 0) return null;
 
       const rootToMembers = new Map<string, Set<string>>();
@@ -378,9 +379,10 @@ export class ClusterLevelManager {
     ctx: Reactodia.WorkspaceContext,
     model: Reactodia.DataDiagramModel,
   ): void {
-    const groupMap = this._dataProvider?.getStructuralGroups() ?? new Map();
+    const { groupMap, subclassParent } = this._dataProvider?.getStructuralGroups()
+      ?? { groupMap: new Map(), subclassParent: new Map() };
     const unpersistedIris = this._getUnpersistedIris(ctx);
-    const created = applyL2Fold(ctx, model, groupMap, unpersistedIris);
+    const created = applyL2Fold(ctx, model, groupMap, subclassParent, unpersistedIris);
     // Save the freshly created L2 groups so level round-trips restore them.
     if (created > 0) {
       this._l2Setup = model.elements
@@ -513,9 +515,10 @@ export class ClusterLevelManager {
       this._applyCache(model, this._l2Setup);
       return;
     }
-    const groupMap = this._dataProvider?.getStructuralGroups() ?? new Map();
+    const { groupMap, subclassParent } = this._dataProvider?.getStructuralGroups()
+      ?? { groupMap: new Map(), subclassParent: new Map() };
     const unpersistedIris = this._getUnpersistedIris(ctx);
-    applyL2Fold(ctx, model, groupMap, unpersistedIris);
+    applyL2Fold(ctx, model, groupMap, subclassParent, unpersistedIris);
   }
 
   /** Animate entities toward structural group centroids before L1→L2 grouping. */
@@ -533,7 +536,7 @@ export class ClusterLevelManager {
         .map(el => [el.data.id as string, { ...el.position }])
     );
 
-    const groupMap = this._dataProvider?.getStructuralGroups() ?? new Map();
+    const groupMap = this._dataProvider?.getStructuralGroups()?.groupMap ?? new Map();
     const unpersistedIris = this._getUnpersistedIris(ctx);
 
     const rootToMembers = new Map<string, Reactodia.EntityElement[]>();
@@ -788,21 +791,25 @@ export function applyL2Fold(
   ctx: Reactodia.WorkspaceContext,
   model: Reactodia.DataDiagramModel,
   groupMap: StructuralGroupMap,
+  subclassParent: SubclassParentMap,
   unpersistedIris: ReadonlySet<string>
 ): number {
   if (groupMap.size === 0) return 0;
-
-  const rootToMembers = new Map<string, Set<string>>();
-  for (const [memberIri, rootIri] of groupMap) {
-    if (!rootToMembers.has(rootIri)) rootToMembers.set(rootIri, new Set());
-    rootToMembers.get(rootIri)!.add(memberIri);
-  }
 
   const elementByIri = new Map<string, Reactodia.EntityElement>();
   for (const el of model.elements) {
     if (el instanceof Reactodia.EntityElement && !unpersistedIris.has(el.data.id)) {
       elementByIri.set(el.data.id, el);
     }
+  }
+
+  const onCanvas = new Set(elementByIri.keys());
+  const effectiveMap = rerootForCanvas(groupMap, subclassParent, onCanvas);
+
+  const rootToMembers = new Map<string, Set<string>>();
+  for (const [memberIri, rootIri] of effectiveMap) {
+    if (!rootToMembers.has(rootIri)) rootToMembers.set(rootIri, new Set());
+    rootToMembers.get(rootIri)!.add(memberIri);
   }
 
   const alreadyGrouped = new Set<string>();

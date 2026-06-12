@@ -48,7 +48,7 @@ export const WorkflowTemplatePanel: React.FC<WorkflowTemplatePanelProps> = ({
   };
 
   const handleDragStart = (template: WorkflowTemplate) => {
-    console.log('[WorkflowTemplatePanel] Drag started:', template.label);
+    console.log('[VG_UI] Drag started:', template.label);
   };
 
   if (!workflowCatalogEnabled) {

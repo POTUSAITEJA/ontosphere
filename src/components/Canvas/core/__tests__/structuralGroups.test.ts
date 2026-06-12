@@ -49,14 +49,14 @@ const CLASS1 = "http://example.org/MyClass";
 
 describe("computeStructuralGroups", () => {
   it("returns empty map for empty quad array", () => {
-    const result = computeStructuralGroups([]);
+    const { groupMap: result } = computeStructuralGroups([]);
     expect(result.size).toBe(0);
   });
 
   describe("subclass chains", () => {
     it("simple A subClassOf B: A maps to B, B is not mapped", () => {
       const quads: WorkerQuad[] = [quad(nn(A), SC, nn(B))];
-      const result = computeStructuralGroups(quads);
+      const { groupMap: result } = computeStructuralGroups(quads);
 
       expect(result.get(A)).toBe(B);
       expect(result.has(B)).toBe(false);
@@ -67,7 +67,7 @@ describe("computeStructuralGroups", () => {
         quad(nn(A), SC, nn(B)),
         quad(nn(B), SC, nn(C)),
       ];
-      const result = computeStructuralGroups(quads);
+      const { groupMap: result } = computeStructuralGroups(quads);
 
       expect(result.get(A)).toBe(C);
       expect(result.get(B)).toBe(C);
@@ -79,7 +79,7 @@ describe("computeStructuralGroups", () => {
         quad(nn(A), SC, nn(B)),
         quad(nn(B), SC, nn(A)),
       ];
-      const result = computeStructuralGroups(quads);
+      const { groupMap: result } = computeStructuralGroups(quads);
 
       expect(result.has(A)).toBe(false);
       expect(result.has(B)).toBe(false);
@@ -87,13 +87,13 @@ describe("computeStructuralGroups", () => {
 
     it("skips blank node subjects in subclass chains", () => {
       const quads: WorkerQuad[] = [quad(bn("b0"), SC, nn(B))];
-      const result = computeStructuralGroups(quads);
+      const { groupMap: result } = computeStructuralGroups(quads);
       expect(result.has("b0")).toBe(false);
     });
 
     it("skips blank node objects in subclass chains", () => {
       const quads: WorkerQuad[] = [quad(nn(A), SC, bn("b0"))];
-      const result = computeStructuralGroups(quads);
+      const { groupMap: result } = computeStructuralGroups(quads);
       expect(result.has(A)).toBe(false);
     });
   });
@@ -106,7 +106,7 @@ describe("computeStructuralGroups", () => {
         quad(bn(LIST1), REST, bn(LIST2)),
         quad(bn(LIST2), REST, nn(NIL)),
       ];
-      const result = computeStructuralGroups(quads);
+      const { groupMap: result } = computeStructuralGroups(quads);
 
       expect(result.get(LIST1)).toBe(CLASS1);
       expect(result.get(LIST2)).toBe(CLASS1);
@@ -118,7 +118,7 @@ describe("computeStructuralGroups", () => {
         quad(nn(CLASS1), UNION, bn(LIST1)),
         quad(bn(LIST1), REST, nn(NIL)),
       ];
-      const result = computeStructuralGroups(quads);
+      const { groupMap: result } = computeStructuralGroups(quads);
 
       expect(result.get(LIST1)).toBe(CLASS1);
     });
@@ -130,7 +130,7 @@ describe("computeStructuralGroups", () => {
         quad(bn(LIST1), REST, bn(LIST2)),
         quad(bn(LIST2), REST, bn(LIST1)),
       ];
-      const result = computeStructuralGroups(quads);
+      const { groupMap: result } = computeStructuralGroups(quads);
 
       // Both mapped before cycle is detected
       expect(result.get(LIST1)).toBe(CLASS1);
@@ -141,7 +141,7 @@ describe("computeStructuralGroups", () => {
       const quads: WorkerQuad[] = [
         quad(nn(CLASS1), INTERSECTION, nn(NIL)),
       ];
-      const result = computeStructuralGroups(quads);
+      const { groupMap: result } = computeStructuralGroups(quads);
       expect(result.has(NIL)).toBe(false);
     });
   });
@@ -157,7 +157,7 @@ describe("computeStructuralGroups", () => {
         quad(bn(LIST1), REST, bn(LIST2)),
         quad(bn(LIST2), REST, nn(NIL)),
       ];
-      const result = computeStructuralGroups(quads);
+      const { groupMap: result } = computeStructuralGroups(quads);
 
       // Subclass results
       expect(result.get(A)).toBe(C);

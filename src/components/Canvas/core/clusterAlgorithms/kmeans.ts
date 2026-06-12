@@ -13,10 +13,10 @@ export function computeClustersKmeans(
   edges: ClusterEdge[],
   options: ClusterAlgorithmOptions
 ): ClusterResult {
-  console.log('[Kmeans] Starting clustering:', { nodeCount: nodes.length, edgeCount: edges.length });
+  console.log('[VG_CLUSTER] [Kmeans] Starting clustering:', { nodeCount: nodes.length, edgeCount: edges.length });
 
   if (nodes.length < 2) {
-    console.log('[Kmeans] Too few nodes for clustering');
+    console.log('[VG_CLUSTER] [Kmeans] Too few nodes for clustering');
     return { clusters: new Map(), claimedNodes: new Set() };
   }
 

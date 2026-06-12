@@ -416,7 +416,7 @@ function scheduleSilentLayoutWorker(
         .filter((lk): lk is Reactodia.RelationLink => lk instanceof Reactodia.RelationLink)
         .map(lk => ({ source: lk.data.sourceId, target: lk.data.targetId }));
 
-      const groupMap = dataProvider.getStructuralGroups();
+      const { groupMap } = dataProvider.getStructuralGroups();
       const entityMemberToRoot = new Map<string, string>();
       for (const entityIri of allEntityIris) {
         const rootIri = groupMap.get(entityIri);
@@ -468,7 +468,7 @@ function scheduleSilentLayoutWorker(
         : await runSilentLayout(layoutFn, allEntityIris, l1Edges);
 
       clusterMgr.setPrecomputedPositions({ l1: l1Positions, l2: l2Positions });
-      console.debug(`[Canvas] Silent layout complete — L1: ${l1Positions.size}, L2: ${l2Positions.size}`);
+      console.debug(`[VG_LAYOUT] Silent layout complete — L1: ${l1Positions.size}, L2: ${l2Positions.size}`);
     } catch (err) {
       console.warn('[Canvas] Silent layout failed:', err);
     }
@@ -730,7 +730,7 @@ export default function ReactodiaCanvas() {
   // Subscribe to rdfManager changes — incremental sync to live model
   React.useEffect(() => {
     const handler = (subjects: string[], quads?: WorkerQuad[], _snapshot?: unknown, meta?: Record<string, unknown> | null) => {
-      console.debug("[canvas] subjects received", subjects, meta);
+      console.debug("[VG_LAYOUT] subjects received", subjects, meta);
       if (metadataProvider.suppressSync) return;
 
       const incomingGraphName = meta && typeof meta.graphName === 'string' ? meta.graphName : null;
@@ -860,7 +860,7 @@ export default function ReactodiaCanvas() {
 
         // L2 incremental fold: classify newly arrived elements into structural groups
         if (!isFullRefresh && addedFiltered.length > 0) {
-          const groupMap = dataProvider.getStructuralGroups();
+          const { groupMap } = dataProvider.getStructuralGroups();
           if (groupMap.size > 0) {
             const unpersistedIris = getUnpersistedIris(ctx);
             const l2Count = updateL2GroupsForNewElements(ctx, model, addedFiltered, groupMap, unpersistedIris);
@@ -881,7 +881,7 @@ export default function ReactodiaCanvas() {
         // T-Box ontologies. If the initial layout is already done and no new elements were
         // added, skip to avoid a redundant re-layout on an already-positioned canvas.
         if (isFullRefresh && addedFiltered.length === 0 && initialLayoutDone.current) {
-          console.debug('[canvas layout] skipping redundant full-refresh (already laid out, no new elements)');
+          console.debug('[VG_LAYOUT] skipping redundant full-refresh (already laid out, no new elements)');
           return;
         }
 
@@ -908,7 +908,7 @@ export default function ReactodiaCanvas() {
           layoutDebounceTimer.current = setTimeout(async () => {
             layoutDebounceTimer.current = null;
             const overlapping = findOverlappingEntities(model.elements, cfg.layoutSpacing);
-            console.debug('[canvas layout] overlap check (debounced) —', overlapping.size, 'overlapping');
+            console.debug('[VG_LAYOUT] overlap check (debounced) —', overlapping.size, 'overlapping');
             if (overlapping.size === 0) return;
             const debouncedController = new AbortController();
             pendingLayoutController.current = debouncedController;
@@ -996,7 +996,7 @@ export default function ReactodiaCanvas() {
           await model.requestData();
           if (autoApplyLayout) {
             const overlapping = findOverlappingEntities(model.elements, cfg.layoutSpacing);
-            console.debug('[canvas layout] view-switch new nodes —', newIris.length, 'new,', overlapping.size, 'overlapping');
+            console.debug('[VG_LAYOUT] view-switch new nodes —', newIris.length, 'new,', overlapping.size, 'overlapping');
             if (overlapping.size > 0) {
               await ctx.performLayout({ layoutFunction: layoutFn, selectedElements: overlapping, animate: cfg.layoutAnimations, signal: controller.signal });
             }
@@ -1216,32 +1216,43 @@ export default function ReactodiaCanvas() {
   const { currentLevel, maxFoldLevel, canGoUp, canGoDown } = levelSnapshot;
 
   const diagOverlaps = React.useCallback((ctx: Reactodia.WorkspaceContext, label: string) => {
-    const els = ctx.model.elements.filter(
-      (el): el is Reactodia.EntityElement | Reactodia.EntityGroup =>
-        el instanceof Reactodia.EntityElement || el instanceof Reactodia.EntityGroup
-    );
-    const groups = els.filter(el => el instanceof Reactodia.EntityGroup);
-    const entities = els.filter(el => el instanceof Reactodia.EntityElement);
-    const canvas = ctx.view.findAnyCanvas();
-    let overlaps = 0;
-    const atOrigin = els.filter(el => el.position.x === 0 && el.position.y === 0).length;
-    for (let i = 0; i < els.length; i++) {
-      const a = els[i];
-      const aSize = canvas?.renderingState.getElementSize(a);
-      const ax = a.position.x, ay = a.position.y;
-      const aw = aSize?.width ?? 120, ah = aSize?.height ?? 40;
-      for (let j = i + 1; j < els.length; j++) {
-        const b = els[j];
-        const bSize = canvas?.renderingState.getElementSize(b);
-        const bx = b.position.x, by = b.position.y;
-        const bw = bSize?.width ?? 120, bh = bSize?.height ?? 40;
-        if (ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by) {
-          overlaps++;
+    // Defer to next animation frame so React has rendered sizes
+    requestAnimationFrame(() => {
+      const els = ctx.model.elements.filter(
+        (el): el is Reactodia.EntityElement | Reactodia.EntityGroup =>
+          el instanceof Reactodia.EntityElement || el instanceof Reactodia.EntityGroup
+      );
+      const groups = els.filter(el => el instanceof Reactodia.EntityGroup);
+      const entities = els.filter(el => el instanceof Reactodia.EntityElement);
+      const canvas = ctx.view.findAnyCanvas();
+      let overlaps = 0;
+      let skippedNoSize = 0;
+      const atOrigin = els.filter(el => el.position.x === 0 && el.position.y === 0).length;
+
+      const sized = els.filter(el => {
+        const s = canvas?.renderingState.getElementSize(el);
+        if (!s || (s.width === 0 && s.height === 0)) { skippedNoSize++; return false; }
+        return true;
+      });
+
+      for (let i = 0; i < sized.length; i++) {
+        const a = sized[i];
+        const aSize = canvas!.renderingState.getElementSize(a)!;
+        const ax = a.position.x, ay = a.position.y;
+        const aw = aSize.width, ah = aSize.height;
+        for (let j = i + 1; j < sized.length; j++) {
+          const b = sized[j];
+          const bSize = canvas!.renderingState.getElementSize(b)!;
+          const bx = b.position.x, by = b.position.y;
+          const bw = bSize.width, bh = bSize.height;
+          if (ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by) {
+            overlaps++;
+          }
         }
       }
-    }
-    const uniquePositions = new Set(els.map(el => `${el.position.x},${el.position.y}`)).size;
-    console.debug(`[${label}] overlap check: ${groups.length} groups + ${entities.length} entities = ${els.length}, ${overlaps} overlapping pairs, ${uniquePositions} unique positions, ${atOrigin} at origin`);
+      const uniquePositions = new Set(sized.map(el => `${el.position.x},${el.position.y}`)).size;
+      console.debug(`[VG_LAYOUT] [${label}] overlap check: ${groups.length} groups + ${entities.length} entities = ${els.length} (${skippedNoSize} no size), ${overlaps} overlapping pairs, ${uniquePositions} unique positions, ${atOrigin} at origin`);
+    });
   }, []);
 
   const handleLevelUp = React.useCallback(async () => {
