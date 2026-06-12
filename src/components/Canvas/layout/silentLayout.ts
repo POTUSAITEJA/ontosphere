@@ -13,25 +13,33 @@ export interface SilentLayoutEdge {
   target: string;
 }
 
+export interface SilentLayoutOptions {
+  sizes?: Map<string, { width: number; height: number }>;
+  /** Initial positions for any node (used as starting point for free nodes). */
+  seeds?: Map<string, { x: number; y: number }>;
+  /** Nodes that must not move — keep their seed position exactly. */
+  fixed?: Set<string>;
+}
+
 /**
  * @param layoutFn  - Any LayoutFunction (Dagre worker, ELK worker, etc.)
  * @param iris      - All element IRIs to lay out
  * @param edges     - Edges between those elements
- * @param sizes     - Optional per-IRI sizes; defaults to 120×40
+ * @param options   - Optional sizes, seed positions, and fixed-node set
  * @returns         - Map from IRI → {x, y} top-left position
  */
 export async function runSilentLayout(
   layoutFn: LayoutFunction,
   iris: string[],
   edges: SilentLayoutEdge[],
-  sizes?: Map<string, { width: number; height: number }>
+  options?: SilentLayoutOptions
 ): Promise<Map<string, Vector>> {
   if (iris.length === 0) return new Map();
 
   // Build LayoutGraph
   const nodes: LayoutGraph['nodes'] = {};
   for (const id of iris) {
-    nodes[id] = { types: [] };
+    nodes[id] = options?.fixed?.has(id) ? { types: [], fixed: true } : { types: [] };
   }
 
   const irisSet = new Set(iris);
@@ -41,11 +49,17 @@ export async function runSilentLayout(
 
   const graph: LayoutGraph = { nodes, links };
 
-  // Build LayoutState with known or default sizes
+  // Build LayoutState with known or default sizes and optional seed positions
   const bounds: Record<string, { x: number; y: number; width: number; height: number }> = {};
   for (const id of iris) {
-    const s = sizes?.get(id);
-    bounds[id] = { x: 0, y: 0, width: s?.width ?? 120, height: s?.height ?? 40 };
+    const s = options?.sizes?.get(id);
+    const seed = options?.seeds?.get(id);
+    bounds[id] = {
+      x: seed?.x ?? 0,
+      y: seed?.y ?? 0,
+      width: s?.width ?? 120,
+      height: s?.height ?? 40,
+    };
   }
   const state: LayoutState = { bounds };
 

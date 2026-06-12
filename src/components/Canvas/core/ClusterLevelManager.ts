@@ -118,6 +118,7 @@ export class ClusterLevelManager {
 
   get currentLevel(): 0 | 1 | 2 | 3 { return this._currentLevel; }
   get l3EverBuilt(): boolean { return this._l3EverBuilt; }
+  get clusterState(): ReadonlyArray<ClusterEntry> | null { return this._cachedClusterState; }
 
   shouldAutoCluster(entityCount: number, algorithm: string, threshold: number): boolean {
     return algorithm !== 'none' && entityCount > threshold && !this._l3EverBuilt;

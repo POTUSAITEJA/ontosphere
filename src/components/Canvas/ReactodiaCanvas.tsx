@@ -394,50 +394,202 @@ function scheduleSilentLayoutWorker(
 ): void {
   void (async () => {
     try {
-      // Collect all entity IRIs — may be inside L3 groups at this point.
+      // Wait one animation frame so that Reactodia fully settles canvas positions
+      // after performLayout (React render, renderingState callbacks, etc.).
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      // Re-snapshot L3 cluster positions now that the canvas has fully settled.
+      clusterMgr.snapshotClusterPositions();
+
+      // Collect all entity IRIs. EntityElements (not inside any L3 cluster group)
+      // also have known canvas positions — snapshot these as L3 standalone positions.
       const allEntityIris: string[] = [];
+      const standaloneL3Pos = new Map<string, Reactodia.Vector>();
       for (const el of ctx.model.elements) {
         if (el instanceof Reactodia.EntityElement) {
-          allEntityIris.push(el.data.id as string);
+          const iri = el.data.id as string;
+          allEntityIris.push(iri);
+          standaloneL3Pos.set(iri, { ...el.position });
         } else if (el instanceof Reactodia.EntityGroup) {
           for (const item of el.items) {
             allEntityIris.push(item.data.id as string);
           }
         }
       }
+      const allEntityIriSet = new Set(allEntityIris);
 
       // L1 edges from relation links (entity IRIs regardless of group membership).
       const l1Edges: SilentLayoutEdge[] = ctx.model.links
         .filter((lk): lk is Reactodia.RelationLink => lk instanceof Reactodia.RelationLink)
         .map(lk => ({ source: lk.data.sourceId, target: lk.data.targetId }));
 
-      // L2: structural group roots — one node per group, edges between groups.
+      // L2: structural groups — filter to canvas-entity-relevant roots only.
+      // getStructuralGroups() covers the full TBox ontology (can be 300+ roots),
+      // but most are phantom class IRIs with no canvas entity. Including them in
+      // the layout graph produces unanchored nodes that dominate the force-directed
+      // result and destroy spatial coherence.
       const groupMap = dataProvider.getStructuralGroups();
-      const memberToRoot = new Map<string, string>();
-      const rootIrisSet = new Set<string>();
-      for (const [memberIri, rootIri] of groupMap) {
-        memberToRoot.set(memberIri, rootIri);
-        memberToRoot.set(rootIri, rootIri);
-        rootIrisSet.add(rootIri);
-      }
-      const l2GroupRootIris = [...rootIrisSet];
 
+      // Only track membership for canvas entities.
+      const entityMemberToRoot = new Map<string, string>(); // entityIri → rootIri
+      for (const entityIri of allEntityIris) {
+        const rootIri = groupMap.get(entityIri);
+        if (rootIri) entityMemberToRoot.set(entityIri, rootIri);
+      }
+
+      // L2 group roots = unique roots covering ≥1 canvas entity.
+      const canvasRootIrisSet = new Set<string>();
+      for (const rootIri of entityMemberToRoot.values()) canvasRootIrisSet.add(rootIri);
+      const l2GroupRootIris = [...canvasRootIrisSet];
+
+      // L2 standalones = entities that are neither group members NOR group roots.
+      // computeStructuralGroups never emits root→root self-entries, so root-entities
+      // are absent from entityMemberToRoot and must be excluded via canvasRootIrisSet.
+      const l2StandaloneIris = allEntityIris.filter(
+        iri => !entityMemberToRoot.has(iri) && !canvasRootIrisSet.has(iri)
+      );
+
+      // L2–L2 edges: collapse entity edges to root pairs.
       const l2Edges: SilentLayoutEdge[] = [];
-      const allEntityIriSet = new Set(allEntityIris);
       for (const edge of l1Edges) {
-        const srcRoot = memberToRoot.get(edge.source) ?? (allEntityIriSet.has(edge.source) ? edge.source : null);
-        const tgtRoot = memberToRoot.get(edge.target) ?? (allEntityIriSet.has(edge.target) ? edge.target : null);
+        const srcRoot = entityMemberToRoot.get(edge.source) ?? (allEntityIriSet.has(edge.source) ? edge.source : null);
+        const tgtRoot = entityMemberToRoot.get(edge.target) ?? (allEntityIriSet.has(edge.target) ? edge.target : null);
         if (srcRoot && tgtRoot && srcRoot !== tgtRoot) {
           l2Edges.push({ source: srcRoot, target: tgtRoot });
         }
       }
 
-      const [l1Positions, l2Positions] = await Promise.all([
-        runSilentLayout(layoutFn, allEntityIris, l1Edges),
-        l2GroupRootIris.length > 0
-          ? runSilentLayout(layoutFn, l2GroupRootIris, l2Edges)
-          : Promise.resolve(new Map<string, Reactodia.Vector>()),
-      ]);
+      // L3 cluster state and entity → cluster position map.
+      const clusterEntries = clusterMgr.clusterState ?? [];
+      const entityToClusterPos = new Map<string, Reactodia.Vector>();
+      for (const entry of clusterEntries) {
+        for (const iri of entry.iris) {
+          entityToClusterPos.set(iri, entry.position);
+        }
+      }
+
+      // Best-effort seed position for any entity at L3 time.
+      const getL3Seed = (iri: string): Reactodia.Vector | undefined =>
+        standaloneL3Pos.get(iri) ?? entityToClusterPos.get(iri);
+
+      // ── Hierarchical L2 layout ──────────────────────────────────────────────
+      let l2AllPositions: Map<string, Reactodia.Vector>;
+
+      if (clusterEntries.length > 0) {
+        const l3AnchorIris = clusterEntries.map((_, i) => `__l3_${i}`);
+        const entityToAnchorIri = new Map<string, string>();
+        for (let i = 0; i < clusterEntries.length; i++) {
+          for (const iri of clusterEntries[i].iris) {
+            entityToAnchorIri.set(iri, `__l3_${i}`);
+          }
+        }
+
+        // Map each L2 root → its cluster anchor via its member entities.
+        // Cannot use entityToAnchorIri.get(rootIri) directly because root IRIs are
+        // often ontology class IRIs, not entity IRIs in the cluster entries.
+        const rootToAnchorIri = new Map<string, string>();
+        for (const entityIri of allEntityIris) {
+          const rootIri = entityMemberToRoot.get(entityIri);
+          if (rootIri && !rootToAnchorIri.has(rootIri)) {
+            const anchor = entityToAnchorIri.get(entityIri);
+            if (anchor) rootToAnchorIri.set(rootIri, anchor);
+          }
+        }
+
+        // Seed each L2 root at the L3 position of one of its member entities.
+        // Cannot use getL3Seed(rootIri) — root IRIs are class IRIs, not entity IRIs.
+        const l2RootSeeds = new Map<string, Reactodia.Vector>();
+        for (const entityIri of allEntityIris) {
+          const rootIri = entityMemberToRoot.get(entityIri);
+          if (rootIri && !l2RootSeeds.has(rootIri)) {
+            const seed = getL3Seed(entityIri);
+            if (seed) l2RootSeeds.set(rootIri, seed);
+          }
+        }
+
+        const l2Fixed = new Set<string>(l3AnchorIris);
+        const l2Seeds = new Map<string, Reactodia.Vector>();
+        for (let i = 0; i < clusterEntries.length; i++) {
+          l2Seeds.set(`__l3_${i}`, clusterEntries[i].position);
+        }
+
+        const l2VisibleIris = [...l2GroupRootIris, ...l2StandaloneIris];
+        for (const iri of l2VisibleIris) {
+          const seed = l2RootSeeds.get(iri) ?? getL3Seed(iri);
+          if (seed) l2Seeds.set(iri, seed);
+          if (standaloneL3Pos.has(iri)) l2Fixed.add(iri);
+        }
+
+        const l2AnchorEdges: SilentLayoutEdge[] = [...l2Edges];
+        for (const iri of l2VisibleIris) {
+          if (!l2Fixed.has(iri)) {
+            // rootToAnchorIri for group roots; entityToAnchorIri fallback for root-entities.
+            const anchorIri = rootToAnchorIri.get(iri) ?? entityToAnchorIri.get(iri);
+            if (anchorIri) l2AnchorEdges.push({ source: iri, target: anchorIri });
+          }
+        }
+
+        const rawL2 = await runSilentLayout(
+          layoutFn,
+          [...l3AnchorIris, ...l2VisibleIris],
+          l2AnchorEdges,
+          { seeds: l2Seeds, fixed: l2Fixed },
+        );
+
+        l2AllPositions = new Map();
+        for (const iri of l2VisibleIris) {
+          const pos = rawL2.get(iri);
+          if (pos) l2AllPositions.set(iri, pos);
+        }
+      } else {
+        const rawL2 = l2GroupRootIris.length > 0
+          ? await runSilentLayout(layoutFn, l2GroupRootIris, l2Edges)
+          : new Map<string, Reactodia.Vector>();
+        l2AllPositions = new Map(rawL2);
+        for (const iri of l2StandaloneIris) {
+          const pos = standaloneL3Pos.get(iri);
+          if (pos) l2AllPositions.set(iri, { ...pos });
+        }
+      }
+
+      const l2Positions = new Map<string, Reactodia.Vector>();
+      for (const iri of l2GroupRootIris) {
+        const pos = l2AllPositions.get(iri);
+        if (pos) l2Positions.set(iri, pos);
+      }
+
+      // ── Hierarchical L1 layout ──────────────────────────────────────────────
+      let l1Positions: Map<string, Reactodia.Vector>;
+      if (l2AllPositions.size > 0) {
+        const l1Fixed = new Set<string>(l2AllPositions.keys());
+        const l1Seeds = new Map<string, Reactodia.Vector>(l2AllPositions);
+
+        for (const entityIri of allEntityIris) {
+          if (!l1Fixed.has(entityIri)) {
+            const rootIri = entityMemberToRoot.get(entityIri);
+            const rootPos = rootIri ? l2AllPositions.get(rootIri) : undefined;
+            if (rootPos) l1Seeds.set(entityIri, rootPos);
+          }
+        }
+
+        const l1AnchorEdges: SilentLayoutEdge[] = [...l1Edges];
+        for (const entityIri of allEntityIris) {
+          if (!l1Fixed.has(entityIri)) {
+            const rootIri = entityMemberToRoot.get(entityIri);
+            if (rootIri && l2AllPositions.has(rootIri)) {
+              l1AnchorEdges.push({ source: entityIri, target: rootIri });
+            }
+          }
+        }
+
+        l1Positions = await runSilentLayout(
+          layoutFn,
+          allEntityIris,
+          l1AnchorEdges,
+          { seeds: l1Seeds, fixed: l1Fixed },
+        );
+      } else {
+        l1Positions = await runSilentLayout(layoutFn, allEntityIris, l1Edges);
+      }
 
       clusterMgr.setPrecomputedPositions({ l1: l1Positions, l2: l2Positions });
       console.debug(`[Canvas] Silent layout complete — L1: ${l1Positions.size}, L2: ${l2Positions.size} positions`);
