@@ -136,6 +136,12 @@ export class ClusterLevelManager {
     this._precomputedPositions = positions;
   }
 
+  hasPositionsForLevel(level: number): boolean {
+    if (level === 1) return !!(this._savedL1Positions?.size || this._precomputedPositions?.l1?.size);
+    if (level === 2) return !!(this._savedL2Positions?.size || this._precomputedPositions?.l2?.size);
+    return false;
+  }
+
   /**
    * Animate expanded elements back to their saved positions.
    * Called from handleLevelDown when autoApplyLayout is OFF — performLayout

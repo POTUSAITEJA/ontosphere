@@ -2,11 +2,36 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockPerformLayout = vi.fn().mockResolvedValue(undefined);
+const { mockPerformLayout, mockElements, MockEntityElement } = vi.hoisted(() => {
+  const mockPerformLayout = vi.fn().mockResolvedValue(undefined);
+  const mockElements: any[] = [];
+  class MockEntityElement {
+    readonly iri: string;
+    readonly data: { id: string };
+    readonly position = { x: 0, y: 0 };
+    constructor(iri: string) {
+      this.iri = iri;
+      this.data = { id: iri };
+    }
+  }
+  return { mockPerformLayout, mockElements, MockEntityElement };
+});
+
+vi.mock('@reactodia/workspace', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@reactodia/workspace')>();
+  return {
+    ...actual,
+    EntityElement: MockEntityElement,
+    EntityGroup: class {},
+  };
+});
 
 vi.mock('@/mcp/workspaceContext', () => ({
   getWorkspaceRefs: vi.fn(() => ({
-    ctx: { performLayout: mockPerformLayout },
+    ctx: {
+      performLayout: mockPerformLayout,
+      model: { elements: mockElements, links: [] },
+    },
     dataProvider: {},
   })),
 }));
@@ -67,5 +92,51 @@ describe('runLayout', () => {
     mockPerformLayout.mockRejectedValueOnce(new Error('layout failed'));
     const result = await tool('runLayout').handler({ algorithm: 'dagre-tb' });
     expect(result).toMatchObject({ success: false, error: expect.stringContaining('layout failed') });
+  });
+
+  it('with fixedIris calls performLayout with wrapped layout function', async () => {
+    mockElements.length = 0;
+    mockElements.push(new MockEntityElement('urn:a'), new MockEntityElement('urn:b'));
+
+    const result = await tool('runLayout').handler({
+      algorithm: 'dagre-lr',
+      fixedIris: ['urn:a'],
+    });
+    expect(result).toEqual({ success: true, data: { algorithm: 'dagre-lr' } });
+    expect(mockPerformLayout).toHaveBeenCalledOnce();
+    // The layoutFunction should be the withFixedNodes wrapper (a different function)
+    expect(mockPerformLayout).toHaveBeenCalledWith(
+      expect.objectContaining({ layoutFunction: expect.any(Function) })
+    );
+  });
+
+  it('with fixedIris not on canvas returns error', async () => {
+    mockElements.length = 0;
+    mockElements.push(new MockEntityElement('urn:a'));
+
+    const result = await tool('runLayout').handler({
+      algorithm: 'dagre-lr',
+      fixedIris: ['urn:missing'],
+    });
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('fixedIris not on canvas'),
+    });
+    expect(mockPerformLayout).not.toHaveBeenCalled();
+  });
+
+  it('with empty fixedIris array behaves as no fixed nodes', async () => {
+    const result = await tool('runLayout').handler({
+      algorithm: 'dagre-lr',
+      fixedIris: [],
+    });
+    expect(result).toEqual({ success: true, data: { algorithm: 'dagre-lr' } });
+    expect(mockPerformLayout).toHaveBeenCalledOnce();
+  });
+
+  it('without fixedIris behaves unchanged', async () => {
+    const result = await tool('runLayout').handler({ algorithm: 'dagre-lr' });
+    expect(result).toEqual({ success: true, data: { algorithm: 'dagre-lr' } });
+    expect(mockPerformLayout).toHaveBeenCalledOnce();
   });
 });

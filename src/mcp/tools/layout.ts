@@ -1,7 +1,31 @@
 // src/mcp/tools/layout.ts
 import * as Reactodia from '@reactodia/workspace';
+import type { LayoutFunction, LayoutGraph, LayoutState } from '@reactodia/workspace';
 import type { McpTool, McpResult } from '@/mcp/types';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
+
+/**
+ * Wrap a layout function so that nodes whose element IRI is in `fixedIris`
+ * get `fixed: true` injected into the LayoutGraph before the engine runs.
+ * Reactodia's `performLayout` → `calculateLayout` builds the LayoutGraph
+ * using element.id as node keys, so we match on those.
+ */
+function withFixedNodes(
+  baseFn: LayoutFunction,
+  fixedIris: ReadonlySet<string>
+): LayoutFunction {
+  return async (graph: LayoutGraph, state: LayoutState): Promise<LayoutState> => {
+    const nodes: Record<string, LayoutGraph['nodes'][string]> = {};
+    for (const [id, node] of Object.entries(graph.nodes)) {
+      if (fixedIris.has(id)) {
+        nodes[id] = { ...node, fixed: true };
+      } else {
+        nodes[id] = node;
+      }
+    }
+    return baseFn({ nodes, links: graph.links }, state);
+  };
+}
 
 export const VALID_ALGORITHMS = ['dagre-lr', 'dagre-tb', 'elk-layered', 'elk-force', 'elk-stress', 'elk-radial'] as const;
 type Algorithm = typeof VALID_ALGORITHMS[number];
@@ -51,11 +75,16 @@ const runLayout: McpTool = {
         type: 'number',
         description: 'Minimum distance between nodes in pixels. Defaults to 120.',
       },
+      fixedIris: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Optional IRIs of nodes that should stay at their current positions during layout.',
+      },
     },
   },
   async handler(params): Promise<McpResult> {
     try {
-      const p = params as { algorithm?: string; spacing?: number };
+      const p = params as { algorithm?: string; spacing?: number; fixedIris?: string[] };
       // Normalise common short forms: "dagre" → "dagre-lr", "elk" → "elk-layered"
       const ALIASES: Record<string, string> = { dagre: 'dagre-lr', elk: 'elk-layered' };
       const raw = p.algorithm ?? 'elk-layered';
@@ -93,6 +122,21 @@ const runLayout: McpTool = {
         case 'elk-radial':
           layoutFunction = createElkLayout('radial', spacing);
           break;
+      }
+
+      // Validate and apply fixedIris
+      if (p.fixedIris && p.fixedIris.length > 0) {
+        const entityElements = new Map<string, Reactodia.EntityElement>();
+        for (const el of ctx.model.elements) {
+          if (el instanceof Reactodia.EntityElement) {
+            entityElements.set(el.iri, el);
+          }
+        }
+        const notOnCanvas = p.fixedIris.filter(iri => !entityElements.has(iri));
+        if (notOnCanvas.length > 0) {
+          return { success: false, error: `fixedIris not on canvas: ${notOnCanvas.join(', ')}` };
+        }
+        layoutFunction = withFixedNodes(layoutFunction!, new Set(p.fixedIris));
       }
 
       await ctx.performLayout({ layoutFunction, animate: true });
@@ -282,12 +326,17 @@ const layoutNodes: McpTool = {
         type: 'number',
         description: 'Minimum distance between nodes in pixels. Defaults to 120.',
       },
+      fixedIris: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Optional subset of iris that should stay at their current positions during layout.',
+      },
     },
     required: ['iris'],
   },
   async handler(params): Promise<McpResult> {
     try {
-      const p = params as { iris?: string[]; algorithm?: string; spacing?: number };
+      const p = params as { iris?: string[]; algorithm?: string; spacing?: number; fixedIris?: string[] };
       const iris = p.iris ?? [];
       if (iris.length === 0) {
         return { success: false, error: 'iris must be a non-empty array' };
@@ -369,6 +418,15 @@ const layoutNodes: McpTool = {
         case 'elk-radial':
           layoutFunction = createElkLayout('radial', spacing);
           break;
+      }
+
+      // Validate and apply fixedIris
+      if (p.fixedIris && p.fixedIris.length > 0) {
+        const notOnCanvas = p.fixedIris.filter(iri => !entityElements.has(iri));
+        if (notOnCanvas.length > 0) {
+          return { success: false, error: `fixedIris not on canvas: ${notOnCanvas.join(', ')}` };
+        }
+        layoutFunction = withFixedNodes(layoutFunction!, new Set(p.fixedIris));
       }
 
       // Run layout on subset — performLayout expects ReadonlySet<Element>, not IRIs

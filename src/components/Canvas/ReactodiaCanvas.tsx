@@ -394,14 +394,10 @@ function scheduleSilentLayoutWorker(
 ): void {
   void (async () => {
     try {
-      // Wait one animation frame so that Reactodia fully settles canvas positions
-      // after performLayout (React render, renderingState callbacks, etc.).
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      // Re-snapshot L3 cluster positions now that the canvas has fully settled.
       clusterMgr.snapshotClusterPositions();
 
-      // Collect all entity IRIs. EntityElements (not inside any L3 cluster group)
-      // also have known canvas positions — snapshot these as L3 standalone positions.
+      // Collect all entity IRIs and snapshot standalone L3 positions.
       const allEntityIris: string[] = [];
       const standaloneL3Pos = new Map<string, Reactodia.Vector>();
       for (const el of ctx.model.elements) {
@@ -415,61 +411,18 @@ function scheduleSilentLayoutWorker(
           }
         }
       }
-      const allEntityIriSet = new Set(allEntityIris);
 
-      // L1 edges from relation links (entity IRIs regardless of group membership).
       const l1Edges: SilentLayoutEdge[] = ctx.model.links
         .filter((lk): lk is Reactodia.RelationLink => lk instanceof Reactodia.RelationLink)
         .map(lk => ({ source: lk.data.sourceId, target: lk.data.targetId }));
 
-      // L2: structural groups — filter to canvas-entity-relevant roots only.
-      // getStructuralGroups() covers the full TBox ontology (can be 300+ roots),
-      // but most are phantom class IRIs with no canvas entity. Including them in
-      // the layout graph produces unanchored nodes that dominate the force-directed
-      // result and destroy spatial coherence.
       const groupMap = dataProvider.getStructuralGroups();
-
-      // Only track membership for canvas entities.
-      const entityMemberToRoot = new Map<string, string>(); // entityIri → rootIri
+      const entityMemberToRoot = new Map<string, string>();
       for (const entityIri of allEntityIris) {
         const rootIri = groupMap.get(entityIri);
         if (rootIri) entityMemberToRoot.set(entityIri, rootIri);
       }
 
-      // L2 group roots = roots that are ALSO canvas entities.
-      // A root that is not on canvas means applyL2Fold will skip its group (rootEl not found),
-      // so its members remain as standalone EntityElements at L2 — they must NOT be treated
-      // as group roots in the layout (no canvas node to position them).
-      const canvasRootIrisSet = new Set<string>();
-      for (const rootIri of entityMemberToRoot.values()) {
-        if (allEntityIriSet.has(rootIri)) canvasRootIrisSet.add(rootIri);
-      }
-      const l2GroupRootIris = [...canvasRootIrisSet];
-
-      // L2 standalones = entities that appear as standalone EntityElements at L2:
-      // 1. Not in any structural group AND not a canvas root.
-      // 2. OR in a structural group whose root is NOT a canvas entity — applyL2Fold
-      //    skips groups whose root isn't on canvas, so these members land standalone.
-      // computeStructuralGroups never emits root→root self-entries, so canvas roots
-      // (in canvasRootIrisSet) must be excluded explicitly.
-      const l2StandaloneIris = allEntityIris.filter(iri => {
-        if (canvasRootIrisSet.has(iri)) return false;        // IS a canvas root → in l2GroupRootIris
-        const rootIri = entityMemberToRoot.get(iri);
-        if (!rootIri) return true;                           // no structural group → standalone
-        return !allEntityIriSet.has(rootIri);               // root not on canvas → standalone at L2
-      });
-
-      // L2–L2 edges: collapse entity edges to root pairs.
-      const l2Edges: SilentLayoutEdge[] = [];
-      for (const edge of l1Edges) {
-        const srcRoot = entityMemberToRoot.get(edge.source) ?? (allEntityIriSet.has(edge.source) ? edge.source : null);
-        const tgtRoot = entityMemberToRoot.get(edge.target) ?? (allEntityIriSet.has(edge.target) ? edge.target : null);
-        if (srcRoot && tgtRoot && srcRoot !== tgtRoot) {
-          l2Edges.push({ source: srcRoot, target: tgtRoot });
-        }
-      }
-
-      // L3 cluster state and entity → cluster position map.
       const clusterEntries = clusterMgr.clusterState ?? [];
       const entityToClusterPos = new Map<string, Reactodia.Vector>();
       for (const entry of clusterEntries) {
@@ -478,104 +431,44 @@ function scheduleSilentLayoutWorker(
         }
       }
 
-      // Best-effort seed position for any entity at L3 time.
       const getL3Seed = (iri: string): Reactodia.Vector | undefined =>
         standaloneL3Pos.get(iri) ?? entityToClusterPos.get(iri);
 
-      // ── Hierarchical L2 layout ──────────────────────────────────────────────
-      let l2AllPositions: Map<string, Reactodia.Vector>;
-
-      if (clusterEntries.length > 0) {
-        // Seed each L2 group root from its member entities' L3 positions.
-        // Cannot use getL3Seed(rootIri) — root IRIs are class IRIs, not entity IRIs.
-        // Two-pass: prefer standalone-L3 members (exact canvas position at L3).
-        const l2RootSeeds = new Map<string, Reactodia.Vector>();
-        for (const entityIri of allEntityIris) {
-          if (!standaloneL3Pos.has(entityIri)) continue;
-          const rootIri = entityMemberToRoot.get(entityIri);
-          if (rootIri && !l2RootSeeds.has(rootIri)) l2RootSeeds.set(rootIri, standaloneL3Pos.get(entityIri)!);
-        }
-        for (const entityIri of allEntityIris) {
-          const rootIri = entityMemberToRoot.get(entityIri);
-          if (rootIri && !l2RootSeeds.has(rootIri)) {
-            const seed = getL3Seed(entityIri);
-            if (seed) l2RootSeeds.set(rootIri, seed);
-          }
-        }
-
-        // L2: seed-based positions — no layout engine.
-        // Seeds (cluster centroid / L3 position) ARE the correct L2 positions.
-        // The engine would need truly-fixed anchor nodes to be useful here, but
-        // LayoutNode.fixed is ignored at runtime by all engines; the phantom-anchor
-        // approach only worked by coincidence when all nodes were accidentally fixed.
-        l2AllPositions = new Map();
-        for (const iri of l2GroupRootIris) {
-          const pos = l2RootSeeds.get(iri) ?? getL3Seed(iri);
-          if (pos) l2AllPositions.set(iri, pos);
-        }
-        for (const iri of l2StandaloneIris) {
-          const pos = getL3Seed(iri);
-          if (pos) l2AllPositions.set(iri, pos);
-        }
-        // Fallback: member entity IRI → root's L2 position.
-        // Required by _animateToLevel2 which looks up EntityGroup position via items[0].data.id.
-        for (const entityIri of allEntityIris) {
-          if (l2AllPositions.has(entityIri)) continue;
-          const rootIri = entityMemberToRoot.get(entityIri);
-          const pos = (rootIri ? l2AllPositions.get(rootIri) : undefined) ?? getL3Seed(entityIri);
-          if (pos) l2AllPositions.set(entityIri, pos);
-        }
-      } else {
-        const rawL2 = l2GroupRootIris.length > 0
-          ? await runSilentLayout(layoutFn, l2GroupRootIris, l2Edges)
-          : new Map<string, Reactodia.Vector>();
-        l2AllPositions = new Map(rawL2);
-        for (const iri of l2StandaloneIris) {
-          const pos = standaloneL3Pos.get(iri);
-          if (pos) l2AllPositions.set(iri, { ...pos });
-        }
-      }
-
+      // ── L2 positions: each entity → its L3 seed ────────────────────────────
+      // Members are overridden with their root's position so _animateToLevel2
+      // places EntityGroups correctly.
       const l2Positions = new Map<string, Reactodia.Vector>();
-      for (const iri of l2GroupRootIris) {
-        const pos = l2AllPositions.get(iri);
+      for (const iri of allEntityIris) {
+        const pos = getL3Seed(iri);
         if (pos) l2Positions.set(iri, pos);
       }
-
-      // ── Incremental L1 layout ───────────────────────────────────────────────
-      // runSilentLayout now fully handles fixed nodes: they are excluded from the
-      // engine call and returned at their seed positions. Free nodes (members) are
-      // passed to the engine with seeds at their cluster centroid, so force-directed
-      // engines spread them from there. No anchor edges or post-processing needed.
-      let l1Positions: Map<string, Reactodia.Vector>;
-      if (l2AllPositions.size > 0) {
-        // Fixed = roots and standalones (non-members). Members are free.
-        const l1Fixed = new Set<string>();
-        const l1Seeds = new Map<string, Reactodia.Vector>();
-        for (const entityIri of allEntityIris) {
-          const rootIri = entityMemberToRoot.get(entityIri);
-          if (!rootIri) {
-            // Root or standalone: fixed at its L2 position.
-            const pos = l2AllPositions.get(entityIri);
-            if (pos) { l1Fixed.add(entityIri); l1Seeds.set(entityIri, pos); }
-          } else {
-            // Member: free, seeded at root's L2 position (starts in the right cluster region).
-            const seed = l2AllPositions.get(rootIri) ?? getL3Seed(entityIri);
-            if (seed) l1Seeds.set(entityIri, seed);
-          }
-        }
-        l1Positions = await runSilentLayout(
-          layoutFn, allEntityIris, l1Edges, { seeds: l1Seeds, fixed: l1Fixed }
-        );
-      } else {
-        l1Positions = await runSilentLayout(layoutFn, allEntityIris, l1Edges);
+      for (const [entityIri, rootIri] of entityMemberToRoot) {
+        const rootPos = l2Positions.get(rootIri);
+        if (rootPos) l2Positions.set(entityIri, rootPos);
       }
 
-      // l2AllPositions covers both structural group roots AND standalone entities at L2.
-      // l2Positions (roots only) is kept for callers that only need the group-root subset,
-      // but we pass the full map so _animateToLevel2 can also position standalone EntityElements.
-      clusterMgr.setPrecomputedPositions({ l1: l1Positions, l2: l2AllPositions });
-      console.debug(`[Canvas] Silent layout complete — L1: ${l1Positions.size}, L2: ${l2AllPositions.size} positions (${l2Positions.size} group roots)`);
+      // ── L1 incremental layout ──────────────────────────────────────────────
+      // Non-members (roots + standalones) are fixed at their L2 positions.
+      // Members are free — the engine spreads them with full edge connectivity.
+      const l1Fixed = new Set<string>();
+      const l1Seeds = new Map<string, Reactodia.Vector>();
+      for (const iri of allEntityIris) {
+        if (!entityMemberToRoot.has(iri)) {
+          const pos = l2Positions.get(iri);
+          if (pos) { l1Fixed.add(iri); l1Seeds.set(iri, pos); }
+        } else {
+          const rootIri = entityMemberToRoot.get(iri)!;
+          const seed = l2Positions.get(rootIri) ?? getL3Seed(iri);
+          if (seed) l1Seeds.set(iri, seed);
+        }
+      }
+
+      const l1Positions = l1Fixed.size > 0
+        ? await runSilentLayout(layoutFn, allEntityIris, l1Edges, { seeds: l1Seeds, fixed: l1Fixed })
+        : await runSilentLayout(layoutFn, allEntityIris, l1Edges);
+
+      clusterMgr.setPrecomputedPositions({ l1: l1Positions, l2: l2Positions });
+      console.debug(`[Canvas] Silent layout complete — L1: ${l1Positions.size}, L2: ${l2Positions.size}`);
     } catch (err) {
       console.warn('[Canvas] Silent layout failed:', err);
     }
@@ -1322,21 +1215,47 @@ export default function ReactodiaCanvas() {
 
   const { currentLevel, maxFoldLevel, canGoUp, canGoDown } = levelSnapshot;
 
+  const diagOverlaps = React.useCallback((ctx: Reactodia.WorkspaceContext, label: string) => {
+    const els = ctx.model.elements.filter(
+      (el): el is Reactodia.EntityElement | Reactodia.EntityGroup =>
+        el instanceof Reactodia.EntityElement || el instanceof Reactodia.EntityGroup
+    );
+    const groups = els.filter(el => el instanceof Reactodia.EntityGroup);
+    const entities = els.filter(el => el instanceof Reactodia.EntityElement);
+    const canvas = ctx.view.findAnyCanvas();
+    let overlaps = 0;
+    const atOrigin = els.filter(el => el.position.x === 0 && el.position.y === 0).length;
+    for (let i = 0; i < els.length; i++) {
+      const a = els[i];
+      const aSize = canvas?.renderingState.getElementSize(a);
+      const ax = a.position.x, ay = a.position.y;
+      const aw = aSize?.width ?? 120, ah = aSize?.height ?? 40;
+      for (let j = i + 1; j < els.length; j++) {
+        const b = els[j];
+        const bSize = canvas?.renderingState.getElementSize(b);
+        const bx = b.position.x, by = b.position.y;
+        const bw = bSize?.width ?? 120, bh = bSize?.height ?? 40;
+        if (ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by) {
+          overlaps++;
+        }
+      }
+    }
+    const uniquePositions = new Set(els.map(el => `${el.position.x},${el.position.y}`)).size;
+    console.debug(`[${label}] overlap check: ${groups.length} groups + ${entities.length} entities = ${els.length}, ${overlaps} overlapping pairs, ${uniquePositions} unique positions, ${atOrigin} at origin`);
+  }, []);
+
   const handleLevelUp = React.useCallback(async () => {
     const ctx = contextRef.current;
     const cfg = useAppConfigStore.getState().config;
     if (!ctx) return;
 
-    console.debug('[levelUp] before levelUp(), currentLevel=', clusterLevelManager.currentLevel);
     const result = await clusterLevelManager.levelUp();
-    console.debug('[levelUp] needsLayout=', result.needsLayout, 'layoutAnimations=', cfg.layoutAnimations);
     await ctx.model.requestLinks();
 
     if (result.needsLayout && cfg.autoApplyLayout) {
       const topLevel = new Set(ctx.model.elements.filter(
         el => el instanceof Reactodia.EntityGroup || el instanceof Reactodia.EntityElement
       ));
-      console.debug('[levelUp] performLayout, topLevel.size=', topLevel.size);
       await ctx.performLayout({
         layoutFunction: getLayoutFunction(cfg.currentLayout, cfg, defaultLayout),
         selectedElements: topLevel,
@@ -1344,23 +1263,25 @@ export default function ReactodiaCanvas() {
       });
       clusterLevelManager.snapshotClusterPositions();
     }
-  }, [defaultLayout]);
+    diagOverlaps(ctx, 'levelUp');
+  }, [defaultLayout, diagOverlaps]);
 
   const handleLevelDown = React.useCallback(async () => {
     const ctx = contextRef.current;
     const cfg = useAppConfigStore.getState().config;
     if (!ctx) return;
 
-    console.debug('[levelDown] before levelDown(), currentLevel=', clusterLevelManager.currentLevel);
     const result = clusterLevelManager.levelDown();
-    console.debug('[levelDown] needsLayout=', result.needsLayout, 'layoutAnimations=', cfg.layoutAnimations);
+    const targetLevel = clusterLevelManager.currentLevel;
+    const hasPrecomputed = clusterLevelManager.hasPositionsForLevel(targetLevel);
     await ctx.model.requestLinks();
 
-    if (result.needsLayout && cfg.autoApplyLayout) {
+    if (result.needsLayout && hasPrecomputed) {
+      await clusterLevelManager.animateExpandPositions();
+    } else if (result.needsLayout && cfg.autoApplyLayout) {
       const topLevel = new Set(ctx.model.elements.filter(
         el => el instanceof Reactodia.EntityGroup || el instanceof Reactodia.EntityElement
       ));
-      console.debug('[levelDown] performLayout, topLevel.size=', topLevel.size);
       await ctx.performLayout({
         layoutFunction: getLayoutFunction(cfg.currentLayout, cfg, defaultLayout),
         selectedElements: topLevel,
@@ -1369,7 +1290,8 @@ export default function ReactodiaCanvas() {
     } else if (result.needsLayout) {
       await clusterLevelManager.animateExpandPositions();
     }
-  }, [defaultLayout]);
+    diagOverlaps(ctx, 'levelDown');
+  }, [defaultLayout, diagOverlaps]);
 
   const handleClearData = React.useCallback(() => {
     knownSubjects.clear();
