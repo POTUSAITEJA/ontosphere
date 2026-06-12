@@ -529,7 +529,11 @@ function scheduleSilentLayoutWorker(
           // must be fixed at its own position, not a position derived from its members.
           const seed = getL3Seed(iri) ?? l2RootSeeds.get(iri);
           if (seed) l2Seeds.set(iri, seed);
-          if (standaloneL3Pos.has(iri)) l2Fixed.add(iri);
+          // Fix any node whose L3 position is known — either as a standalone
+          // EntityElement (standaloneL3Pos) or as a member of an L3 cluster
+          // group (entityToClusterPos). Without this, nodes that were inside L3
+          // clusters get scattered to a vertical column by the layout engine.
+          if (standaloneL3Pos.has(iri) || entityToClusterPos.has(iri)) l2Fixed.add(iri);
         }
 
         const l2AnchorEdges: SilentLayoutEdge[] = [...l2Edges];
