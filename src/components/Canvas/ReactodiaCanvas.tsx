@@ -543,7 +543,9 @@ function scheduleSilentLayoutWorker(
           const seed = l2RootSeeds.get(iri) ?? getL3Seed(iri);
           if (seed) {
             l2Seeds.set(iri, seed);
-            l2Fixed.add(iri);
+            // Only standalones are fixed — they have exact L3 positions.
+            // Group roots are free so the engine positions them relative to phantom anchors.
+            if (standaloneL3Pos.has(iri)) l2Fixed.add(iri);
           }
         }
 
@@ -599,7 +601,11 @@ function scheduleSilentLayoutWorker(
       // place free nodes in a column — acceptable Dagre limitation.
       let l1Positions: Map<string, Reactodia.Vector>;
       if (l2AllPositions.size > 0) {
-        const l1Fixed = new Set<string>(l2AllPositions.keys());
+        // Fixed at L1 = only group roots + standalones (l2VisibleIris that landed in l2AllPositions).
+        // Member entities are free — engine positions them near their fixed roots via anchor edges.
+        // l2AllPositions also contains member-entity entries (from the fallback loop), but those
+        // must NOT be fixed here or the engine has no free nodes to actually lay out.
+        const l1Fixed = new Set<string>(l2VisibleIris.filter(iri => l2AllPositions.has(iri)));
         const l1Seeds = new Map<string, Reactodia.Vector>(l2AllPositions);
         for (const entityIri of allEntityIris) {
           if (!l1Fixed.has(entityIri)) {
