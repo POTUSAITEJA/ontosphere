@@ -8,10 +8,16 @@ import {
 } from '@reactodia/workspace';
 import { toPrefixed } from '../utils/termUtils';
 import { computeStructuralGroups, type RdfQuadLike, type StructuralGroupMap } from '../components/Canvas/core/structuralGroups';
+import { computeClustersLabelPropagation } from '../components/Canvas/core/clusterAlgorithms/labelPropagation';
+import { computeClustersLouvainNgraph } from '../components/Canvas/core/clusterAlgorithms/louvainNgraph';
+import type { ClusterNode, ClusterEdge } from '../components/Canvas/core/clusterAlgorithms/types';
 
 const EMPTY_LINKS: ReadonlySet<LinkTypeIri> = new Set();
 
 export type ViewMode = 'abox' | 'tbox';
+
+/** Cluster membership returned by the provider — pure topology, no canvas positions. */
+export interface CommunityClusterEntry { iris: string[] }
 
 /**
  * RDF types that mark a node as an ABox instance (individual data).
@@ -198,6 +204,7 @@ export class N3DataProvider implements DataProvider {
   private typeMap = new Map<string, Set<string>>();
   private bNodeViewMap = new Map<string, 'tbox' | 'abox'>();
   private structuralGroupCache: StructuralGroupMap | null = null;
+  private communityGroupsCache = new Map<string, CommunityClusterEntry[]>();
   /**
    * All subject IRIs eligible for the search index.
    *
@@ -358,17 +365,99 @@ export class N3DataProvider implements DataProvider {
   }
 
   setViewMode(mode: ViewMode): void { this.viewMode = mode; }
+  get currentViewMode(): ViewMode { return this.viewMode; }
 
   /** Synchronously filter IRIs to those matching the current view mode. */
   filterByViewMode(iris: string[]): string[] {
-    return iris.filter(iri => {
-      const types = this.typeMap.get(iri);
-      if (!types && iri.startsWith(SKOLEM_PREFIX)) {
-        const view = this.bNodeViewMap.get(iri) ?? 'tbox';
-        return view === this.viewMode;
+    return iris.filter(iri => this._matchesIriToMode(iri, this.viewMode));
+  }
+
+  /**
+   * Compute (and cache) community cluster assignments for a given view mode.
+   * Uses RDF graph topology only — no canvas positions needed.
+   * Caches per (algorithm, viewMode). Invalidated by invalidateCommunityGroups().
+   *
+   * allSubjects: the full known-subject set from the canvas (knownSubjects).
+   * Returns ClusterEntry list with iris only; positions are (0,0) placeholder.
+   */
+  getCommunityGroups(
+    algorithm: string,
+    viewMode: ViewMode,
+    allSubjects: Iterable<string>
+  ): CommunityClusterEntry[] {
+    const key = `${algorithm}:${viewMode}`;
+    if (this.communityGroupsCache.has(key)) return this.communityGroupsCache.get(key)!;
+
+    // K-means needs canvas positions for centroid seeding — skip provider-level compute
+    if (algorithm === 'kmeans') {
+      this.communityGroupsCache.set(key, []);
+      return [];
+    }
+
+    const dataset = (this.inner as any).dataset;
+    if (!dataset?.iterateMatches) {
+      this.communityGroupsCache.set(key, []);
+      return [];
+    }
+
+    // Filter to subjects belonging to this view mode
+    const viewSubjects = new Set<string>();
+    for (const iri of allSubjects) {
+      if (this._matchesIriToMode(iri, viewMode)) viewSubjects.add(iri);
+    }
+
+    if (viewSubjects.size < 2) {
+      this.communityGroupsCache.set(key, []);
+      return [];
+    }
+
+    // Build edges: any RDF triple where both subject and object are named-node view subjects
+    const connectivity = new Map<string, number>();
+    for (const iri of viewSubjects) connectivity.set(iri, 0);
+    const seenEdges = new Set<string>();
+    const edges: ClusterEdge[] = [];
+    for (const quad of dataset.iterateMatches(null, null, null)) {
+      if (quad.subject.termType !== 'NamedNode' || quad.object.termType !== 'NamedNode') continue;
+      const src = quad.subject.value as string;
+      const tgt = quad.object.value as string;
+      if (!viewSubjects.has(src) || !viewSubjects.has(tgt) || src === tgt) continue;
+      const edgeKey = `${src}\x00${tgt}`;
+      if (seenEdges.has(edgeKey)) continue;
+      seenEdges.add(edgeKey);
+      edges.push({ id: edgeKey, source: src, target: tgt });
+      connectivity.set(src, (connectivity.get(src) ?? 0) + 1);
+      connectivity.set(tgt, (connectivity.get(tgt) ?? 0) + 1);
+    }
+
+    const nodes: ClusterNode[] = [...viewSubjects].map(iri => ({
+      id: iri,
+      connectivity: connectivity.get(iri) ?? 0,
+      position: { x: 0, y: 0 },
+    }));
+
+    const compute = algorithm === 'louvain'
+      ? computeClustersLouvainNgraph
+      : computeClustersLabelPropagation;
+    const { clusters } = compute(nodes, edges, { threshold: 2 });
+
+    const result: CommunityClusterEntry[] = [];
+    for (const [, cluster] of clusters) {
+      if (cluster.nodeIds.length >= 2) result.push({ iris: cluster.nodeIds });
+    }
+
+    this.communityGroupsCache.set(key, result);
+    return result;
+  }
+
+  /** Clear community group cache (call when algorithm changes or data is reloaded). */
+  invalidateCommunityGroups(algorithm?: string): void {
+    if (algorithm) {
+      for (const key of this.communityGroupsCache.keys()) {
+        if (key.startsWith(`${algorithm}:`)) this.communityGroupsCache.delete(key);
       }
-      return this.matchesViewMode(types ? [...types] as ElementTypeIri[] : []);
-    });
+    } else {
+      this.communityGroupsCache.clear();
+    }
   }
 
   async knownElementTypes(p: { signal?: AbortSignal }): Promise<ElementTypeGraph> {
@@ -600,10 +689,23 @@ export class N3DataProvider implements DataProvider {
   }
 
   private matchesViewMode(types: readonly ElementTypeIri[]): boolean {
+    return this._matchesMode(types, this.viewMode);
+  }
+
+  private _matchesMode(types: readonly ElementTypeIri[], mode: ViewMode): boolean {
     const isA = types.some(t => ABOX_TYPES.has(t));
     const isT = types.some(t => TBOX_TYPES.has(t));
     if (isA && isT) return true;
-    if (this.viewMode === 'abox') return isA || (!isA && !isT);
+    if (mode === 'abox') return isA || (!isA && !isT);
     return isT;
+  }
+
+  private _matchesIriToMode(iri: string, mode: ViewMode): boolean {
+    const types = this.typeMap.get(iri);
+    if (!types && iri.startsWith(SKOLEM_PREFIX)) {
+      const view = this.bNodeViewMap.get(iri) ?? 'tbox';
+      return view === mode;
+    }
+    return this._matchesMode(types ? [...types] as ElementTypeIri[] : [], mode);
   }
 }

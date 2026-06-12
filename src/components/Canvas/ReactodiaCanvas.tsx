@@ -28,8 +28,8 @@ import { generateEntityIri } from '@/utils/iriUtils';
 import ResizableNamespaceLegend from './ResizableNamespaceLegend';
 import { useAppConfigStore } from '@/stores/appConfigStore';
 import { getLayoutFunction } from './layout/getLayoutFunction';
-import type { StructuralGroupMap } from './core/structuralGroups';
 import { runSilentLayout, type SilentLayoutEdge } from './layout/silentLayout';
+import type { StructuralGroupMap } from './core/structuralGroups';
 import { ClusterLevelManager } from './core/ClusterLevelManager';
 import { LayoutPopover } from './LayoutPopover';
 import { RdfPropertyEditor } from './rdfPropertyEditor';
@@ -382,6 +382,132 @@ function updateL2GroupsForNewElements(
   return alreadyReformed.size;
 }
 
+/**
+ * Fire-and-forget background layout for L1 (entities) and L2 (structural groups).
+ * Runs after L3 init layout so level-down transitions have pre-computed home positions.
+ * Must be called without await — the result is stored in ClusterLevelManager async.
+ */
+function scheduleSilentLayoutWorker(
+  ctx: Reactodia.WorkspaceContext,
+  layoutFn: Reactodia.LayoutFunction,
+  clusterMgr: ClusterLevelManager,
+): void {
+  void (async () => {
+    try {
+      // Collect all entity IRIs — may be inside L3 groups at this point.
+      const allEntityIris: string[] = [];
+      for (const el of ctx.model.elements) {
+        if (el instanceof Reactodia.EntityElement) {
+          allEntityIris.push(el.data.id as string);
+        } else if (el instanceof Reactodia.EntityGroup) {
+          for (const item of el.items) {
+            allEntityIris.push(item.data.id as string);
+          }
+        }
+      }
+
+      // L1 edges from relation links (entity IRIs regardless of group membership).
+      const l1Edges: SilentLayoutEdge[] = ctx.model.links
+        .filter((lk): lk is Reactodia.RelationLink => lk instanceof Reactodia.RelationLink)
+        .map(lk => ({ source: lk.data.sourceId, target: lk.data.targetId }));
+
+      // L2: structural group roots — one node per group, edges between groups.
+      const groupMap = dataProvider.getStructuralGroups();
+      const memberToRoot = new Map<string, string>();
+      const rootIrisSet = new Set<string>();
+      for (const [memberIri, rootIri] of groupMap) {
+        memberToRoot.set(memberIri, rootIri);
+        memberToRoot.set(rootIri, rootIri);
+        rootIrisSet.add(rootIri);
+      }
+      const l2GroupRootIris = [...rootIrisSet];
+
+      const l2Edges: SilentLayoutEdge[] = [];
+      const allEntityIriSet = new Set(allEntityIris);
+      for (const edge of l1Edges) {
+        const srcRoot = memberToRoot.get(edge.source) ?? (allEntityIriSet.has(edge.source) ? edge.source : null);
+        const tgtRoot = memberToRoot.get(edge.target) ?? (allEntityIriSet.has(edge.target) ? edge.target : null);
+        if (srcRoot && tgtRoot && srcRoot !== tgtRoot) {
+          l2Edges.push({ source: srcRoot, target: tgtRoot });
+        }
+      }
+
+      const [l1Positions, l2Positions] = await Promise.all([
+        runSilentLayout(layoutFn, allEntityIris, l1Edges),
+        l2GroupRootIris.length > 0
+          ? runSilentLayout(layoutFn, l2GroupRootIris, l2Edges)
+          : Promise.resolve(new Map<string, Reactodia.Vector>()),
+      ]);
+
+      clusterMgr.setPrecomputedPositions({ l1: l1Positions, l2: l2Positions });
+      console.log(`[Canvas] Silent layout complete — L1: ${l1Positions.size}, L2: ${l2Positions.size} positions`);
+    } catch (err) {
+      console.warn('[Canvas] Silent layout failed:', err);
+    }
+  })();
+}
+
+/**
+ * Initialize the canvas after nodes arrive — handles both small and large graphs
+ * for ABox initial load and first TBox switch.
+ *
+ * Small graph (≤ largeGraphThreshold): schedule layout, entities displayed.
+ * Large graph (> threshold): L3 clustering triggered, layout on groups,
+ *   then silent worker pre-computes L1/L2 positions in background.
+ */
+async function initializeCanvas(
+  ctx: Reactodia.WorkspaceContext,
+  layoutFn: Reactodia.LayoutFunction,
+  cfg: { clusteringAlgorithm: string; largeGraphThreshold: number; layoutAnimations: boolean },
+  clusterMgr: ClusterLevelManager,
+  signal: AbortSignal,
+  onDone: () => void,
+): Promise<void> {
+  const { model } = ctx;
+
+  // Capture entity count BEFORE levelUp/buildL3 — model.group() removes EntityElements
+  // from model.elements, so sampling after L3 grouping returns only ungrouped nodes.
+  const entityCount = model.elements.filter(
+    (el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement
+  ).length;
+
+  if (entityCount === 0) {
+    onDone();
+    return;
+  }
+
+  const autoCluster = clusterMgr.shouldAutoCluster(
+    entityCount, cfg.clusteringAlgorithm, cfg.largeGraphThreshold
+  );
+
+  // L0→L1: fold annotations. Guard: may already be at L1+ from a prior import.
+  if (clusterMgr.currentLevel < 1) {
+    await clusterMgr.levelUp();
+  }
+
+  if (autoCluster) {
+    clusterMgr.buildL3(cfg.clusteringAlgorithm, knownSubjects);
+    const topLevel = new Set(model.elements.filter(
+      el => el instanceof Reactodia.EntityGroup || el instanceof Reactodia.EntityElement
+    ));
+    try {
+      await ctx.performLayout({ layoutFunction: layoutFn, selectedElements: topLevel, animate: false, signal });
+    } catch (err) {
+      console.warn('[canvas layout] L3 performLayout failed:', err);
+    }
+    clusterMgr.snapshotClusterPositions();
+    // Fire-and-forget: pre-compute L1/L2 positions for smooth level-down transitions.
+    scheduleSilentLayoutWorker(ctx, layoutFn, clusterMgr);
+  } else {
+    try {
+      await ctx.performLayout({ layoutFunction: layoutFn, animate: cfg.layoutAnimations, signal });
+    } catch (err) {
+      console.warn('[canvas layout] performLayout failed (model changed during layout):', err);
+    }
+  }
+
+  onDone();
+}
 
 export default function ReactodiaCanvas() {
   const { defaultLayout } = Reactodia.useWorker(Layouts);
@@ -507,6 +633,25 @@ export default function ReactodiaCanvas() {
     contextRef.current = context;
     setWorkspaceContext(context, dataProvider);
     clusterLevelManager.init(context, dataProvider);
+
+    // Test bridge — exposes element positions and current level for Playwright tests.
+    (window as any).__testClusterBridge = {
+      getLevel: () => clusterLevelManager.currentLevel,
+      getElementPositions: () => {
+        const m = contextRef.current?.model;
+        if (!m) return {};
+        const out: Record<string, { x: number; y: number }> = {};
+        for (const el of m.elements) {
+          if (el instanceof Reactodia.EntityElement) out[el.data.id as string] = { ...el.position };
+          else if (el instanceof Reactodia.EntityGroup) {
+            const firstMemberId = el.items[0]?.data.id;
+            const key = firstMemberId ? `__group__${firstMemberId}` : `__group__${el.id}`;
+            out[key] = { ...el.position };
+          }
+        }
+        return out;
+      },
+    };
 
     // Enable authoring mode so link/element halo buttons (edit, delete, move) are visible
     editor.setAuthoringMode(true);
@@ -718,88 +863,13 @@ export default function ReactodiaCanvas() {
         if (isFullRefresh) {
           const controller = new AbortController();
           pendingLayoutController.current = controller;
-
-          // L0 → L1: fold annotations
-          await clusterLevelManager.levelUp();
-
-          const entityCount = model.elements.filter(
-            (el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement
-          ).length;
-          const shouldAutoCluster =
-            cfg.clusteringAlgorithm !== 'none' &&
-            entityCount > cfg.largeGraphThreshold;
-
           try {
-            if (shouldAutoCluster) {
-              // Collect entity IRIs + edges BEFORE L3 grouping (model.links is complete at L1)
-              const preGroupIris = model.elements
-                .filter((el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement)
-                .map(el => el.data.id as string);
-              const preGroupEdges: SilentLayoutEdge[] = model.links
-                .filter((lk): lk is Reactodia.RelationLink => lk instanceof Reactodia.RelationLink)
-                .map(lk => ({ source: lk.data.sourceId, target: lk.data.targetId }));
-
-              // Schedule silent layout immediately (before any await) so it runs in parallel
-              // with buildL3 + performLayout. Callbacks run as microtasks and always land
-              // after the synchronous snapshotEntityPositions call below (because Promise
-              // .then callbacks queue behind the current synchronous continuation).
-              const gen = clusterLevelManager.stateGeneration;
-              const groupMap = dataProvider.getStructuralGroups();
-              const getSuperNode = (iri: string) => groupMap.get(iri) ?? iri;
-              const l2Nodes = [...new Set(preGroupIris.map(getSuperNode))];
-              const l2EdgeSet = new Set<string>();
-              const l2Edges: SilentLayoutEdge[] = [];
-              for (const e of preGroupEdges) {
-                const src = getSuperNode(e.source);
-                const tgt = getSuperNode(e.target);
-                if (src === tgt) continue;
-                const key = `${src}↔${tgt}`;
-                if (!l2EdgeSet.has(key)) { l2EdgeSet.add(key); l2Edges.push({ source: src, target: tgt }); }
-              }
-              console.error('[canvas] SILENT LAYOUT SCHEDULED — L2 nodes:', l2Nodes.length, 'edges:', l2Edges.length, '| L1 nodes:', preGroupIris.length, 'edges:', preGroupEdges.length, '| gen:', gen);
-              runSilentLayout(layoutFn, l2Nodes, l2Edges)
-                .then(l2Positions => {
-                  clusterLevelManager.updateL2Positions(l2Positions, gen);
-                  return runSilentLayout(layoutFn, preGroupIris, preGroupEdges);
-                })
-                .then(l1Positions => {
-                  clusterLevelManager.updateEntityPositions(l1Positions, gen);
-                })
-                .catch(err => {
-                  console.warn('[Canvas] Silent background layout failed:', err);
-                });
-
-              // Build L3 clusters and layout the canvas (visual, foreground)
-              clusterLevelManager.buildL3(cfg.clusteringAlgorithm, knownSubjects);
-              const topLevel = new Set(model.elements.filter(
-                el => el instanceof Reactodia.EntityGroup || el instanceof Reactodia.EntityElement
-              ));
-              try {
-                await ctx.performLayout({
-                  layoutFunction: layoutFn,
-                  selectedElements: topLevel,
-                  animate: false,
-                  signal: controller.signal,
-                });
-              } catch (err) {
-                console.warn('[canvas layout] L3 performLayout failed:', err);
-              }
-              clusterLevelManager.snapshotEntityPositions();
-            } else {
-              try {
-                await ctx.performLayout({
-                  layoutFunction: layoutFn,
-                  animate: cfg.layoutAnimations,
-                  signal: controller.signal,
-                });
-              } catch (err) {
-                console.warn('[canvas layout] performLayout failed (model changed during layout):', err);
-              }
-            }
+            await initializeCanvas(ctx, layoutFn, cfg, clusterLevelManager, controller.signal, () => {
+              initialLayoutDone.current = true;
+              actions.setCanvasReady(true);
+            });
           } finally {
             if (pendingLayoutController.current === controller) pendingLayoutController.current = null;
-            initialLayoutDone.current = true;
-            actions.setCanvasReady(true);
           }
         } else {
           // Debounce overlap-triggered layout: wait 300 ms after the last change so
@@ -912,73 +982,10 @@ export default function ReactodiaCanvas() {
         }
         if (filtered.length > 0) {
           await model.requestData();
-
-          // L0 → L1: fold annotations (elements default to expanded=false already)
-          await clusterLevelManager.levelUp();
-
-          {
-            const entityCount = model.elements.filter(
-              (el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement
-            ).length;
-            const shouldAutoCluster =
-              cfg.clusteringAlgorithm !== 'none' &&
-              entityCount > cfg.largeGraphThreshold;
-            if (shouldAutoCluster) {
-              // Collect entity IRIs + edges BEFORE L3 grouping (model.links is complete at L1)
-              const preGroupIris = model.elements
-                .filter((el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement)
-                .map(el => el.data.id as string);
-              const preGroupEdges: SilentLayoutEdge[] = model.links
-                .filter((lk): lk is Reactodia.RelationLink => lk instanceof Reactodia.RelationLink)
-                .map(lk => ({ source: lk.data.sourceId, target: lk.data.targetId }));
-
-              // Schedule silent layout immediately (before any await), same as onSubjectsChange path
-              const gen = clusterLevelManager.stateGeneration;
-              const groupMap = dataProvider.getStructuralGroups();
-              const getSuperNode = (iri: string) => groupMap.get(iri) ?? iri;
-              const l2Nodes = [...new Set(preGroupIris.map(getSuperNode))];
-              const l2EdgeSet = new Set<string>();
-              const l2Edges: SilentLayoutEdge[] = [];
-              for (const e of preGroupEdges) {
-                const src = getSuperNode(e.source);
-                const tgt = getSuperNode(e.target);
-                if (src === tgt) continue;
-                const key = `${src}↔${tgt}`;
-                if (!l2EdgeSet.has(key)) { l2EdgeSet.add(key); l2Edges.push({ source: src, target: tgt }); }
-              }
-              console.debug('[canvas] silent layout scheduled — L2 nodes:', l2Nodes.length, 'edges:', l2Edges.length, '| L1 nodes:', preGroupIris.length, 'edges:', preGroupEdges.length);
-              runSilentLayout(layoutFn, l2Nodes, l2Edges)
-                .then(l2Positions => {
-                  clusterLevelManager.updateL2Positions(l2Positions, gen);
-                  return runSilentLayout(layoutFn, preGroupIris, preGroupEdges);
-                })
-                .then(l1Positions => {
-                  clusterLevelManager.updateEntityPositions(l1Positions, gen);
-                })
-                .catch(err => {
-                  console.warn('[Canvas] Silent background layout failed:', err);
-                });
-
-              // Build L3 clusters and layout canvas (visual, foreground)
-              clusterLevelManager.buildL3(cfg.clusteringAlgorithm, knownSubjects);
-              const topLevel = new Set(model.elements.filter(
-                el => el instanceof Reactodia.EntityGroup || el instanceof Reactodia.EntityElement
-              ));
-              try {
-                await ctx.performLayout({ layoutFunction: layoutFn, selectedElements: topLevel, animate: false, signal: controller.signal });
-              } catch (err) {
-                console.warn('[canvas layout] L3 performLayout failed (view-switch):', err);
-              }
-              clusterLevelManager.snapshotEntityPositions();
-            } else if (autoApplyLayout) {
-              const overlapping = findOverlappingEntities(model.elements, cfg.layoutSpacing);
-              if (overlapping.size > 0) {
-                await ctx.performLayout({ layoutFunction: layoutFn, selectedElements: overlapping, animate: cfg.layoutAnimations, signal: controller.signal });
-              }
-            }
+          await initializeCanvas(ctx, layoutFn, cfg, clusterLevelManager, controller.signal, () => {
             initialLayoutDone.current = true;
             actions.setCanvasReady(true);
-          }
+          });
         }
         const canvas = ctx.view.findAnyCanvas();
         if (canvas) {
@@ -1162,6 +1169,7 @@ export default function ReactodiaCanvas() {
         selectedElements: topLevel,
         animate: cfg.layoutAnimations,
       });
+      clusterLevelManager.snapshotClusterPositions();
     }
   }, [defaultLayout]);
 
@@ -1180,11 +1188,14 @@ export default function ReactodiaCanvas() {
   const { currentLevel, maxFoldLevel, canGoUp, canGoDown } = levelSnapshot;
 
   const handleLevelUp = React.useCallback(async () => {
+    const ctx = contextRef.current;
+    const cfg = useAppConfigStore.getState().config;
+    if (!ctx) return;
+
     const result = await clusterLevelManager.levelUp();
+    await ctx.model.requestLinks();
+
     if (result.needsLayout) {
-      const ctx = contextRef.current;
-      const cfg = useAppConfigStore.getState().config;
-      if (!ctx) return;
       const topLevel = new Set(ctx.model.elements.filter(
         el => el instanceof Reactodia.EntityGroup || el instanceof Reactodia.EntityElement
       ));
@@ -1193,13 +1204,29 @@ export default function ReactodiaCanvas() {
         selectedElements: topLevel,
         animate: false,
       });
-      clusterLevelManager.snapshotEntityPositions();
+      clusterLevelManager.snapshotClusterPositions();
     }
   }, [defaultLayout]);
 
-  const handleLevelDown = React.useCallback(() => {
-    clusterLevelManager.levelDown();
-  }, []);
+  const handleLevelDown = React.useCallback(async () => {
+    const ctx = contextRef.current;
+    const cfg = useAppConfigStore.getState().config;
+    if (!ctx) return;
+
+    const result = clusterLevelManager.levelDown();
+    await ctx.model.requestLinks();
+
+    if (result.needsLayout) {
+      const topLevel = new Set(ctx.model.elements.filter(
+        el => el instanceof Reactodia.EntityGroup || el instanceof Reactodia.EntityElement
+      ));
+      await ctx.performLayout({
+        layoutFunction: getLayoutFunction(cfg.currentLayout, cfg, defaultLayout),
+        selectedElements: topLevel,
+        animate: cfg.layoutAnimations,
+      });
+    }
+  }, [defaultLayout]);
 
   const handleClearData = React.useCallback(() => {
     knownSubjects.clear();

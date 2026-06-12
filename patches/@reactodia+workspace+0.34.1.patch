@@ -1,7 +1,31 @@
+diff --git a/node_modules/@reactodia/workspace/dist/typings/diagram/canvasApi.d.ts b/node_modules/@reactodia/workspace/dist/typings/diagram/canvasApi.d.ts
+index ee450d4..643d324 100644
+--- a/node_modules/@reactodia/workspace/dist/typings/diagram/canvasApi.d.ts
++++ b/node_modules/@reactodia/workspace/dist/typings/diagram/canvasApi.d.ts
+@@ -93,6 +93,8 @@ export interface ZoomOptions {
+ }
+ export interface ExportSvgOptions {
+     contentPadding?: Vector;
++    /** Override the exported viewBox (canvas coordinates). When set, contentPadding is ignored. */
++    contentBox?: Rect;
+     removeByCssSelectors?: ReadonlyArray<string>;
+     addXmlHeader?: boolean;
+ }
 diff --git a/node_modules/@reactodia/workspace/dist/workspace.js b/node_modules/@reactodia/workspace/dist/workspace.js
-index 36056b7..16fed48 100644
+index 36056b7..c802ea1 100644
 --- a/node_modules/@reactodia/workspace/dist/workspace.js
 +++ b/node_modules/@reactodia/workspace/dist/workspace.js
+@@ -6906,8 +6906,8 @@ function LinkView(props) {
+   const onlySelected = model.selection.length === 1 && model.selection[0] === link;
+   const renderedLink = template.renderLink({
+     link,
+-    markerSource: markerSourceIndex ? `url(#${linkMarkerKey(markerSourceIndex, true)})` : "",
+-    markerTarget: markerTargetIndex ? `url(#${linkMarkerKey(markerTargetIndex, false)})` : "",
++    markerSource: markerSourceIndex ? `url(#${linkMarkerKey(markerSourceIndex, true)})` : undefined,
++    markerTarget: markerTargetIndex ? `url(#${linkMarkerKey(markerTargetIndex, false)})` : undefined,
+     path: spline.toPath(),
+     getPathPosition,
+     route,
 @@ -15744,8 +15744,9 @@ function addWatermark(svg, viewBox, watermarkSvg) {
  function collectAppliedCssFromDocument(targetSubtree) {
    const appliedRules = [];
@@ -14,3 +38,20 @@ index 36056b7..16fed48 100644
        appliedRules.push(rule);
      }
    });
+@@ -16650,6 +16651,7 @@ class CanvasController {
+     const bounds = this._contentBounds;
+     const {
+       contentPadding = { x: 100, y: 100 },
++      contentBox: overrideContentBox,
+       removeByCssSelectors = []
+     } = baseOptions;
+     const linkLayer = this.linkLayer.current;
+@@ -16661,7 +16663,7 @@ class CanvasController {
+     return {
+       colorSchemeApi: this.state.colorSchemeApi,
+       styleRoot: linkLayer,
+-      contentBox: {
++      contentBox: overrideContentBox ?? {
+         x: bounds.x - contentPadding.x,
+         y: bounds.y - contentPadding.y,
+         width: bounds.width + contentPadding.x * 2,

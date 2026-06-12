@@ -245,8 +245,11 @@ const clusterNodes: McpTool = {
         if (!canvas) return { success: false, error: 'No canvas available' };
 
         const { applyCanvasClustering } = await import('@/components/Canvas/core/clusteringService');
-        const { createDagreLayout } = await import('@/components/Canvas/layout/layouts');
-        await applyCanvasClustering(ctx, canvas, algorithm as ClusterAlgorithm, createDagreLayout('LR', 120), true);
+        const groups = await applyCanvasClustering(ctx, canvas, algorithm as ClusterAlgorithm, true);
+        if (groups.length > 0) {
+          const { createDagreLayout } = await import('@/components/Canvas/layout/layouts');
+          await ctx.performLayout({ layoutFunction: createDagreLayout('LR', 120), animate: true, canvas });
+        }
 
         return { success: true, data: { algorithm } };
       }

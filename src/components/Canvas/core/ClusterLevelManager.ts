@@ -1,0 +1,717 @@
+/**
+ * ClusterLevelManager — owns level state (L0-L3) and group operations.
+ *
+ * Level switching uses Reactodia's native model.group() / model.ungroupAll():
+ *   - Fold (L1→L2, L2→L3): model.group() — groups appear at member centroids
+ *   - Unfold (L2→L1, L3→L2): model.ungroupAll() then canvas.animateGraph()
+ *     using pre-computed positions from the silent layout worker.
+ *
+ * Cluster membership per level is saved before any ungroupAll so manual user
+ * edits survive level round-trips.
+ *
+ * Plain class with subscribe/getSnapshot compatible with useSyncExternalStore.
+ */
+
+import * as Reactodia from '@reactodia/workspace';
+import type { N3DataProvider, ViewMode, CommunityClusterEntry } from '@/providers/N3DataProvider';
+import type { StructuralGroupMap } from './structuralGroups';
+import { computeClustersLabelPropagation } from './clusterAlgorithms/labelPropagation';
+import { computeClustersLouvainNgraph } from './clusterAlgorithms/louvainNgraph';
+import { computeClustersKmeans } from './clusterAlgorithms/kmeans';
+import type { ClusterNode, ClusterEdge } from './clusterAlgorithms/types';
+
+export interface ClusterEntry {
+  iris: string[];
+  position: Reactodia.Vector;
+}
+
+export interface LevelSnapshot {
+  currentLevel: 0 | 1 | 2 | 3;
+  maxFoldLevel: 2 | 3;
+  canGoUp: boolean;
+  canGoDown: boolean;
+}
+
+interface SavedLevelState {
+  currentLevel: 0 | 1 | 2 | 3;
+  l3EverBuilt: boolean;
+  cachedClusterState: ClusterEntry[] | null;
+}
+
+export interface PrecomputedPositions {
+  l1: Map<string, Reactodia.Vector>;
+  l2: Map<string, Reactodia.Vector>;
+}
+
+export class ClusterLevelManager {
+  private _currentLevel: 0 | 1 | 2 | 3 = 0;
+  private _l3EverBuilt = false;
+  private _cachedClusterState: ClusterEntry[] | null = null;
+  private _savedStateByMode: Partial<Record<ViewMode, SavedLevelState>> = {};
+
+  // L2 structural group membership — saved when L2 groups are created so
+  // L3→L2 restoration and level round-trips preserve manual edits.
+  private _l2Setup: ClusterEntry[] | null = null;
+
+  // Pre-computed layout positions for L1 (entities) and L2 (structural groups),
+  // produced by the silent layout worker after L3 init.
+  private _precomputedPositions: PrecomputedPositions | null = null;
+
+  private _ctx: Reactodia.WorkspaceContext | null = null;
+  private _dataProvider: N3DataProvider | null = null;
+  private _getClusteringAlgorithm: () => string;
+
+  private _subscribers = new Set<() => void>();
+  private _snapshot: LevelSnapshot | null = null;
+
+  constructor(getClusteringAlgorithm: () => string) {
+    this._getClusteringAlgorithm = getClusteringAlgorithm;
+  }
+
+  init(ctx: Reactodia.WorkspaceContext, dataProvider: N3DataProvider): void {
+    this._ctx = ctx;
+    this._dataProvider = dataProvider;
+  }
+
+  // ── Reactive interface ────────────────────────────────────────────────────
+
+  subscribe = (callback: () => void): (() => void) => {
+    this._subscribers.add(callback);
+    return () => this._subscribers.delete(callback);
+  };
+
+  getSnapshot = (): LevelSnapshot => {
+    const algorithm = this._getClusteringAlgorithm();
+    const maxFoldLevel: 2 | 3 = this._l3EverBuilt ? 3 : 2;
+    const canGoUp =
+      this._currentLevel < maxFoldLevel &&
+      !(this._currentLevel === 2 && algorithm === 'none');
+    const canGoDown = this._currentLevel > 0;
+
+    if (
+      this._snapshot &&
+      this._snapshot.currentLevel === this._currentLevel &&
+      this._snapshot.maxFoldLevel === maxFoldLevel &&
+      this._snapshot.canGoUp === canGoUp &&
+      this._snapshot.canGoDown === canGoDown
+    ) {
+      return this._snapshot;
+    }
+
+    this._snapshot = { currentLevel: this._currentLevel, maxFoldLevel, canGoUp, canGoDown };
+    return this._snapshot;
+  };
+
+  private notify(): void {
+    this._snapshot = null;
+    for (const cb of this._subscribers) {
+      try { cb(); } catch { /* ignore */ }
+    }
+  }
+
+  // ── Read-only accessors ───────────────────────────────────────────────────
+
+  get currentLevel(): 0 | 1 | 2 | 3 { return this._currentLevel; }
+  get l3EverBuilt(): boolean { return this._l3EverBuilt; }
+
+  shouldAutoCluster(entityCount: number, algorithm: string, threshold: number): boolean {
+    return algorithm !== 'none' && entityCount > threshold && !this._l3EverBuilt;
+  }
+
+  setCurrentLevel(level: 0 | 1 | 2 | 3): void {
+    if (this._currentLevel === level) return;
+    this._currentLevel = level;
+    this.notify();
+  }
+
+  // ── Pre-computed positions (from silent layout worker) ────────────────────
+
+  setPrecomputedPositions(positions: PrecomputedPositions): void {
+    this._precomputedPositions = positions;
+  }
+
+  // ── Cluster setup persistence ─────────────────────────────────────────────
+
+  /**
+   * Read the current model's EntityGroups and save their membership for the
+   * given level. Call BEFORE any ungroupAll so manual edits are preserved.
+   */
+  saveCurrentSetup(model: Reactodia.DataDiagramModel, level: number): void {
+    const groups = model.elements.filter(
+      (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
+    );
+    const setup: ClusterEntry[] = groups.map(g => ({
+      iris: g.items.map(item => item.data.id as string),
+      position: { ...g.position },
+    }));
+    if (level === 2) {
+      this._l2Setup = setup.length > 0 ? setup : null;
+    } else if (level === 3) {
+      this._cachedClusterState = setup.length > 0 ? setup : null;
+    }
+  }
+
+  // ── Level navigation ──────────────────────────────────────────────────────
+
+  async levelUp(): Promise<{ needsLayout: boolean }> {
+    const ctx = this._ctx;
+    const model = ctx?.model;
+    if (!ctx || !model) return { needsLayout: false };
+
+    if (this._currentLevel === 0) {
+      this._foldL1(model);
+      this._currentLevel = 1;
+      this.notify();
+      return { needsLayout: false };
+    }
+
+    if (this._currentLevel === 1) {
+      this._foldL2(ctx, model);
+      this._currentLevel = 2;
+      this.notify();
+      return { needsLayout: false };
+    }
+
+    if (this._currentLevel === 2) {
+      const algorithm = this._getClusteringAlgorithm();
+      if (algorithm === 'none') return { needsLayout: false };
+
+      // Save L2 groups before any ungroup mutation so round-trips preserve manual edits.
+      this.saveCurrentSetup(model, 2);
+
+      // Restore from cached L3 (avoid re-running algorithm and re-layout).
+      if (this._cachedClusterState?.length) {
+        const applied = this._applyCache(model, this._cachedClusterState);
+        if (applied) {
+          this._cachedClusterState = applied;
+          this._l3EverBuilt = true;
+          this._currentLevel = 3;
+          this.notify();
+          return { needsLayout: false };
+        }
+        this._cachedClusterState = null;
+      }
+
+      // Fresh L3 build. Flatten L2 groups first so entities are available.
+      this._switchCanvasToL1ForBuild(model);
+
+      const created = this._buildL3(ctx, model, algorithm);
+      if (created) {
+        this._currentLevel = 3;
+        this.notify();
+        return { needsLayout: true };
+      }
+      return { needsLayout: false };
+    }
+
+    return { needsLayout: false };
+  }
+
+  /** Ungroups whatever groups are on canvas so entities are available for _buildL3. */
+  private _switchCanvasToL1ForBuild(model: Reactodia.DataDiagramModel): void {
+    const groups = model.elements.filter(
+      (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
+    );
+    if (groups.length > 0) model.ungroupAll(groups);
+  }
+
+  levelDown(): { needsLayout: boolean } {
+    const ctx = this._ctx;
+    const model = ctx?.model;
+    if (!ctx || !model) return { needsLayout: false };
+
+    if (this._currentLevel === 3) {
+      // Save L3 setup before ungrouping so the user's manual group edits survive.
+      this.saveCurrentSetup(model, 3);
+      this._clearL3(ctx, model);
+      this._currentLevel = 2;
+      this.notify();
+      return { needsLayout: true };
+    } else if (this._currentLevel === 2) {
+      // Save L2 setup before ungrouping.
+      this.saveCurrentSetup(model, 2);
+      this._unfoldL2(model);
+      this._currentLevel = 1;
+      this.notify();
+      return { needsLayout: true };
+    } else if (this._currentLevel === 1) {
+      this._unfoldL1(model);
+      this._currentLevel = 0;
+      this.notify();
+    }
+    return { needsLayout: false };
+  }
+
+  /**
+   * Returns future group member arrays for the next level-up animation preview.
+   * Returns null when no grouping would occur.
+   */
+  previewNextLevelUp(): Array<{ members: Reactodia.EntityElement[] }> | null {
+    const ctx = this._ctx;
+    const model = ctx?.model;
+    if (!ctx || !model) return null;
+
+    if (this._currentLevel === 1) {
+      const groupMap = this._dataProvider?.getStructuralGroups();
+      if (!groupMap || groupMap.size === 0) return null;
+
+      const rootToMembers = new Map<string, Set<string>>();
+      for (const [memberIri, rootIri] of groupMap) {
+        if (!rootToMembers.has(rootIri)) rootToMembers.set(rootIri, new Set());
+        rootToMembers.get(rootIri)!.add(memberIri);
+      }
+
+      const unpersistedIris = this._getUnpersistedIris(ctx);
+      const elementByIri = new Map<string, Reactodia.EntityElement>();
+      for (const el of model.elements) {
+        if (el instanceof Reactodia.EntityElement && !unpersistedIris.has(el.data.id)) {
+          elementByIri.set(el.data.id, el);
+        }
+      }
+
+      const plans: Array<{ members: Reactodia.EntityElement[] }> = [];
+      for (const [rootIri, memberIris] of rootToMembers) {
+        const rootEl = elementByIri.get(rootIri);
+        if (!rootEl) continue;
+        const members: Reactodia.EntityElement[] = [rootEl];
+        for (const mIri of memberIris) {
+          const el = elementByIri.get(mIri);
+          if (el) members.push(el);
+        }
+        if (members.length >= 2) plans.push({ members });
+      }
+      return plans.length > 0 ? plans : null;
+    }
+
+    if (this._currentLevel === 2) {
+      const entityElements = model.elements.filter(
+        (el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement
+      );
+      if (entityElements.length < 2) return null;
+
+      let memberGroups: ReadonlyArray<{ iris: string[] }> | null = null;
+      if (this._cachedClusterState?.length) {
+        memberGroups = this._cachedClusterState;
+      } else if (this._dataProvider) {
+        const viewMode = this._dataProvider.currentViewMode;
+        const allSubjects = new Set(entityElements.map(el => el.data.id as string));
+        const providerClusters = this._dataProvider.getCommunityGroups(
+          this._getClusteringAlgorithm(), viewMode, allSubjects
+        );
+        if (providerClusters.length > 0) memberGroups = providerClusters;
+      }
+      if (!memberGroups) return null;
+
+      const elementByIri = new Map(entityElements.map(el => [el.data.id as string, el]));
+      const plans: Array<{ members: Reactodia.EntityElement[] }> = [];
+      for (const { iris } of memberGroups) {
+        const members = iris
+          .map(iri => elementByIri.get(iri))
+          .filter((el): el is Reactodia.EntityElement => el !== undefined);
+        if (members.length >= 2) plans.push({ members });
+      }
+      return plans.length > 0 ? plans : null;
+    }
+
+    return null;
+  }
+
+  // ── Group operations (internal) ───────────────────────────────────────────
+
+  private _foldL1(model: Reactodia.DataDiagramModel): void {
+    for (const el of model.elements) {
+      if (el instanceof Reactodia.EntityElement) {
+        model.history.execute(Reactodia.setElementExpanded(el, false));
+      } else if (el instanceof Reactodia.EntityGroup) {
+        for (const item of el.items) {
+          if (item instanceof Reactodia.EntityElement) {
+            model.history.execute(Reactodia.setElementExpanded(item, false));
+          }
+        }
+      }
+    }
+  }
+
+  private _unfoldL1(model: Reactodia.DataDiagramModel): void {
+    for (const el of model.elements) {
+      if (el instanceof Reactodia.EntityElement) {
+        model.history.execute(Reactodia.setElementExpanded(el, true));
+      } else if (el instanceof Reactodia.EntityGroup) {
+        for (const item of el.items) {
+          if (item instanceof Reactodia.EntityElement) {
+            model.history.execute(Reactodia.setElementExpanded(item, true));
+          }
+        }
+      }
+    }
+  }
+
+  private _foldL2(
+    ctx: Reactodia.WorkspaceContext,
+    model: Reactodia.DataDiagramModel,
+  ): void {
+    const groupMap = this._dataProvider?.getStructuralGroups() ?? new Map();
+    const unpersistedIris = this._getUnpersistedIris(ctx);
+    const created = applyL2Fold(ctx, model, groupMap, unpersistedIris);
+    // Save the freshly created L2 groups so level round-trips restore them.
+    if (created > 0) {
+      this._l2Setup = model.elements
+        .filter((el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup)
+        .map(g => ({ iris: g.items.map(item => item.data.id as string), position: { ...g.position } }));
+    }
+  }
+
+  /** L2→L1: ungroup L2 structural groups. Entities land at group positions. */
+  private _unfoldL2(model: Reactodia.DataDiagramModel): void {
+    const l2Groups = model.elements.filter(
+      (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
+    );
+    model.ungroupAll(l2Groups);
+  }
+
+  private _buildL3(
+    ctx: Reactodia.WorkspaceContext,
+    model: Reactodia.DataDiagramModel,
+    algorithm: string
+  ): boolean {
+    const existingGroups = model.elements.filter(
+      (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
+    );
+    if (existingGroups.length) model.ungroupAll(existingGroups);
+
+    const entityElements = model.elements.filter(
+      (el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement
+    );
+    const relationLinks = model.links.filter(
+      (lk): lk is Reactodia.RelationLink => lk instanceof Reactodia.RelationLink
+    );
+
+    if (entityElements.length < 2) return false;
+
+    const connectivity = new Map<string, number>();
+    for (const el of entityElements) connectivity.set(el.data.id, 0);
+    for (const lk of relationLinks) {
+      connectivity.set(lk.data.sourceId, (connectivity.get(lk.data.sourceId) ?? 0) + 1);
+      connectivity.set(lk.data.targetId, (connectivity.get(lk.data.targetId) ?? 0) + 1);
+    }
+
+    const clusterNodes: ClusterNode[] = entityElements.map(el => ({
+      id: el.data.id,
+      connectivity: connectivity.get(el.data.id) ?? 0,
+      position: { x: el.position.x, y: el.position.y },
+    }));
+    const clusterEdges: ClusterEdge[] = relationLinks.map(lk => ({
+      id: lk.id,
+      source: lk.data.sourceId,
+      target: lk.data.targetId,
+    }));
+
+    const { clusters } = selectAlgorithm(algorithm, clusterNodes, clusterEdges, { threshold: 2 });
+    if (clusters.size === 0) return false;
+
+    const elementByIri = new Map(entityElements.map(el => [el.data.id, el]));
+    const alreadyGrouped = new Set<string>();
+    const newCache: ClusterEntry[] = [];
+
+    for (const [, clusterInfo] of clusters) {
+      const members: Reactodia.EntityElement[] = [];
+      for (const iri of clusterInfo.nodeIds) {
+        if (alreadyGrouped.has(iri)) continue;
+        const el = elementByIri.get(iri);
+        if (el) members.push(el);
+      }
+      if (members.length < 2) continue;
+      for (const m of members) alreadyGrouped.add(m.data.id);
+
+      const group = model.group(members);
+      const centroid = computeCentroid(members);
+      group.setPosition(centroid);
+      newCache.push({ iris: members.map(m => m.data.id), position: { ...centroid } });
+    }
+
+    if (newCache.length === 0) return false;
+    this._cachedClusterState = newCache;
+    this._l3EverBuilt = true;
+    return true;
+  }
+
+  private _applyCache(
+    model: Reactodia.DataDiagramModel,
+    cache: ReadonlyArray<{ iris: string[]; position?: Reactodia.Vector }>
+  ): ClusterEntry[] | null {
+    const existingGroups = model.elements.filter(
+      (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
+    );
+    if (existingGroups.length) model.ungroupAll(existingGroups);
+
+    const elementByIri = new Map(
+      model.elements
+        .filter((el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement)
+        .map(el => [el.data.id, el])
+    );
+
+    const applied: ClusterEntry[] = [];
+    const alreadyGrouped = new Set<string>();
+    for (const { iris, position } of cache) {
+      const members = iris
+        .map(iri => elementByIri.get(iri))
+        .filter((el): el is Reactodia.EntityElement => el !== undefined && !alreadyGrouped.has(el.data.id));
+      if (members.length < 2) continue;
+      for (const m of members) alreadyGrouped.add(m.data.id);
+      const groupPos = position ?? computeCentroid(members);
+      const group = model.group(members);
+      group.setPosition(groupPos);
+      applied.push({ iris: members.map(m => m.data.id), position: { ...groupPos } });
+    }
+
+    return applied.length > 0 ? applied : null;
+  }
+
+  /** L3→L2: ungroup L3 groups, rebuild L2 from saved setup or structural groups. */
+  private _clearL3(ctx: Reactodia.WorkspaceContext, model: Reactodia.DataDiagramModel): void {
+    const l3Groups = model.elements.filter(
+      (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
+    );
+    model.ungroupAll(l3Groups);
+    this._rebuildL2(ctx, model);
+  }
+
+  /**
+   * Recreate L2 groups from the saved setup (preserves manual edits) or from
+   * structural groups as fallback.
+   */
+  private _rebuildL2(ctx: Reactodia.WorkspaceContext, model: Reactodia.DataDiagramModel): void {
+    if (this._l2Setup?.length) {
+      this._applyCache(model, this._l2Setup);
+      return;
+    }
+    const groupMap = this._dataProvider?.getStructuralGroups() ?? new Map();
+    const unpersistedIris = this._getUnpersistedIris(ctx);
+    applyL2Fold(ctx, model, groupMap, unpersistedIris);
+  }
+
+  /** Animate L2 groups to pre-computed positions after L3→L2 transition. */
+  private async _animateToLevel2(ctx: Reactodia.WorkspaceContext): Promise<void> {
+    const canvas = ctx.view.findAnyCanvas();
+    const l2Positions = this._precomputedPositions?.l2;
+    if (!canvas || !l2Positions?.size) return;
+    canvas.renderingState.syncUpdate();
+    await canvas.animateGraph(() => {
+      for (const el of ctx.model.elements) {
+        if (!(el instanceof Reactodia.EntityGroup)) continue;
+        const firstItem = el.items[0];
+        const pos = firstItem ? l2Positions.get(firstItem.data.id as string) : undefined;
+        if (pos) el.setPosition(pos);
+      }
+    });
+  }
+
+  /** Animate entities to pre-computed positions after L2→L1 transition. */
+  private async _animateToLevel1(
+    ctx: Reactodia.WorkspaceContext,
+    model: Reactodia.DataDiagramModel,
+  ): Promise<void> {
+    const canvas = ctx.view.findAnyCanvas();
+    const l1Positions = this._precomputedPositions?.l1;
+    if (!canvas || !l1Positions?.size) return;
+    canvas.renderingState.syncUpdate();
+    await canvas.animateGraph(() => {
+      for (const el of model.elements) {
+        if (!(el instanceof Reactodia.EntityElement)) continue;
+        const pos = l1Positions.get(el.data.id as string);
+        if (pos) el.setPosition(pos);
+      }
+    });
+  }
+
+  private _getUnpersistedIris(ctx: Reactodia.WorkspaceContext): Set<string> {
+    const result = new Set<string>();
+    const editor = ctx.editor;
+    if (!editor?.authoringState?.elements) return result;
+    for (const [iri, event] of editor.authoringState.elements) {
+      if (event.type === 'entityAdd') result.add(iri);
+    }
+    return result;
+  }
+
+  // ── L3 cache management ───────────────────────────────────────────────────
+
+  snapshotClusterPositions(): void {
+    const model = this._ctx?.model;
+    if (!model || !this._cachedClusterState) return;
+    const iriToGroupPos = new Map<string, Reactodia.Vector>();
+    for (const el of model.elements) {
+      if (!(el instanceof Reactodia.EntityGroup)) continue;
+      const firstItem = el.items[0];
+      if (firstItem) {
+        iriToGroupPos.set(firstItem.data.id as string, { ...el.position });
+      }
+    }
+    for (const entry of this._cachedClusterState) {
+      const firstIri = entry.iris[0];
+      if (!firstIri) continue;
+      const groupPos = iriToGroupPos.get(firstIri);
+      if (groupPos) entry.position = groupPos;
+    }
+  }
+
+  invalidateL3Cache(): void {
+    this._cachedClusterState = null;
+    this._l3EverBuilt = false;
+    this._snapshot = null;
+    this._dataProvider?.invalidateCommunityGroups();
+    this.notify();
+  }
+
+  buildL3(algorithm: string, allSubjects?: Iterable<string>): { needsLayout: boolean } {
+    const ctx = this._ctx;
+    const model = ctx?.model;
+    if (!ctx || !model) return { needsLayout: false };
+
+    // 1. Per-view cache
+    if (this._cachedClusterState?.length) {
+      const applied = this._applyCache(model, this._cachedClusterState);
+      if (applied) {
+        this._cachedClusterState = applied;
+        this._l3EverBuilt = true;
+        this._currentLevel = 3;
+        this.notify();
+        return { needsLayout: true };
+      }
+      this._cachedClusterState = null;
+    }
+
+    // 2. Provider topology clusters
+    if (this._dataProvider && allSubjects) {
+      const viewMode = this._dataProvider.currentViewMode;
+      const providerClusters: CommunityClusterEntry[] =
+        this._dataProvider.getCommunityGroups(algorithm, viewMode, allSubjects);
+      if (providerClusters.length > 0) {
+        const applied = this._applyCache(model, providerClusters);
+        if (applied) {
+          this._cachedClusterState = applied;
+          this._l3EverBuilt = true;
+          this._currentLevel = 3;
+          this.notify();
+          return { needsLayout: true };
+        }
+      }
+    }
+
+    // 3. Fresh computation
+    const created = this._buildL3(ctx, model, algorithm);
+    if (created) {
+      this._currentLevel = 3;
+      this.notify();
+      return { needsLayout: true };
+    }
+
+    return { needsLayout: false };
+  }
+
+  // ── View-mode persistence ─────────────────────────────────────────────────
+
+  saveViewState(mode: ViewMode): void {
+    this._savedStateByMode[mode] = {
+      currentLevel: this._currentLevel,
+      l3EverBuilt: this._l3EverBuilt,
+      cachedClusterState: this._cachedClusterState,
+    };
+  }
+
+  restoreViewState(mode: ViewMode): boolean {
+    const saved = this._savedStateByMode[mode];
+    if (!saved) return false;
+    this._currentLevel = saved.currentLevel;
+    this._l3EverBuilt = saved.l3EverBuilt;
+    this._cachedClusterState = saved.cachedClusterState;
+    this.notify();
+    return true;
+  }
+
+  reset(): void {
+    this._currentLevel = 0;
+    this._l3EverBuilt = false;
+    this._l2Setup = null;
+    this._precomputedPositions = null;
+    this._cachedClusterState = null;
+    this.notify();
+  }
+
+  resetViewHistory(): void {
+    this._savedStateByMode = {};
+  }
+}
+
+// ── Module-scope utilities (also exported for groupingUtils) ──────────────────
+
+export function applyL2Fold(
+  ctx: Reactodia.WorkspaceContext,
+  model: Reactodia.DataDiagramModel,
+  groupMap: StructuralGroupMap,
+  unpersistedIris: ReadonlySet<string>
+): number {
+  if (groupMap.size === 0) return 0;
+
+  const rootToMembers = new Map<string, Set<string>>();
+  for (const [memberIri, rootIri] of groupMap) {
+    if (!rootToMembers.has(rootIri)) rootToMembers.set(rootIri, new Set());
+    rootToMembers.get(rootIri)!.add(memberIri);
+  }
+
+  const elementByIri = new Map<string, Reactodia.EntityElement>();
+  for (const el of model.elements) {
+    if (el instanceof Reactodia.EntityElement && !unpersistedIris.has(el.data.id)) {
+      elementByIri.set(el.data.id, el);
+    }
+  }
+
+  const alreadyGrouped = new Set<string>();
+  let groupsCreated = 0;
+  for (const [rootIri, memberIris] of rootToMembers) {
+    const rootEl = elementByIri.get(rootIri);
+    if (!rootEl || alreadyGrouped.has(rootIri)) continue;
+    const members: Reactodia.EntityElement[] = [rootEl];
+    for (const mIri of memberIris) {
+      if (alreadyGrouped.has(mIri)) continue;
+      const el = elementByIri.get(mIri);
+      if (el) members.push(el);
+    }
+    if (members.length < 2) continue;
+    for (const m of members) alreadyGrouped.add(m.data.id);
+    ctx.model.group(members);
+    groupsCreated++;
+  }
+  return groupsCreated;
+}
+
+export function getUnpersistedIris(ctx: Reactodia.WorkspaceContext): Set<string> {
+  const result = new Set<string>();
+  const editor = ctx.editor;
+  if (!editor?.authoringState?.elements) return result;
+  for (const [iri, event] of editor.authoringState.elements) {
+    if (event.type === 'entityAdd') result.add(iri);
+  }
+  return result;
+}
+
+function computeCentroid(elements: Reactodia.EntityElement[]): Reactodia.Vector {
+  if (elements.length === 0) return { x: 0, y: 0 };
+  let x = 0, y = 0;
+  for (const el of elements) { x += el.position.x; y += el.position.y; }
+  return { x: x / elements.length, y: y / elements.length };
+}
+
+function selectAlgorithm(
+  algorithm: string,
+  nodes: ClusterNode[],
+  edges: ClusterEdge[],
+  options: { threshold: number }
+): ReturnType<typeof computeClustersLabelPropagation> {
+  switch (algorithm) {
+    case 'louvain':           return computeClustersLouvainNgraph(nodes, edges, options);
+    case 'label-propagation': return computeClustersLabelPropagation(nodes, edges, options);
+    case 'kmeans':            return computeClustersKmeans(nodes, edges, options);
+    default:                  return computeClustersLabelPropagation(nodes, edges, options);
+  }
+}
