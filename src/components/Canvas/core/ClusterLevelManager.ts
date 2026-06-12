@@ -57,6 +57,11 @@ export class ClusterLevelManager {
   // produced by the silent layout worker after L3 init.
   private _precomputedPositions: PrecomputedPositions | null = null;
 
+  // Positions captured immediately before collapse animation — used to restore
+  // node positions on expand when autoApplyLayout is disabled.
+  private _savedL1Positions: Map<string, Reactodia.Vector> | null = null;
+  private _savedL2Positions: Map<string, Reactodia.Vector> | null = null;
+
   private _ctx: Reactodia.WorkspaceContext | null = null;
   private _dataProvider: N3DataProvider | null = null;
   private _getClusteringAlgorithm: () => string;
@@ -130,6 +135,20 @@ export class ClusterLevelManager {
     this._precomputedPositions = positions;
   }
 
+  /**
+   * Animate expanded elements back to their saved positions.
+   * Called from handleLevelDown when autoApplyLayout is OFF — performLayout
+   * would normally handle position restoration, but with layout disabled we
+   * use the positions snapshotted before collapse instead.
+   */
+  async animateExpandPositions(): Promise<void> {
+    const ctx = this._ctx;
+    const model = ctx?.model;
+    if (!ctx || !model) return;
+    if (this._currentLevel === 1) await this._animateToLevel1(ctx, model);
+    else if (this._currentLevel === 2) await this._animateToLevel2(ctx);
+  }
+
   // ── Cluster setup persistence ─────────────────────────────────────────────
 
   /**
@@ -166,6 +185,7 @@ export class ClusterLevelManager {
     }
 
     if (this._currentLevel === 1) {
+      await this._animateCollapseL1toL2(ctx, model);
       this._foldL2(ctx, model);
       this._currentLevel = 2;
       this.notify();
@@ -181,6 +201,7 @@ export class ClusterLevelManager {
 
       // Restore from cached L3 (avoid re-running algorithm and re-layout).
       if (this._cachedClusterState?.length) {
+        await this._animateCollapseL2toL3(ctx, model);
         const applied = this._applyCache(model, this._cachedClusterState);
         if (applied) {
           this._cachedClusterState = applied;
@@ -490,10 +511,108 @@ export class ClusterLevelManager {
     applyL2Fold(ctx, model, groupMap, unpersistedIris);
   }
 
-  /** Animate L2 groups to pre-computed positions after L3→L2 transition. */
+  /** Animate entities toward structural group centroids before L1→L2 grouping. */
+  private async _animateCollapseL1toL2(
+    ctx: Reactodia.WorkspaceContext,
+    model: Reactodia.DataDiagramModel,
+  ): Promise<void> {
+    const canvas = ctx.view.findAnyCanvas();
+    if (!canvas) return;
+
+    // Snapshot before animation moves entities — used to restore on expand.
+    this._savedL1Positions = new Map(
+      model.elements
+        .filter((el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement)
+        .map(el => [el.data.id as string, { ...el.position }])
+    );
+
+    const groupMap = this._dataProvider?.getStructuralGroups() ?? new Map();
+    const unpersistedIris = this._getUnpersistedIris(ctx);
+
+    const rootToMembers = new Map<string, Reactodia.EntityElement[]>();
+    for (const el of model.elements) {
+      if (!(el instanceof Reactodia.EntityElement) || unpersistedIris.has(el.data.id)) continue;
+      const iri = el.data.id as string;
+      const rootIri = groupMap.get(iri) ?? iri;
+      if (!rootToMembers.has(rootIri)) rootToMembers.set(rootIri, []);
+      rootToMembers.get(rootIri)!.push(el);
+    }
+
+    const targets: Array<{ members: Reactodia.EntityElement[]; cx: number; cy: number }> = [];
+    for (const [, members] of rootToMembers) {
+      if (members.length < 2) continue;
+      targets.push({
+        members,
+        cx: members.reduce((s, m) => s + m.position.x, 0) / members.length,
+        cy: members.reduce((s, m) => s + m.position.y, 0) / members.length,
+      });
+    }
+    if (targets.length === 0) return;
+
+    canvas.renderingState.syncUpdate();
+    await canvas.animateGraph(() => {
+      for (const { members, cx, cy } of targets) {
+        for (const m of members) m.setPosition({ x: cx, y: cy });
+      }
+    });
+  }
+
+  /** Animate L2 groups toward L3 cluster centroids before L2→L3 grouping. */
+  private async _animateCollapseL2toL3(
+    ctx: Reactodia.WorkspaceContext,
+    model: Reactodia.DataDiagramModel,
+  ): Promise<void> {
+    const canvas = ctx.view.findAnyCanvas();
+    const state = this._cachedClusterState;
+    if (!canvas || !state?.length) return;
+
+    // Snapshot L2 group positions before animation — keyed by items[0].data.id
+    // to match the lookup key used in _animateToLevel2.
+    this._savedL2Positions = new Map(
+      model.elements
+        .filter((el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup)
+        .flatMap(el => el.items[0] ? [[el.items[0].data.id as string, { ...el.position }]] : [])
+    );
+
+    // Map entity IRI → its L2 EntityGroup
+    const entityToGroup = new Map<string, Reactodia.EntityGroup>();
+    for (const el of model.elements) {
+      if (!(el instanceof Reactodia.EntityGroup)) continue;
+      for (const item of el.items) {
+        entityToGroup.set(item.data.id as string, el);
+      }
+    }
+
+    // For each L3 cluster: collect the L2 groups it will merge and their centroid
+    const targets: Array<{ groups: Set<Reactodia.EntityGroup>; cx: number; cy: number }> = [];
+    for (const { iris } of state) {
+      const groups = new Set<Reactodia.EntityGroup>();
+      for (const iri of iris) {
+        const g = entityToGroup.get(iri);
+        if (g) groups.add(g);
+      }
+      if (groups.size < 2) continue;
+      const positions = [...groups].map(g => g.position);
+      targets.push({
+        groups,
+        cx: positions.reduce((s, p) => s + p.x, 0) / positions.length,
+        cy: positions.reduce((s, p) => s + p.y, 0) / positions.length,
+      });
+    }
+    if (targets.length === 0) return;
+
+    canvas.renderingState.syncUpdate();
+    await canvas.animateGraph(() => {
+      for (const { groups, cx, cy } of targets) {
+        for (const g of groups) g.setPosition({ x: cx, y: cy });
+      }
+    });
+  }
+
+  /** Animate L2 groups to saved/pre-computed positions after L3→L2 transition. */
   private async _animateToLevel2(ctx: Reactodia.WorkspaceContext): Promise<void> {
     const canvas = ctx.view.findAnyCanvas();
-    const l2Positions = this._precomputedPositions?.l2;
+    const l2Positions = this._savedL2Positions ?? this._precomputedPositions?.l2;
     if (!canvas || !l2Positions?.size) return;
     canvas.renderingState.syncUpdate();
     await canvas.animateGraph(() => {
@@ -506,13 +625,13 @@ export class ClusterLevelManager {
     });
   }
 
-  /** Animate entities to pre-computed positions after L2→L1 transition. */
+  /** Animate entities to saved/pre-computed positions after L2→L1 transition. */
   private async _animateToLevel1(
     ctx: Reactodia.WorkspaceContext,
     model: Reactodia.DataDiagramModel,
   ): Promise<void> {
     const canvas = ctx.view.findAnyCanvas();
-    const l1Positions = this._precomputedPositions?.l1;
+    const l1Positions = this._savedL1Positions ?? this._precomputedPositions?.l1;
     if (!canvas || !l1Positions?.size) return;
     canvas.renderingState.syncUpdate();
     await canvas.animateGraph(() => {
@@ -634,6 +753,8 @@ export class ClusterLevelManager {
     this._l3EverBuilt = false;
     this._l2Setup = null;
     this._precomputedPositions = null;
+    this._savedL1Positions = null;
+    this._savedL2Positions = null;
     this._cachedClusterState = null;
     this.notify();
   }

@@ -440,7 +440,7 @@ function scheduleSilentLayoutWorker(
       ]);
 
       clusterMgr.setPrecomputedPositions({ l1: l1Positions, l2: l2Positions });
-      console.log(`[Canvas] Silent layout complete — L1: ${l1Positions.size}, L2: ${l2Positions.size} positions`);
+      console.debug(`[Canvas] Silent layout complete — L1: ${l1Positions.size}, L2: ${l2Positions.size} positions`);
     } catch (err) {
       console.warn('[Canvas] Silent layout failed:', err);
     }
@@ -1192,17 +1192,20 @@ export default function ReactodiaCanvas() {
     const cfg = useAppConfigStore.getState().config;
     if (!ctx) return;
 
+    console.debug('[levelUp] before levelUp(), currentLevel=', clusterLevelManager.currentLevel);
     const result = await clusterLevelManager.levelUp();
+    console.debug('[levelUp] needsLayout=', result.needsLayout, 'layoutAnimations=', cfg.layoutAnimations);
     await ctx.model.requestLinks();
 
-    if (result.needsLayout) {
+    if (result.needsLayout && cfg.autoApplyLayout) {
       const topLevel = new Set(ctx.model.elements.filter(
         el => el instanceof Reactodia.EntityGroup || el instanceof Reactodia.EntityElement
       ));
+      console.debug('[levelUp] performLayout, topLevel.size=', topLevel.size);
       await ctx.performLayout({
         layoutFunction: getLayoutFunction(cfg.currentLayout, cfg, defaultLayout),
         selectedElements: topLevel,
-        animate: false,
+        animate: cfg.layoutAnimations,
       });
       clusterLevelManager.snapshotClusterPositions();
     }
@@ -1213,18 +1216,23 @@ export default function ReactodiaCanvas() {
     const cfg = useAppConfigStore.getState().config;
     if (!ctx) return;
 
+    console.debug('[levelDown] before levelDown(), currentLevel=', clusterLevelManager.currentLevel);
     const result = clusterLevelManager.levelDown();
+    console.debug('[levelDown] needsLayout=', result.needsLayout, 'layoutAnimations=', cfg.layoutAnimations);
     await ctx.model.requestLinks();
 
-    if (result.needsLayout) {
+    if (result.needsLayout && cfg.autoApplyLayout) {
       const topLevel = new Set(ctx.model.elements.filter(
         el => el instanceof Reactodia.EntityGroup || el instanceof Reactodia.EntityElement
       ));
+      console.debug('[levelDown] performLayout, topLevel.size=', topLevel.size);
       await ctx.performLayout({
         layoutFunction: getLayoutFunction(cfg.currentLayout, cfg, defaultLayout),
         selectedElements: topLevel,
         animate: cfg.layoutAnimations,
       });
+    } else if (result.needsLayout) {
+      await clusterLevelManager.animateExpandPositions();
     }
   }, [defaultLayout]);
 
