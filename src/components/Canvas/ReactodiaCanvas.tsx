@@ -525,7 +525,9 @@ function scheduleSilentLayoutWorker(
 
         const l2VisibleIris = [...l2GroupRootIris, ...l2StandaloneIris];
         for (const iri of l2VisibleIris) {
-          const seed = l2RootSeeds.get(iri) ?? getL3Seed(iri);
+          // Own L3 position wins over member-derived seed: a node standalone at L3
+          // must be fixed at its own position, not a position derived from its members.
+          const seed = getL3Seed(iri) ?? l2RootSeeds.get(iri);
           if (seed) l2Seeds.set(iri, seed);
           if (standaloneL3Pos.has(iri)) l2Fixed.add(iri);
         }
