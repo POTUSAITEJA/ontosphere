@@ -486,33 +486,9 @@ function scheduleSilentLayoutWorker(
       let l2AllPositions: Map<string, Reactodia.Vector>;
 
       if (clusterEntries.length > 0) {
-        // Phantom anchor nodes: one per L3 cluster, fixed at cluster centroid.
-        // Provide spatial anchors for the layout engine — each L2 group root gets an
-        // anchor edge to the phantom corresponding to its cluster.
-        const l3AnchorIris = clusterEntries.map((_, i) => `__l3_${i}`);
-        const entityToAnchorIri = new Map<string, string>();
-        for (let i = 0; i < clusterEntries.length; i++) {
-          for (const entityIri of clusterEntries[i].iris) {
-            entityToAnchorIri.set(entityIri, `__l3_${i}`);
-          }
-        }
-
-        // Map each L2 root → its cluster anchor via its member entities.
-        // Cannot use entityToAnchorIri.get(rootIri) — root IRIs are ontology class IRIs,
-        // not entity IRIs in the cluster entries.
-        const rootToAnchorIri = new Map<string, string>();
-        for (const entityIri of allEntityIris) {
-          const rootIri = entityMemberToRoot.get(entityIri);
-          if (rootIri && !rootToAnchorIri.has(rootIri)) {
-            const anchor = entityToAnchorIri.get(entityIri);
-            if (anchor) rootToAnchorIri.set(rootIri, anchor);
-          }
-        }
-
-        // Seed each L2 root at the L3 position of one of its member entities.
+        // Seed each L2 group root from its member entities' L3 positions.
         // Cannot use getL3Seed(rootIri) — root IRIs are class IRIs, not entity IRIs.
-        // Two-pass: prefer standalone-L3 member positions (exact canvas position at L3);
-        // cluster members fill in remaining roots.
+        // Two-pass: prefer standalone-L3 members (exact canvas position at L3).
         const l2RootSeeds = new Map<string, Reactodia.Vector>();
         for (const entityIri of allEntityIris) {
           if (!standaloneL3Pos.has(entityIri)) continue;
@@ -527,49 +503,22 @@ function scheduleSilentLayoutWorker(
           }
         }
 
-        // l2Fixed: phantom anchors + all visible L2 nodes with known seeds.
-        // Marking visible nodes as fixed ensures their seeds become their final positions
-        // regardless of the active layout engine (hierarchical engines like Dagre ignore
-        // seeds for free nodes and produce a vertical column). The layout engine is still
-        // called so the user's engine selection is respected.
-        const l2Fixed = new Set<string>(l3AnchorIris);
-        const l2Seeds = new Map<string, Reactodia.Vector>();
-        for (let i = 0; i < clusterEntries.length; i++) {
-          l2Seeds.set(`__l3_${i}`, clusterEntries[i].position);
-        }
-
-        const l2VisibleIris = [...l2GroupRootIris, ...l2StandaloneIris];
-        for (const iri of l2VisibleIris) {
-          const seed = l2RootSeeds.get(iri) ?? getL3Seed(iri);
-          if (seed) {
-            l2Seeds.set(iri, seed);
-            // Only standalones are fixed — they have exact L3 positions.
-            // Group roots are free so the engine positions them relative to phantom anchors.
-            if (standaloneL3Pos.has(iri)) l2Fixed.add(iri);
-          }
-        }
-
-        const l2AnchorEdges: SilentLayoutEdge[] = [...l2Edges];
-        for (const iri of l2VisibleIris) {
-          const anchorIri = rootToAnchorIri.get(iri) ?? entityToAnchorIri.get(iri);
-          if (anchorIri) l2AnchorEdges.push({ source: iri, target: anchorIri });
-        }
-
-        const rawL2 = await runSilentLayout(
-          layoutFn,
-          [...l3AnchorIris, ...l2VisibleIris],
-          l2AnchorEdges,
-          { seeds: l2Seeds, fixed: l2Fixed },
-        );
-
+        // L2: seed-based positions — no layout engine.
+        // Seeds (cluster centroid / L3 position) ARE the correct L2 positions.
+        // The engine would need truly-fixed anchor nodes to be useful here, but
+        // LayoutNode.fixed is ignored at runtime by all engines; the phantom-anchor
+        // approach only worked by coincidence when all nodes were accidentally fixed.
         l2AllPositions = new Map();
-        // Primary: group roots + standalones (all were fixed → at their seeds).
-        for (const iri of l2VisibleIris) {
-          const pos = rawL2.get(iri);
+        for (const iri of l2GroupRootIris) {
+          const pos = l2RootSeeds.get(iri) ?? getL3Seed(iri);
           if (pos) l2AllPositions.set(iri, pos);
         }
-        // Fallback: group members that appear as standalone EntityElement at L2
-        // (e.g. L2 fold didn't group them — root not found on canvas).
+        for (const iri of l2StandaloneIris) {
+          const pos = getL3Seed(iri);
+          if (pos) l2AllPositions.set(iri, pos);
+        }
+        // Fallback: member entity IRI → root's L2 position.
+        // Required by _animateToLevel2 which looks up EntityGroup position via items[0].data.id.
         for (const entityIri of allEntityIris) {
           if (l2AllPositions.has(entityIri)) continue;
           const rootIri = entityMemberToRoot.get(entityIri);
@@ -593,42 +542,53 @@ function scheduleSilentLayoutWorker(
         if (pos) l2Positions.set(iri, pos);
       }
 
-      // ── Hierarchical L1 layout ──────────────────────────────────────────────
-      // l2AllPositions (roots + standalones) become fixed anchors for L1.
-      // Free nodes = group member entities; seeded at their root's L2 position.
-      // Force-directed engines (ELK force/stress, Cola) will distribute members
-      // around their fixed roots via anchor edges. Hierarchical engines (Dagre)
-      // place free nodes in a column — acceptable Dagre limitation.
+      // ── Incremental L1 layout ───────────────────────────────────────────────
+      // LayoutNode.fixed is ignored at runtime by all engines. Instead: run the engine
+      // with seeds for ALL entities, then post-process: override roots/standalones with
+      // their seeds; use engine result for member entities (the engine distributes members
+      // around their root-entity anchors via the added anchor edges).
+      // Root entities (e.g. pmdco:Material) ARE canvas EntityElement nodes — they started
+      // the group in applyL2Fold — so they're valid anchor targets in allEntityIris.
       let l1Positions: Map<string, Reactodia.Vector>;
       if (l2AllPositions.size > 0) {
-        // Fixed at L1 = only group roots + standalones (l2VisibleIris that landed in l2AllPositions).
-        // Member entities are free — engine positions them near their fixed roots via anchor edges.
-        // l2AllPositions also contains member-entity entries (from the fallback loop), but those
-        // must NOT be fixed here or the engine has no free nodes to actually lay out.
-        const l1Fixed = new Set<string>(l2VisibleIris.filter(iri => l2AllPositions.has(iri)));
-        const l1Seeds = new Map<string, Reactodia.Vector>(l2AllPositions);
+        const l1Seeds = new Map<string, Reactodia.Vector>();
         for (const entityIri of allEntityIris) {
-          if (!l1Fixed.has(entityIri)) {
-            const rootIri = entityMemberToRoot.get(entityIri);
-            const rootPos = rootIri ? l2AllPositions.get(rootIri) : undefined;
-            if (rootPos) l1Seeds.set(entityIri, rootPos);
+          const rootIri = entityMemberToRoot.get(entityIri);
+          if (!rootIri) {
+            // Root entity or standalone: seed at its L2 position.
+            const pos = l2AllPositions.get(entityIri);
+            if (pos) l1Seeds.set(entityIri, pos);
+          } else {
+            // Member entity: seed at root's L2 position so it starts in the right region.
+            const rootPos = l2AllPositions.get(rootIri);
+            const seed = rootPos ?? getL3Seed(entityIri);
+            if (seed) l1Seeds.set(entityIri, seed);
           }
         }
+
+        // Anchor edges: member → its root entity (both are in allEntityIris).
+        // Force-directed engines use these to pull members toward their roots.
         const l1AnchorEdges: SilentLayoutEdge[] = [...l1Edges];
         for (const entityIri of allEntityIris) {
-          if (!l1Fixed.has(entityIri)) {
-            const rootIri = entityMemberToRoot.get(entityIri);
-            if (rootIri && l2AllPositions.has(rootIri)) {
-              l1AnchorEdges.push({ source: entityIri, target: rootIri });
-            }
+          const rootIri = entityMemberToRoot.get(entityIri);
+          if (rootIri) l1AnchorEdges.push({ source: entityIri, target: rootIri });
+        }
+
+        const rawL1 = await runSilentLayout(layoutFn, allEntityIris, l1AnchorEdges, { seeds: l1Seeds });
+
+        l1Positions = new Map();
+        for (const entityIri of allEntityIris) {
+          const rootIri = entityMemberToRoot.get(entityIri);
+          if (!rootIri) {
+            // Root or standalone: override engine result with seed (spatial coherence).
+            const seed = l1Seeds.get(entityIri);
+            if (seed) l1Positions.set(entityIri, seed);
+          } else {
+            // Member: use engine result, fallback to seed.
+            const pos = rawL1.get(entityIri) ?? l1Seeds.get(entityIri);
+            if (pos) l1Positions.set(entityIri, pos);
           }
         }
-        l1Positions = await runSilentLayout(
-          layoutFn,
-          allEntityIris,
-          l1AnchorEdges,
-          { seeds: l1Seeds, fixed: l1Fixed },
-        );
       } else {
         l1Positions = await runSilentLayout(layoutFn, allEntityIris, l1Edges);
       }
