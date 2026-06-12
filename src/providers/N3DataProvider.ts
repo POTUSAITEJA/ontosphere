@@ -7,10 +7,17 @@ import {
   Rdf,
 } from '@reactodia/workspace';
 import { toPrefixed } from '../utils/termUtils';
+import { computeStructuralGroups, type RdfQuadLike, type StructuralGroupMap, type StructuralGroupResult } from '../components/Canvas/core/structuralGroups';
+import { computeClustersLabelPropagation } from '../components/Canvas/core/clusterAlgorithms/labelPropagation';
+import { computeClustersLouvainNgraph } from '../components/Canvas/core/clusterAlgorithms/louvainNgraph';
+import type { ClusterNode, ClusterEdge } from '../components/Canvas/core/clusterAlgorithms/types';
 
 const EMPTY_LINKS: ReadonlySet<LinkTypeIri> = new Set();
 
 export type ViewMode = 'abox' | 'tbox';
+
+/** Cluster membership returned by the provider — pure topology, no canvas positions. */
+export interface CommunityClusterEntry { iris: string[] }
 
 /**
  * RDF types that mark a node as an ABox instance (individual data).
@@ -43,6 +50,14 @@ export const TBOX_PROPERTY_TYPES = new Set([
   'http://www.w3.org/2002/07/owl#DatatypeProperty',
   'http://www.w3.org/2002/07/owl#AnnotationProperty',
   'http://www.w3.org/1999/02/22-rdf-syntax-ns#Property',
+  // OWL property characteristics (subtypes of owl:ObjectProperty / rdf:Property)
+  'http://www.w3.org/2002/07/owl#TransitiveProperty',
+  'http://www.w3.org/2002/07/owl#SymmetricProperty',
+  'http://www.w3.org/2002/07/owl#AsymmetricProperty',
+  'http://www.w3.org/2002/07/owl#ReflexiveProperty',
+  'http://www.w3.org/2002/07/owl#IrreflexiveProperty',
+  'http://www.w3.org/2002/07/owl#FunctionalProperty',
+  'http://www.w3.org/2002/07/owl#InverseFunctionalProperty',
 ]);
 
 /**
@@ -59,6 +74,12 @@ export const TBOX_CLASS_TYPES = new Set([
   'http://www.w3.org/2002/07/owl#Class',
   'http://www.w3.org/2000/01/rdf-schema#Class',
   'http://www.w3.org/2002/07/owl#Restriction',
+  'http://www.w3.org/2000/01/rdf-schema#Datatype',
+  // OWL structural axiom types
+  'http://www.w3.org/2002/07/owl#AllDisjointClasses',
+  'http://www.w3.org/2002/07/owl#AllDisjointProperties',
+  'http://www.w3.org/2002/07/owl#Ontology',
+  'http://www.w3.org/2002/07/owl#Axiom',
 ]);
 
 /** Union of all TBox metatypes — a node with any of these is an ontology concept. */
@@ -195,6 +216,9 @@ export class N3DataProvider implements DataProvider {
   });
   private viewMode: ViewMode = 'abox';
   private typeMap = new Map<string, Set<string>>();
+  private bNodeViewMap = new Map<string, 'tbox' | 'abox'>();
+  private structuralGroupCache: StructuralGroupResult | null = null;
+  private communityGroupsCache = new Map<string, CommunityClusterEntry[]>();
   /**
    * All subject IRIs eligible for the search index.
    *
@@ -238,7 +262,6 @@ export class N3DataProvider implements DataProvider {
         q.predicate.termType === 'NamedNode' &&
         q.predicate.value === RDF_TYPE &&
         q.subject.termType === 'NamedNode' &&
-        !q.subject.value.startsWith(SKOLEM_PREFIX) &&
         q.object.termType === 'NamedNode' &&
         !q.object.value.startsWith(SKOLEM_PREFIX)
       ) {
@@ -254,11 +277,34 @@ export class N3DataProvider implements DataProvider {
         entry.triples.add(`${q.predicate.value}\x00${objectKey(q.object)}`);
       }
     }
+    // Propagate TBox/ABox view to untyped blank-node objects (list nodes, etc.).
+    // Fixed-point: repeat until no new assignments (typically 2–3 passes for OWL lists).
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const q of arr) {
+        if (q.object.termType !== 'NamedNode' || !q.object.value.startsWith(SKOLEM_PREFIX)) continue;
+        const objIri = q.object.value;
+        if (this.bNodeViewMap.has(objIri)) continue;
+        if (q.subject.termType !== 'NamedNode') continue;
+        const subjIri = q.subject.value;
+        const subjTypes = this.typeMap.get(subjIri);
+        let view: 'tbox' | 'abox' | undefined;
+        if (subjTypes) {
+          if ([...subjTypes].some(t => ALL_TBOX_TYPES.has(t as ElementTypeIri))) view = 'tbox';
+          else if ([...subjTypes].some(t => ABOX_TYPES.has(t))) view = 'abox';
+        } else if (subjIri.startsWith(SKOLEM_PREFIX)) {
+          view = this.bNodeViewMap.get(subjIri);
+        }
+        if (view) { this.bNodeViewMap.set(objIri, view); changed = true; }
+      }
+    }
     // Only feed schema-allowed graphs into the inner Reactodia store so
     // knownElementTypes never surfaces classes from workflows/catalog graphs.
     if (addToSchema) {
       this.inner.addGraph(arr);
     }
+    this.structuralGroupCache = null;
   }
 
   /**
@@ -277,6 +323,7 @@ export class N3DataProvider implements DataProvider {
       this.typeMap.delete(iri);
       this.inferredBySubject.delete(iri);
     }
+    this.structuralGroupCache = null;
     this.addGraph(newQuads, graphName);
   }
 
@@ -290,6 +337,7 @@ export class N3DataProvider implements DataProvider {
         dataset.delete(q);
       }
     }
+    this.structuralGroupCache = null;
   }
 
   removeSubjects(iris: string[]): void {
@@ -306,13 +354,16 @@ export class N3DataProvider implements DataProvider {
         }
       }
     }
+    this.structuralGroupCache = null;
   }
 
   clear(): void {
     this.inner.clear();
     this.typeMap.clear();
+    this.bNodeViewMap.clear();
     this.allSubjects.clear();
     this.inferredBySubject.clear();
+    this.structuralGroupCache = null;
   }
 
   getDomainRange(propertyIri: string): { domains: string[]; ranges: string[] } {
@@ -328,13 +379,99 @@ export class N3DataProvider implements DataProvider {
   }
 
   setViewMode(mode: ViewMode): void { this.viewMode = mode; }
+  get currentViewMode(): ViewMode { return this.viewMode; }
 
   /** Synchronously filter IRIs to those matching the current view mode. */
   filterByViewMode(iris: string[]): string[] {
-    return iris.filter(iri => {
-      const types = this.typeMap.get(iri);
-      return this.matchesViewMode(types ? [...types] as ElementTypeIri[] : []);
-    });
+    return iris.filter(iri => this._matchesIriToMode(iri, this.viewMode));
+  }
+
+  /**
+   * Compute (and cache) community cluster assignments for a given view mode.
+   * Uses RDF graph topology only — no canvas positions needed.
+   * Caches per (algorithm, viewMode). Invalidated by invalidateCommunityGroups().
+   *
+   * allSubjects: the full known-subject set from the canvas (knownSubjects).
+   * Returns ClusterEntry list with iris only; positions are (0,0) placeholder.
+   */
+  getCommunityGroups(
+    algorithm: string,
+    viewMode: ViewMode,
+    allSubjects: Iterable<string>
+  ): CommunityClusterEntry[] {
+    const key = `${algorithm}:${viewMode}`;
+    if (this.communityGroupsCache.has(key)) return this.communityGroupsCache.get(key)!;
+
+    // K-means needs canvas positions for centroid seeding — skip provider-level compute
+    if (algorithm === 'kmeans') {
+      this.communityGroupsCache.set(key, []);
+      return [];
+    }
+
+    const dataset = (this.inner as any).dataset;
+    if (!dataset?.iterateMatches) {
+      this.communityGroupsCache.set(key, []);
+      return [];
+    }
+
+    // Filter to subjects belonging to this view mode
+    const viewSubjects = new Set<string>();
+    for (const iri of allSubjects) {
+      if (this._matchesIriToMode(iri, viewMode)) viewSubjects.add(iri);
+    }
+
+    if (viewSubjects.size < 2) {
+      this.communityGroupsCache.set(key, []);
+      return [];
+    }
+
+    // Build edges: any RDF triple where both subject and object are named-node view subjects
+    const connectivity = new Map<string, number>();
+    for (const iri of viewSubjects) connectivity.set(iri, 0);
+    const seenEdges = new Set<string>();
+    const edges: ClusterEdge[] = [];
+    for (const quad of dataset.iterateMatches(null, null, null)) {
+      if (quad.subject.termType !== 'NamedNode' || quad.object.termType !== 'NamedNode') continue;
+      const src = quad.subject.value as string;
+      const tgt = quad.object.value as string;
+      if (!viewSubjects.has(src) || !viewSubjects.has(tgt) || src === tgt) continue;
+      const edgeKey = `${src}\x00${tgt}`;
+      if (seenEdges.has(edgeKey)) continue;
+      seenEdges.add(edgeKey);
+      edges.push({ id: edgeKey, source: src, target: tgt });
+      connectivity.set(src, (connectivity.get(src) ?? 0) + 1);
+      connectivity.set(tgt, (connectivity.get(tgt) ?? 0) + 1);
+    }
+
+    const nodes: ClusterNode[] = [...viewSubjects].map(iri => ({
+      id: iri,
+      connectivity: connectivity.get(iri) ?? 0,
+      position: { x: 0, y: 0 },
+    }));
+
+    const compute = algorithm === 'louvain'
+      ? computeClustersLouvainNgraph
+      : computeClustersLabelPropagation;
+    const { clusters } = compute(nodes, edges, { threshold: 2 });
+
+    const result: CommunityClusterEntry[] = [];
+    for (const [, cluster] of clusters) {
+      if (cluster.nodeIds.length >= 2) result.push({ iris: cluster.nodeIds });
+    }
+
+    this.communityGroupsCache.set(key, result);
+    return result;
+  }
+
+  /** Clear community group cache (call when algorithm changes or data is reloaded). */
+  invalidateCommunityGroups(algorithm?: string): void {
+    if (algorithm) {
+      for (const key of this.communityGroupsCache.keys()) {
+        if (key.startsWith(`${algorithm}:`)) this.communityGroupsCache.delete(key);
+      }
+    } else {
+      this.communityGroupsCache.clear();
+    }
   }
 
   async knownElementTypes(p: { signal?: AbortSignal }): Promise<ElementTypeGraph> {
@@ -499,6 +636,18 @@ export class N3DataProvider implements DataProvider {
     return this.inferredBySubject.size > 0;
   }
 
+  /** Compute (and cache) structural groups from all quads in the inner dataset. */
+  getStructuralGroups(): StructuralGroupResult {
+    if (this.structuralGroupCache) return this.structuralGroupCache;
+    const dataset = (this.inner as any).dataset;
+    if (!dataset || typeof dataset.iterateMatches !== 'function') {
+      return { groupMap: new Map(), subclassParent: new Map() };
+    }
+    const allQuads = [...dataset.iterateMatches(null, null, null)] as RdfQuadLike[];
+    this.structuralGroupCache = computeStructuralGroups(allQuads);
+    return this.structuralGroupCache;
+  }
+
   connectedLinkStats(p: { elementId: ElementIri; inexactCount?: boolean; signal?: AbortSignal }): Promise<DataProviderLinkCount[]> {
     return this.inner.connectedLinkStats(p);
   }
@@ -554,10 +703,23 @@ export class N3DataProvider implements DataProvider {
   }
 
   private matchesViewMode(types: readonly ElementTypeIri[]): boolean {
+    return this._matchesMode(types, this.viewMode);
+  }
+
+  private _matchesMode(types: readonly ElementTypeIri[], mode: ViewMode): boolean {
     const isA = types.some(t => ABOX_TYPES.has(t));
     const isT = types.some(t => TBOX_TYPES.has(t));
     if (isA && isT) return true;
-    if (this.viewMode === 'abox') return isA || (!isA && !isT);
+    if (mode === 'abox') return isA || (!isA && !isT);
     return isT;
+  }
+
+  private _matchesIriToMode(iri: string, mode: ViewMode): boolean {
+    const types = this.typeMap.get(iri);
+    if (!types && iri.startsWith(SKOLEM_PREFIX)) {
+      const view = this.bNodeViewMap.get(iri) ?? 'tbox';
+      return view === mode;
+    }
+    return this._matchesMode(types ? [...types] as ElementTypeIri[] : [], mode);
   }
 }

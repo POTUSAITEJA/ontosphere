@@ -132,10 +132,10 @@ function SearchMatchCounterInner() {
     } else {
       const targetView = iriViewMap.get(iri);
       if (targetView && targetView !== canvasState.viewMode) {
-        console.debug('[SearchMatchCounter] element not on canvas yet, switching to', targetView, 'for:', iri);
+        console.debug('[VG_SEARCH] element not on canvas yet, switching to', targetView, 'for:', iri);
         canvasActions.setViewMode(targetView);
       } else {
-        console.debug('[SearchMatchCounter] giving up on pending IRI (not on canvas):', iri);
+        console.debug('[VG_SEARCH] giving up on pending IRI (not on canvas):', iri);
         pendingIriRef.current = null;
       }
     }
@@ -188,13 +188,13 @@ function SearchMatchCounterInner() {
     } else {
       const targetView = iriViewMap.get(iri);
       if (!targetView) {
-        console.debug('[SearchMatchCounter] IRI not in view map (unknown entity):', iri);
+        console.debug('[VG_SEARCH] IRI not in view map (unknown entity):', iri);
         return;
       }
       if (targetView === canvasState.viewMode) {
         // Correct view is already active but canvas not ready yet (initial load /
         // clustering still running). Set pending so the effect resolves once ready.
-        console.debug('[SearchMatchCounter] canvas not ready yet, deferring navigation for:', iri);
+        console.debug('[VG_SEARCH] canvas not ready yet, deferring navigation for:', iri);
         pendingIriRef.current = iri;
         return;
       }
@@ -202,7 +202,7 @@ function SearchMatchCounterInner() {
       // Reset canvasReady now so the pending effect won't fire with stale
       // canvasReady=true before ReactodiaCanvas has a chance to reset it itself.
       canvasActions.setCanvasReady(false);
-      console.debug('[SearchMatchCounter] switching to', targetView, 'for:', iri);
+      console.debug('[VG_SEARCH] switching to', targetView, 'for:', iri);
       canvasActions.setViewMode(targetView);
     }
   }, [lookupIri, iriViewMap, view, canvasState.viewMode, canvasActions, filteredEntities, predicateLinks]);

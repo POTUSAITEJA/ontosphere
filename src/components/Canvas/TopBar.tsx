@@ -15,9 +15,12 @@ interface TopBarProps {
   currentReasoning?: ReasoningResult | null;
   isReasoning?: boolean;
   isInconsistentDetected?: boolean;
-  isClustered?: boolean;
-  onCluster?: () => void;
-  onExpandAll?: () => void;
+  foldLevel?: number;       // 0=∅ 1=L1 2=L2 3=L3, default 0
+  maxFoldLevel?: number;    // max reachable level (2 normally, 3 after L3 ran)
+  canLevelUp?: boolean;     // ► enabled
+  canLevelDown?: boolean;   // ◄ enabled
+  onLevelUp?: () => void;
+  onLevelDown?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -30,9 +33,12 @@ export const TopBar: React.FC<TopBarProps> = ({
   currentReasoning = null,
   isReasoning = false,
   isInconsistentDetected = false,
-  isClustered = false,
-  onCluster,
-  onExpandAll,
+  foldLevel = 0,
+  maxFoldLevel = 2,
+  canLevelUp = false,
+  canLevelDown = false,
+  onLevelUp,
+  onLevelDown,
 }) => {
   const config = useAppConfigStore((s) => s.config);
   const clusteringAlgorithm = useAppConfigStore(s => s.config.clusteringAlgorithm);
@@ -55,13 +61,13 @@ export const TopBar: React.FC<TopBarProps> = ({
       gap: '4px',
       minWidth: 'max-content',
     }}>
-      {/* Clustering controls */}
+      {/* Level fold controls */}
       <div className="reactodia-btn-group reactodia-btn-group-sm">
         <select
           className="reactodia-btn reactodia-btn-default glass-btn"
           style={{ appearance: 'none', WebkitAppearance: 'none', fontSize: 12, lineHeight: 1.5, padding: '5px 24px 5px 10px', cursor: 'pointer', boxSizing: 'border-box', borderRadius: 'unset', borderTopLeftRadius: 'var(--reactodia-button-border-radius)', borderBottomLeftRadius: 'var(--reactodia-button-border-radius)' }}
           value={clusteringAlgorithm}
-          title="Clustering algorithm"
+          title="Clustering algorithm (used at level L3)"
           onChange={e => setClusteringAlgorithm(e.target.value as any)}
         >
           <option value="none">No clustering</option>
@@ -71,23 +77,38 @@ export const TopBar: React.FC<TopBarProps> = ({
         </select>
         <button
           type="button"
-          className={`reactodia-btn reactodia-btn-default glass-btn${isClustered ? ' glass-btn--active' : ''}`}
-          style={{ borderRadius: 'unset' }}
-          title={isClustered ? 'Already clustered — expand first to re-cluster' : 'Cluster visible nodes'}
-          disabled={clusteringAlgorithm === 'none' || isClustered || !onCluster}
-          onClick={onCluster}
+          className="reactodia-btn reactodia-btn-default glass-btn"
+          style={{ borderRadius: 'unset', fontSize: 12 }}
+          title="Go to lower fold level"
+          disabled={!canLevelDown || !onLevelDown}
+          onClick={onLevelDown}
+        >◄</button>
+        <button
+          type="button"
+          disabled
+          className="reactodia-btn reactodia-btn-default"
+          style={{ borderRadius: 'unset', minWidth: 40, textAlign: 'center', fontSize: 12 }}
+          title={
+            foldLevel === 3 ? 'L3: community-detection clusters' :
+            foldLevel === 2 ? 'L2: structural groups (subclass chains, OWL collections)' :
+            foldLevel === 1 ? 'L1: annotation properties collapsed' :
+            '∅: fully expanded'
+          }
         >
-          Cluster
+          {foldLevel === 0 ? '∅' : `${foldLevel}/${maxFoldLevel}`}
         </button>
         <button
           type="button"
           className="reactodia-btn reactodia-btn-default glass-btn"
-          title={isClustered ? 'Expand all groups' : 'No groups to expand'}
-          disabled={!isClustered || !onExpandAll}
-          onClick={onExpandAll}
-        >
-          Expand All
-        </button>
+          style={{ borderRadius: 'unset', borderTopRightRadius: 'var(--reactodia-button-border-radius)', borderBottomRightRadius: 'var(--reactodia-button-border-radius)', fontSize: 12 }}
+          title={
+            foldLevel === 2 ? 'Apply L3 community-detection clustering' :
+            foldLevel === 3 ? 'Already at maximum fold level' :
+            'Go to higher fold level'
+          }
+          disabled={!canLevelUp || !onLevelUp}
+          onClick={onLevelUp}
+        >►</button>
       </div>
 
       {/* A-Box / T-Box group */}

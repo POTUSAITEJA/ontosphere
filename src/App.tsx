@@ -40,7 +40,7 @@ const App = () => {
         const result = await loadWorkflowCatalog(config);
         
         if (result.success) {
-          console.log('[App] Workflow catalog loaded successfully:', result.loadedFiles);
+          console.log('[VG_APP] Workflow catalog loaded successfully:', result.loadedFiles);
           toast.success('Workflow catalog loaded', {
             description: `${result.loadedFiles?.length || 0} files loaded from PyodideSemanticWorkflow`,
           });

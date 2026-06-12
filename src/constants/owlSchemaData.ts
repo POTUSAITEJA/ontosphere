@@ -108,6 +108,7 @@ export const SCHEMA_TBOX_CLASS_IRIS = new Set<string>([
   `${OWL}AllDisjointClasses`,
   `${OWL}AllDisjointProperties`,
   `${OWL}Ontology`,
+  `${OWL}Axiom`,
 
   // ── OWL property characteristic types ────────────────────────────────────
   `${OWL}TransitiveProperty`,

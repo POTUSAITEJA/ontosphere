@@ -80,7 +80,7 @@ export class PyodideManagerWorkerClient {
 
     this.workerInit = (async () => {
       try {
-        console.debug('[pyodideManager.workerClient] ensureWorker start');
+        console.debug('[VG_PYODIDE] ensureWorker start');
 
         if (typeof Worker !== 'undefined') {
           const worker = new WorkerFactory() as Worker;

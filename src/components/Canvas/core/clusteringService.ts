@@ -2,12 +2,11 @@
  * clusteringService — bridges clustering algorithms to Reactodia's EntityGroup API.
  *
  * Public API:
- *   applyCanvasClustering(ctx, canvas, algorithm, layoutFunction, animate): Promise<void>
+ *   applyCanvasClustering(ctx, canvas, algorithm, animate): Promise<EntityGroup[]>
  *   clearCanvasClustering(model): EntityElement[]
  */
 
 import * as Reactodia from '@reactodia/workspace';
-import type { LayoutFunction } from '@reactodia/workspace';
 import type { ClusterNode, ClusterEdge } from './clusterAlgorithms/types';
 import { computeClustersLabelPropagation } from './clusterAlgorithms/labelPropagation';
 import { computeClustersLouvainNgraph } from './clusterAlgorithms/louvainNgraph';
@@ -16,20 +15,16 @@ import { computeClustersKmeans } from './clusterAlgorithms/kmeans';
 type Algorithm = 'label-propagation' | 'louvain' | 'kmeans';
 
 /**
- * Run the chosen clustering algorithm, group clusters using Reactodia's groupEntities
- * API (handles animation, link state, and history correctly), then run a full layout
- * pass so groups are compactly positioned with no empty gaps.
- *
- * All code paths (Cluster button, algo/threshold change) use this function via
- * runClustering in ReactodiaCanvas.
+ * Run the chosen clustering algorithm and group clusters using Reactodia's EntityGroup API.
+ * Groups are positioned at member centroids. Returns the created EntityGroups.
+ * Layout is NOT run here — the caller decides when and whether to layout.
  */
 export async function applyCanvasClustering(
   ctx: Reactodia.WorkspaceContext,
   canvas: Reactodia.CanvasApi,
   algorithm: Algorithm,
-  layoutFunction: LayoutFunction,
   animate: boolean
-): Promise<void> {
+): Promise<Reactodia.EntityGroup[]> {
   const model = ctx.model;
 
   // Collect individual entities (skip any pre-existing groups)
@@ -41,8 +36,8 @@ export async function applyCanvasClustering(
   );
 
   if (entityElements.length < 2) {
-    console.log('[ClusteringService] Too few elements to cluster:', entityElements.length);
-    return;
+    console.log('[VG_CLUSTER] [ClusteringService] Too few elements to cluster:', entityElements.length);
+    return [];
   }
 
   // Build connectivity map: IRI → incident link count
@@ -67,15 +62,15 @@ export async function applyCanvasClustering(
 
   const { clusters } = selectClusteringAlgorithm(algorithm, clusterNodes, clusterEdges, { threshold: 2 });
 
-  console.log('[ClusteringService] Clusters computed:', {
+  console.log('[VG_CLUSTER] [ClusteringService] Clusters computed:', {
     algorithm,
     clusterCount: clusters.size,
     elementCount: entityElements.length,
   });
 
   if (clusters.size === 0) {
-    console.log('[ClusteringService] No clusters produced — skipping group creation');
-    return;
+    console.log('[VG_CLUSTER] [ClusteringService] No clusters produced — skipping group creation');
+    return [];
   }
 
   // Build element lookup upfront — all plans computed before any groupEntities call
@@ -144,12 +139,8 @@ export async function applyCanvasClustering(
     });
   }
 
-  // Layout the resulting graph (groups + remaining ungrouped nodes) so groups are
-  // compactly positioned — without this, groups sit at member centroids and leave
-  // large empty gaps where individual nodes used to be.
-  await ctx.performLayout({ layoutFunction, animate, canvas });
-
-  console.log('[ClusteringService] Grouping complete');
+  console.log('[VG_CLUSTER] [ClusteringService] Grouping complete');
+  return entityGroups;
 }
 
 /**
@@ -163,7 +154,7 @@ export function clearCanvasClustering(model: Reactodia.DataDiagramModel): Reacto
   );
   if (groups.length === 0) return [];
   const ungrouped = model.ungroupAll(groups);
-  console.log('[ClusteringService] Cleared', groups.length, 'groups, released', ungrouped.length, 'elements');
+  console.log('[VG_CLUSTER] [ClusteringService] Cleared', groups.length, 'groups, released', ungrouped.length, 'elements');
   return ungrouped;
 }
 

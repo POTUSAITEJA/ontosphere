@@ -7,7 +7,7 @@ export function useRelayBridge(enabled: boolean): { connected: boolean; callLog:
   const [callLog, setCallLog] = useState<RelayCallLogEntry[]>([]);
 
   useEffect(() => {
-    console.info('[useRelayBridge] enabled=', enabled);
+    console.info('[VG_RELAY] enabled=', enabled);
     if (!enabled) return;
 
     const stopBridge = startRelayBridge();

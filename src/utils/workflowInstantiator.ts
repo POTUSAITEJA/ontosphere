@@ -614,7 +614,7 @@ export async function instantiateWorkflowOnCanvas(
   // Apply the canvas layout algorithm to the newly added elements
   await ctx.performLayout({ selectedElements: allNewElements, animate: true, zoomToFit: false });
 
-  console.log('[WorkflowInstantiator] instantiateWorkflowOnCanvas complete', {
+  console.log('[VG_WORKFLOW] instantiateWorkflowOnCanvas complete', {
     activityIri,
     planIri: templateIri,
     steps: stepIris.length,

@@ -1,62 +1,88 @@
-// src/components/Canvas/layout/silentLayout.ts
-/**
- * runSilentLayout — compute layout positions for a set of nodes without triggering
- * Reactodia's spinner overlay. Returns a Map from element IRI to position Vector.
- *
- * The caller is responsible for applying positions (e.g. via el.setPosition) at the
- * appropriate time. This function only computes; it never touches the canvas model.
- */
-import type { LayoutFunction, LayoutGraph, LayoutState, Vector } from '@reactodia/workspace';
+import type { LayoutFunction, LayoutGraph, Vector } from '@reactodia/workspace';
 
 export interface SilentLayoutEdge {
   source: string;
   target: string;
 }
 
+export interface SilentLayoutOptions {
+  sizes?: Map<string, { width: number; height: number }>;
+  /** Initial positions used as starting bounds for free nodes, and as final positions for fixed nodes. */
+  seeds?: Map<string, { x: number; y: number }>;
+  /** Nodes whose positions must not change — returned at their seed position. */
+  fixed?: Set<string>;
+}
+
 /**
- * @param layoutFn  - Any LayoutFunction (Dagre worker, ELK worker, etc.)
- * @param iris      - All element IRIs to lay out
- * @param edges     - Edges between those elements
- * @param sizes     - Optional per-IRI sizes; defaults to 120×40
- * @returns         - Map from IRI → {x, y} top-left position
+ * Compute layout positions for a set of nodes without triggering Reactodia's
+ * spinner overlay. Returns a Map from element IRI to position Vector.
+ *
+ * All nodes (fixed and free) are passed to the engine with `fixed: true` set
+ * on fixed nodes. Engine wrappers handle fixed-node constraints (phantom
+ * substitution or native support). As a safety net, fixed nodes are
+ * overridden with their seed positions after the engine returns.
  */
 export async function runSilentLayout(
   layoutFn: LayoutFunction,
   iris: string[],
   edges: SilentLayoutEdge[],
-  sizes?: Map<string, { width: number; height: number }>
+  options?: SilentLayoutOptions
 ): Promise<Map<string, Vector>> {
   if (iris.length === 0) return new Map();
 
-  // Build LayoutGraph
-  const nodes: LayoutGraph['nodes'] = {};
-  for (const id of iris) {
-    nodes[id] = { types: [] };
+  const fixedSet = options?.fixed;
+  const allFixed = fixedSet && iris.every(id => fixedSet.has(id));
+
+  // Short-circuit: all nodes fixed → return seeds directly, no engine call needed.
+  if (allFixed) {
+    const positions = new Map<string, Vector>();
+    for (const id of iris) {
+      const seed = options?.seeds?.get(id);
+      if (seed) positions.set(id, { x: seed.x, y: seed.y });
+    }
+    return positions;
   }
 
-  const irisSet = new Set(iris);
+  // Build graph with ALL nodes — fixed flag passed through to engine.
+  const nodesMutable: Record<string, { types: []; fixed?: boolean }> = {};
+  for (const id of iris) {
+    nodesMutable[id] = {
+      types: [],
+      ...(fixedSet?.has(id) ? { fixed: true } : {}),
+    };
+  }
+
+  // Keep ALL edges — engine wrappers handle fixed↔free edges via phantom substitution.
   const links: LayoutGraph['links'] = edges
-    .filter(e => irisSet.has(e.source) && irisSet.has(e.target))
     .map(e => ({ type: '' as any, source: e.source, target: e.target }));
 
-  const graph: LayoutGraph = { nodes, links };
+  const graph: LayoutGraph = { nodes: nodesMutable as LayoutGraph['nodes'], links };
 
-  // Build LayoutState with known or default sizes
   const bounds: Record<string, { x: number; y: number; width: number; height: number }> = {};
   for (const id of iris) {
-    const s = sizes?.get(id);
-    bounds[id] = { x: 0, y: 0, width: s?.width ?? 120, height: s?.height ?? 40 };
+    const s = options?.sizes?.get(id);
+    const seed = options?.seeds?.get(id);
+    bounds[id] = {
+      x: seed?.x ?? 0,
+      y: seed?.y ?? 0,
+      width: s?.width ?? 120,
+      height: s?.height ?? 40,
+    };
   }
-  const state: LayoutState = { bounds };
 
-  // Run layout in worker (non-blocking by construction)
-  const result = await layoutFn(graph, state);
+  const result = await layoutFn(graph, { bounds });
 
-  // Convert bounds to position map (top-left corner)
   const positions = new Map<string, Vector>();
   for (const id of iris) {
-    const b = result.bounds[id];
-    if (b) positions.set(id, { x: b.x, y: b.y });
+    if (fixedSet?.has(id)) {
+      // Safety net: use seed position even if engine moved the node.
+      const seed = options?.seeds?.get(id);
+      if (seed) positions.set(id, { x: seed.x, y: seed.y });
+    } else {
+      const b = result.bounds[id];
+      if (b) positions.set(id, { x: b.x, y: b.y });
+    }
   }
+
   return positions;
 }
