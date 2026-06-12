@@ -3,10 +3,11 @@
  * runSilentLayout — compute layout positions for a set of nodes without triggering
  * Reactodia's spinner overlay. Returns a Map from element IRI to position Vector.
  *
- * The caller is responsible for applying positions (e.g. via el.setPosition) at the
- * appropriate time. This function only computes; it never touches the canvas model.
+ * Fixed nodes are NOT passed to the layout engine — they return their seed positions
+ * unchanged. Free nodes are passed to the engine with seeds as initial bounds.
+ * This works with any layout engine regardless of native fixed-node support.
  */
-import type { LayoutFunction, LayoutGraph, LayoutState, Vector } from '@reactodia/workspace';
+import type { LayoutFunction, LayoutGraph, Vector } from '@reactodia/workspace';
 
 export interface SilentLayoutEdge {
   source: string;
@@ -15,9 +16,9 @@ export interface SilentLayoutEdge {
 
 export interface SilentLayoutOptions {
   sizes?: Map<string, { width: number; height: number }>;
-  /** Initial positions for any node (used as starting point for free nodes). */
+  /** Initial positions used as starting bounds for free nodes, and as final positions for fixed nodes. */
   seeds?: Map<string, { x: number; y: number }>;
-  /** Nodes that must not move — keep their seed position exactly. */
+  /** Nodes whose positions must not change — returned at their seed position, not passed to the engine. */
   fixed?: Set<string>;
 }
 
@@ -36,23 +37,38 @@ export async function runSilentLayout(
 ): Promise<Map<string, Vector>> {
   if (iris.length === 0) return new Map();
 
-  // Build LayoutGraph — use a mutable Record then cast since LayoutGraph['nodes']
-  // has a readonly index signature.
-  const nodesMutable: Record<string, { types: []; fixed?: boolean }> = {};
+  const positions = new Map<string, Vector>();
+
+  // Pass 1: fixed nodes — returned at seed positions, never passed to the engine.
+  const freeIris: string[] = [];
   for (const id of iris) {
-    nodesMutable[id] = options?.fixed?.has(id) ? { types: [], fixed: true } : { types: [] };
+    if (options?.fixed?.has(id)) {
+      const seed = options.seeds?.get(id);
+      if (seed) positions.set(id, { x: seed.x, y: seed.y });
+    } else {
+      freeIris.push(id);
+    }
   }
 
-  const irisSet = new Set(iris);
+  if (freeIris.length === 0) return positions;
+
+  // Pass 2: free nodes — run through the layout engine.
+  // Edges involving fixed nodes are filtered out (fixed nodes aren't in the graph).
+  const freeSet = new Set(freeIris);
+
+  const nodesMutable: Record<string, { types: [] }> = {};
+  for (const id of freeIris) {
+    nodesMutable[id] = { types: [] };
+  }
+
   const links: LayoutGraph['links'] = edges
-    .filter(e => irisSet.has(e.source) && irisSet.has(e.target))
+    .filter(e => freeSet.has(e.source) && freeSet.has(e.target))
     .map(e => ({ type: '' as any, source: e.source, target: e.target }));
 
   const graph: LayoutGraph = { nodes: nodesMutable as LayoutGraph['nodes'], links };
 
-  // Build LayoutState with known or default sizes and optional seed positions
   const bounds: Record<string, { x: number; y: number; width: number; height: number }> = {};
-  for (const id of iris) {
+  for (const id of freeIris) {
     const s = options?.sizes?.get(id);
     const seed = options?.seeds?.get(id);
     bounds[id] = {
@@ -62,23 +78,13 @@ export async function runSilentLayout(
       height: s?.height ?? 40,
     };
   }
-  const state: LayoutState = { bounds };
 
-  // Run layout in worker (non-blocking by construction)
-  const result = await layoutFn(graph, state);
+  const result = await layoutFn(graph, { bounds });
 
-  // Convert bounds to position map (top-left corner).
-  // LayoutNode.fixed is declared in the type but ignored by the layout engine at
-  // runtime — manually restore fixed nodes to their seed positions afterwards.
-  const positions = new Map<string, Vector>();
-  for (const id of iris) {
-    if (options?.fixed?.has(id) && options.seeds?.has(id)) {
-      const seed = options.seeds.get(id)!;
-      positions.set(id, { x: seed.x, y: seed.y });
-    } else {
-      const b = result.bounds[id];
-      if (b) positions.set(id, { x: b.x, y: b.y });
-    }
+  for (const id of freeIris) {
+    const b = result.bounds[id];
+    if (b) positions.set(id, { x: b.x, y: b.y });
   }
+
   return positions;
 }

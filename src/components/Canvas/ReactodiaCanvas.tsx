@@ -543,52 +543,30 @@ function scheduleSilentLayoutWorker(
       }
 
       // ── Incremental L1 layout ───────────────────────────────────────────────
-      // LayoutNode.fixed is ignored at runtime by all engines. Instead: run the engine
-      // with seeds for ALL entities, then post-process: override roots/standalones with
-      // their seeds; use engine result for member entities (the engine distributes members
-      // around their root-entity anchors via the added anchor edges).
-      // Root entities (e.g. pmdco:Material) ARE canvas EntityElement nodes — they started
-      // the group in applyL2Fold — so they're valid anchor targets in allEntityIris.
+      // runSilentLayout now fully handles fixed nodes: they are excluded from the
+      // engine call and returned at their seed positions. Free nodes (members) are
+      // passed to the engine with seeds at their cluster centroid, so force-directed
+      // engines spread them from there. No anchor edges or post-processing needed.
       let l1Positions: Map<string, Reactodia.Vector>;
       if (l2AllPositions.size > 0) {
+        // Fixed = roots and standalones (non-members). Members are free.
+        const l1Fixed = new Set<string>();
         const l1Seeds = new Map<string, Reactodia.Vector>();
         for (const entityIri of allEntityIris) {
           const rootIri = entityMemberToRoot.get(entityIri);
           if (!rootIri) {
-            // Root entity or standalone: seed at its L2 position.
+            // Root or standalone: fixed at its L2 position.
             const pos = l2AllPositions.get(entityIri);
-            if (pos) l1Seeds.set(entityIri, pos);
+            if (pos) { l1Fixed.add(entityIri); l1Seeds.set(entityIri, pos); }
           } else {
-            // Member entity: seed at root's L2 position so it starts in the right region.
-            const rootPos = l2AllPositions.get(rootIri);
-            const seed = rootPos ?? getL3Seed(entityIri);
+            // Member: free, seeded at root's L2 position (starts in the right cluster region).
+            const seed = l2AllPositions.get(rootIri) ?? getL3Seed(entityIri);
             if (seed) l1Seeds.set(entityIri, seed);
           }
         }
-
-        // Anchor edges: member → its root entity (both are in allEntityIris).
-        // Force-directed engines use these to pull members toward their roots.
-        const l1AnchorEdges: SilentLayoutEdge[] = [...l1Edges];
-        for (const entityIri of allEntityIris) {
-          const rootIri = entityMemberToRoot.get(entityIri);
-          if (rootIri) l1AnchorEdges.push({ source: entityIri, target: rootIri });
-        }
-
-        const rawL1 = await runSilentLayout(layoutFn, allEntityIris, l1AnchorEdges, { seeds: l1Seeds });
-
-        l1Positions = new Map();
-        for (const entityIri of allEntityIris) {
-          const rootIri = entityMemberToRoot.get(entityIri);
-          if (!rootIri) {
-            // Root or standalone: override engine result with seed (spatial coherence).
-            const seed = l1Seeds.get(entityIri);
-            if (seed) l1Positions.set(entityIri, seed);
-          } else {
-            // Member: use engine result, fallback to seed.
-            const pos = rawL1.get(entityIri) ?? l1Seeds.get(entityIri);
-            if (pos) l1Positions.set(entityIri, pos);
-          }
-        }
+        l1Positions = await runSilentLayout(
+          layoutFn, allEntityIris, l1Edges, { seeds: l1Seeds, fixed: l1Fixed }
+        );
       } else {
         l1Positions = await runSilentLayout(layoutFn, allEntityIris, l1Edges);
       }
