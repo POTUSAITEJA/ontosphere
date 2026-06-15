@@ -34,18 +34,16 @@ export function ShaclShapesPanel() {
   const shaclErrors = useShaclResultStore(s => s.errors);
   const shaclWarnings = useShaclResultStore(s => s.warnings);
   const activeMessageKey = useShaclResultStore(s => s.activeMessageKey);
-  const clearHighlight = useShaclResultStore(s => s.clearHighlight);
+  const highlightMessage = useShaclResultStore(s => s.highlightMessage);
   const hasResults = shaclErrors.length > 0 || shaclWarnings.length > 0;
 
-  const activeRef = useRef<HTMLDivElement>(null);
+  const activeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (activeMessageKey && activeRef.current) {
       activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      const timer = setTimeout(() => clearHighlight(), 3000);
-      return () => clearTimeout(timer);
     }
-  }, [activeMessageKey, clearHighlight]);
+  }, [activeMessageKey]);
 
   // Auto-expand shapes that have validation results
   useEffect(() => {
@@ -187,7 +185,10 @@ export function ShaclShapesPanel() {
           'hover:bg-accent/50',
           isActive && 'bg-accent ring-1 ring-ring',
         )}
-        onClick={() => m.nodeId && navigateToNode(m.nodeId)}
+        onClick={() => {
+          highlightMessage(key);
+          if (m.nodeId) navigateToNode(m.nodeId);
+        }}
         disabled={!m.nodeId}
         title={m.nodeId ? `Navigate to ${shortenIri(m.nodeId)}` : undefined}
       >
