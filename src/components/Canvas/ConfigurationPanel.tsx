@@ -681,6 +681,19 @@ export const ConfigurationPanel = ({
                       variant="outline"
                       className="w-full justify-start text-xs"
                       onClick={() => {
+                        const base = window.location.origin + (import.meta.env.BASE_URL || '/');
+                        const url = `${base}shacl-shapes/reasoning-demo.shacl.ttl`;
+                        updateSettings({ shaclShapesUrl: url });
+                        toast.success('Set to reasoning-demo shapes (errors + warnings)');
+                      }}
+                    >
+                      Reasoning Demo — violations + warnings for reasoning-demo.ttl
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full justify-start text-xs"
+                      onClick={() => {
                         updateSettings({ shaclShapesUrl: 'https://raw.githubusercontent.com/gcpdev/xpshacl/main/data/shark_shapes.ttl' });
                         toast.success('Set to xpSHACL shark_shapes (uses SPARQL constraints)');
                       }}

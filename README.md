@@ -21,6 +21,7 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
 - [Startup / URL parameters](#startup--url-parameters)
 - [Reasoning](#reasoning)
 - [Reasoning demo](#reasoning-demo)
+- [SHACL validation](#shacl-validation)
 - [CORS and proxies](#cors-and-proxies)
 - [Using the UI](#using-the-ui)
 - [Developer utilities](#developer-utilities-window-globals)
@@ -154,6 +155,16 @@ The API key is sent only with the RDF fetch request. CORS: the server must allow
 ?rdfUrl=https://example.org/data.ttl&loadImports=false
 ```
 
+### SHACL shapes
+
+| Parameter      | Description |
+|----------------|-------------|
+| `shaclShapes`  | URL of SHACL shapes to load on startup. Accepts a direct `.ttl` URL, a GitHub folder URL, or a comma-separated list. Overrides the configured shapes URL for this session. |
+
+```text
+?rdfUrl=https://example.org/data.ttl&shaclShapes=/shacl-shapes/ontology-quality.shacl.ttl
+```
+
 ### Full example (CKAN private dataset via Fuseki SPARQL)
 
 ```text
@@ -230,6 +241,45 @@ A separate **inconsistency demo** (`public/reasoning-demo-inconsistent.ttl`) sho
 [Open inconsistency demo ↗](https://thhanke.github.io/ontosphere/?rdfUrl=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/reasoning-demo-inconsistent.ttl)
 
 `inc:frank` is asserted as both `inc:Employee` and `inc:Contractor`, which are declared `owl:disjointWith`. Running reasoning produces `isConsistent: false`, reasoning is skipped, and the report's Errors tab shows the disjointness clash on `frank`.
+
+SHACL validation
+-----------------
+Ontosphere validates RDF data against [SHACL](https://www.w3.org/TR/shacl/) (Shapes Constraint Language) shapes. SHACL shapes define constraints on your data — required properties, value ranges, cardinality — and the validation engine reports which nodes violate them.
+
+SHACL validation runs automatically as part of the reasoning pipeline. After reasoning completes, the reasoning report shows SHACL violations alongside OWL inferences, with **SHACL** / **OWL** source badges on each finding. Only SHACL errors (severity `sh:Violation`) mark the data as invalid; warnings (`sh:Warning`) and info-level findings do not.
+
+Affected nodes display validation badges directly on the canvas — red for errors, amber for warnings. Clicking a finding in the reasoning report navigates to the affected node.
+
+### Loading shapes
+
+| Method | Description |
+|--------|-------------|
+| `?shaclShapes=` URL parameter | Direct `.ttl` URL, GitHub folder URL, or comma-separated list |
+| Settings → SHACL tab | Persistent shapes URL with bundled presets |
+| MCP tool `loadShaclFromUrl` | AI-agent-driven shape loading |
+
+Shapes are loaded into the `urn:vg:shapes` named graph, which is excluded from OWL reasoning. The sidebar **SHACL Shapes** panel shows loaded shapes with their target classes, constraint messages, and severity levels.
+
+### Bundled shape presets
+
+| Preset | Target | Checks |
+|--------|--------|--------|
+| Ontology Quality | `owl:Class`, `owl:ObjectProperty`, `owl:DatatypeProperty` | `rdfs:label`, `rdfs:comment`, `rdfs:domain`, `rdfs:range` |
+| SKOS Quality | `skos:Concept`, `skos:ConceptScheme` | `skos:prefLabel`, `skos:inScheme`, `rdfs:label` |
+| Reasoning Demo | `ex:Project`, `ex:Contractor`, `ex:Employee`, `owl:NamedIndividual` | Missing descriptions, supervisors, job titles |
+
+### SHACL demo
+
+The SHACL demo loads the reasoning-demo ontology with purpose-built shapes that produce both errors and warnings:
+
+[Open SHACL demo ↗](https://thhanke.github.io/ontosphere/?rdfUrl=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/reasoning-demo.ttl&shaclShapes=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/shacl-shapes/reasoning-demo.shacl.ttl)
+
+After loading, click **▶** (Run Reasoning) in the toolbar. The report will show:
+
+- **2 errors** (sh:Violation): `projectAlpha` missing `rdfs:comment`; `frank` (Contractor) missing `ex:hasSupervisor`
+- **12 warnings** (sh:Warning): employees missing `ex:jobTitle`; all individuals missing `rdfs:comment`
+
+Each finding links to the affected node — click to close the dialog and navigate to it on the canvas. Error and warning badges appear directly on affected nodes.
 
 CORS and proxies
 ----------------

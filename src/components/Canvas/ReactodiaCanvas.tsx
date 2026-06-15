@@ -1412,7 +1412,7 @@ export default function ReactodiaCanvas() {
       setCurrentReasoning(result);
       setReasoningHistory(h => [...h, result]);
       await handleApplyInferred();
-      // Highlight nodes with reasoning errors via the validation provider.
+      // Highlight nodes with reasoning errors/warnings via the validation provider.
       const errorMap = new Map<string, string[]>();
       for (const err of result.errors ?? []) {
         if (err.nodeId) {
@@ -1421,10 +1421,20 @@ export default function ReactodiaCanvas() {
           errorMap.set(err.nodeId, list);
         }
       }
+      const warningMap = new Map<string, string[]>();
+      for (const warn of result.warnings ?? []) {
+        if (warn.nodeId) {
+          const list = warningMap.get(warn.nodeId) ?? [];
+          list.push(warn.message);
+          warningMap.set(warn.nodeId, list);
+        }
+      }
       validationProvider.setErrors(errorMap);
+      validationProvider.setWarnings(warningMap);
+      const affectedIris = new Set([...errorMap.keys(), ...warningMap.keys()]);
       const ctx = contextRef.current;
-      if (ctx && errorMap.size > 0) {
-        ctx.editor.revalidateEntities(new Set(errorMap.keys()) as ReadonlySet<Reactodia.ElementIri>);
+      if (ctx && affectedIris.size > 0) {
+        ctx.editor.revalidateEntities(affectedIris as ReadonlySet<Reactodia.ElementIri>);
       }
       return result;
     } finally {

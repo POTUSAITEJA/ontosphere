@@ -11,37 +11,48 @@ const WARNING_PRED = 'urn:vg:reasoningWarning';
 
 export class RdfValidationProvider implements ValidationProvider {
   private _errorMap = new Map<string, string[]>();
+  private _warningMap = new Map<string, string[]>();
 
   setErrors(map: Map<string, string[]>): void {
     this._errorMap = new Map(map);
   }
 
+  setWarnings(map: Map<string, string[]>): void {
+    this._warningMap = new Map(map);
+  }
+
   clearErrors(): void {
     this._errorMap.clear();
+    this._warningMap.clear();
   }
 
   async validate(e: ValidationEvent): Promise<ValidationResult> {
     const items: ValidatedElement[] = [];
     const errors = e.target.properties?.[ERROR_PRED] ?? [];
     const warnings = e.target.properties?.[WARNING_PRED] ?? [];
-    const injected = this._errorMap.get(e.target.id as string) ?? [];
+    const injectedErrors = this._errorMap.get(e.target.id as string) ?? [];
+    const injectedWarnings = this._warningMap.get(e.target.id as string) ?? [];
 
-    if (errors.length > 0 || injected.length > 0) {
-      const msg = injected[0] ?? (errors[0] as any)?.value ?? 'Reasoning error';
+    if (errors.length > 0 || injectedErrors.length > 0) {
+      const msg = injectedErrors[0] ?? (errors[0] as any)?.value ?? 'Reasoning error';
       items.push({
         type: 'element',
         target: e.target.id as ElementIri,
         severity: 'error',
         message: msg,
       });
-    } else if (warnings.length > 0) {
+    }
+
+    if (warnings.length > 0 || injectedWarnings.length > 0) {
+      const msg = injectedWarnings[0] ?? (warnings[0] as any)?.value ?? 'Reasoning warning';
       items.push({
         type: 'element',
         target: e.target.id as ElementIri,
         severity: 'warning',
-        message: (warnings[0] as any)?.value ?? 'Reasoning warning',
+        message: msg,
       });
     }
+
     return { items };
   }
 }

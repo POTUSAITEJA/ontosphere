@@ -12,8 +12,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { ScrollArea } from '../ui/scroll-area';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Separator } from '../ui/separator';
-import { AlertTriangle, CheckCircle, XCircle, Lightbulb, Clock, Shield } from 'lucide-react';
+import { AlertTriangle, CheckCircle, XCircle, Lightbulb, Clock, Shield, ExternalLink } from 'lucide-react';
 import type { ReasoningResult } from '../../utils/rdfManager';
+import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 
 /**
  * Lazy paginated table for inferred triples.
@@ -201,6 +202,14 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
   const reasoningId = currentReasoning?.id ?? null;
   const hasReasoning = !!currentReasoning;
 
+  const navigateToNode = useCallback((iri: string) => {
+    try {
+      const { navigateToIri } = getWorkspaceRefs();
+      navigateToIri?.(iri);
+      onOpenChange(false);
+    } catch { /* workspace not ready */ }
+  }, [onOpenChange]);
+
   useEffect(() => {
     let cancelled = false;
     const loadGraphCounts = async () => {
@@ -259,7 +268,7 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
   const shaclErrors = errors.filter(e => isShaclRule(e.rule));
   const shaclWarnings = warnings.filter(w => isShaclRule(w.rule));
   const shaclTotal = shaclErrors.length + shaclWarnings.length;
-  const shaclConforms = shaclTotal === 0;
+  const shaclHasErrors = shaclErrors.length > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -358,8 +367,8 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-sm font-medium ${shaclConforms ? 'text-green-600' : 'text-destructive'}`}>
-                    {shaclConforms ? 'Conforms' : `${shaclTotal} violations`}
+                  <div className={`text-sm font-medium ${shaclTotal === 0 ? 'text-green-600' : shaclHasErrors ? 'text-destructive' : 'text-warning'}`}>
+                    {shaclTotal === 0 ? 'Conforms' : shaclHasErrors ? `${shaclErrors.length} errors, ${shaclWarnings.length} warnings` : `${shaclWarnings.length} warnings`}
                   </div>
                 </CardContent>
               </Card>
@@ -373,7 +382,7 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                 </CardHeader>
                 <CardContent>
                   <div className="text-sm font-medium">
-                    {errors.length === 0 && warnings.length === 0 ? 'Valid' : 'Issues Found'}
+                    {errors.length > 0 ? 'Errors Found' : warnings.length > 0 ? 'Valid (with warnings)' : 'Valid'}
                   </div>
                 </CardContent>
               </Card>
@@ -395,7 +404,7 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
               </Card>
             )}
 
-            {status === 'completed' && errors.length === 0 && warnings.length === 0 && isConsistent !== false && (
+            {status === 'completed' && errors.length === 0 && isConsistent !== false && (
               <Card className="bg-success/10 border-success/20">
                 <CardContent className="pt-4">
                   <div className="flex items-center gap-2 text-success">
@@ -422,6 +431,15 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                       <div key={i} className="text-sm">
                         <div className="font-medium">{w.rule}</div>
                         <div className="text-xs text-muted-foreground break-words">{w.message}</div>
+                        {w.nodeId && (
+                          <button
+                            className="flex items-center gap-1 text-xs text-primary hover:underline mt-0.5 cursor-pointer"
+                            onClick={() => navigateToNode(w.nodeId!)}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            {w.nodeId.split(/[#/]/).pop() || w.nodeId}
+                          </button>
+                        )}
                       </div>
                     ))}
                     {warnings.length > 5 && (
@@ -457,11 +475,19 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                       </CardHeader>
                       <CardContent>
                         <p className="text-sm">{error.message}</p>
-                        {(error.nodeId || error.edgeId) && (
+                        {error.nodeId ? (
+                          <button
+                            className="flex items-center gap-1 text-xs text-primary hover:underline mt-2 cursor-pointer"
+                            onClick={() => navigateToNode(error.nodeId!)}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            {error.nodeId.split(/[#/]/).pop() || error.nodeId}
+                          </button>
+                        ) : error.edgeId ? (
                           <p className="text-xs text-muted-foreground mt-2">
-                            Affected: {error.nodeId ? `Node ${error.nodeId}` : `Edge ${error.edgeId}`}
+                            Affected: Edge {error.edgeId}
                           </p>
-                        )}
+                        ) : null}
                       </CardContent>
                     </Card>
                   ))
@@ -491,11 +517,19 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                       </CardHeader>
                       <CardContent>
                         <p className="text-sm">{warning.message}</p>
-                        {(warning.nodeId || warning.edgeId) && (
+                        {warning.nodeId ? (
+                          <button
+                            className="flex items-center gap-1 text-xs text-primary hover:underline mt-2 cursor-pointer"
+                            onClick={() => navigateToNode(warning.nodeId!)}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            {warning.nodeId.split(/[#/]/).pop() || warning.nodeId}
+                          </button>
+                        ) : warning.edgeId ? (
                           <p className="text-xs text-muted-foreground mt-2">
-                            Affected: {warning.nodeId ? `Node ${warning.nodeId}` : `Edge ${warning.edgeId}`}
+                            Affected: Edge {warning.edgeId}
                           </p>
-                        )}
+                        ) : null}
                       </CardContent>
                     </Card>
                   ))

@@ -1,15 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import { rdfManager } from '../../utils/rdfManager';
 import { Badge } from '../ui/badge';
-import { Button } from '../ui/button';
-import { Shield, ChevronDown, ChevronRight, CheckCircle, XCircle, Loader2 } from 'lucide-react';
-import type { ShaclViolation } from '../../utils/reasoningTypes';
+import { Shield, ChevronDown, ChevronRight, AlertTriangle, XCircle } from 'lucide-react';
+
+interface ConstraintInfo {
+  path: string | null;
+  message: string | null;
+  severity: 'violation' | 'warning' | 'info';
+}
 
 interface ShapeInfo {
   iri: string;
   label: string;
   targetClass: string | null;
-  propertyCount: number;
+  constraints: ConstraintInfo[];
 }
 
 interface ShapeGroup {
@@ -17,27 +21,24 @@ interface ShapeGroup {
   shapes: ShapeInfo[];
 }
 
+const SH = 'http://www.w3.org/ns/shacl#';
+
 export function ShaclShapesPanel() {
   const [groups, setGroups] = useState<ShapeGroup[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [validating, setValidating] = useState(false);
-  const [validationResult, setValidationResult] = useState<{
-    conforms: boolean;
-    violations: ShaclViolation[];
-  } | null>(null);
   const [shapeCount, setShapeCount] = useState(0);
 
   const loadShapeInfo = useCallback(async () => {
     try {
-      const SH_SHAPE_TYPES = new Set([
-        'http://www.w3.org/ns/shacl#NodeShape',
-        'http://www.w3.org/ns/shacl#Shape',
-      ]);
-      const SH_TARGET_CLASS = 'http://www.w3.org/ns/shacl#targetClass';
-      const SH_PROPERTY = 'http://www.w3.org/ns/shacl#property';
+      const SH_SHAPE_TYPES = new Set([SH + 'NodeShape', SH + 'Shape']);
+      const SH_TARGET_CLASS = SH + 'targetClass';
+      const SH_PROPERTY = SH + 'property';
+      const SH_PATH = SH + 'path';
+      const SH_MESSAGE = SH + 'message';
+      const SH_SEVERITY = SH + 'severity';
       const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
       const RDFS_LABEL = 'http://www.w3.org/2000/01/rdf-schema#label';
-      const SH_NAME = 'http://www.w3.org/ns/shacl#name';
+      const SH_NAME = SH + 'name';
 
       const { items } = await rdfManager.fetchQuadsPage({ graphName: 'urn:vg:shapes', limit: 0 });
       if (!items || items.length === 0) {
@@ -53,13 +54,31 @@ export function ShaclShapesPanel() {
       const shapes: ShapeInfo[] = nodeShapes.map(iri => {
         const targetQ = items.find(q => q.subject === iri && q.predicate === SH_TARGET_CLASS);
         const labelQ = items.find(q => q.subject === iri && (q.predicate === RDFS_LABEL || q.predicate === SH_NAME));
-        const propCount = items.filter(q => q.subject === iri && q.predicate === SH_PROPERTY).length;
+        const propBNodes = items
+          .filter(q => q.subject === iri && q.predicate === SH_PROPERTY)
+          .map(q => q.object);
+
+        const constraints: ConstraintInfo[] = propBNodes.map(bn => {
+          const pathQ = items.find(q => q.subject === bn && q.predicate === SH_PATH);
+          const msgQ = items.find(q => q.subject === bn && q.predicate === SH_MESSAGE);
+          const sevQ = items.find(q => q.subject === bn && q.predicate === SH_SEVERITY);
+          const sevVal = sevQ?.object ?? '';
+          const severity: ConstraintInfo['severity'] =
+            sevVal.endsWith('Violation') ? 'violation' :
+            sevVal.endsWith('Info') ? 'info' : 'warning';
+          return {
+            path: pathQ?.object ?? null,
+            message: msgQ?.object ?? null,
+            severity,
+          };
+        });
+
         const label = labelQ?.object ?? iri.split(/[#/]/).pop() ?? iri;
         return {
           iri,
           label,
           targetClass: targetQ?.object ?? null,
-          propertyCount: propCount,
+          constraints,
         };
       });
 
@@ -80,18 +99,6 @@ export function ShaclShapesPanel() {
     return () => { rdfManager.offChange(handler); };
   }, [loadShapeInfo]);
 
-  const handleValidate = useCallback(async () => {
-    setValidating(true);
-    try {
-      const result = await rdfManager.runShaclValidation();
-      setValidationResult({ conforms: result.conforms, violations: result.violations });
-    } catch (err) {
-      console.error('[ShaclShapesPanel] Validation failed', err);
-    } finally {
-      setValidating(false);
-    }
-  }, []);
-
   const toggleGroup = (source: string) => {
     setExpanded(prev => {
       const next = new Set(prev);
@@ -105,6 +112,12 @@ export function ShaclShapesPanel() {
     const hash = iri.lastIndexOf('#');
     const slash = iri.lastIndexOf('/');
     return iri.slice(Math.max(hash, slash) + 1) || iri;
+  };
+
+  const severityIcon = (sev: ConstraintInfo['severity']) => {
+    if (sev === 'violation') return <XCircle className="w-3 h-3 text-destructive shrink-0" />;
+    if (sev === 'warning') return <AlertTriangle className="w-3 h-3 text-warning shrink-0" />;
+    return <Shield className="w-3 h-3 text-blue-400 shrink-0" />;
   };
 
   if (shapeCount === 0) {
@@ -122,42 +135,8 @@ export function ShaclShapesPanel() {
   return (
     <div className="space-y-2 px-2">
       <div className="flex items-center justify-between px-1">
-        <span className="text-xs text-muted-foreground">{shapeCount} shapes</span>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-6 text-xs"
-          onClick={handleValidate}
-          disabled={validating}
-        >
-          {validating ? (
-            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-          ) : (
-            <Shield className="w-3 h-3 mr-1" />
-          )}
-          Validate
-        </Button>
+        <span className="text-xs text-muted-foreground">{shapeCount} shapes loaded</span>
       </div>
-
-      {validationResult && (
-        <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded text-xs ${
-          validationResult.conforms
-            ? 'bg-green-500/10 text-green-700 dark:text-green-400'
-            : 'bg-destructive/10 text-destructive'
-        }`}>
-          {validationResult.conforms ? (
-            <>
-              <CheckCircle className="w-3.5 h-3.5" />
-              <span>Conforms</span>
-            </>
-          ) : (
-            <>
-              <XCircle className="w-3.5 h-3.5" />
-              <span>{validationResult.violations.length} violations</span>
-            </>
-          )}
-        </div>
-      )}
 
       {groups.map(group => (
         <div key={group.source} className="border rounded-md overflow-hidden">
@@ -178,20 +157,25 @@ export function ShaclShapesPanel() {
           {expanded.has(group.source) && (
             <div className="border-t divide-y">
               {group.shapes.map(shape => (
-                <div key={shape.iri} className="px-2 py-1.5 text-xs space-y-0.5">
-                  <div className="font-medium truncate" title={shape.iri}>
-                    {shape.label}
-                  </div>
-                  <div className="text-muted-foreground flex items-center gap-2">
+                <div key={shape.iri} className="px-2 py-1.5 text-xs space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium truncate" title={shape.iri}>
+                      {shape.label}
+                    </span>
                     {shape.targetClass && (
-                      <span title={shape.targetClass}>
-                        target: {shortenIri(shape.targetClass)}
-                      </span>
-                    )}
-                    {shape.propertyCount > 0 && (
-                      <span>{shape.propertyCount} constraints</span>
+                      <Badge variant="outline" className="text-[9px] h-3.5 px-1 shrink-0">
+                        {shortenIri(shape.targetClass)}
+                      </Badge>
                     )}
                   </div>
+                  {shape.constraints.map((c, i) => (
+                    <div key={i} className="flex items-start gap-1 text-muted-foreground pl-1">
+                      {severityIcon(c.severity)}
+                      <span className="break-words">
+                        {c.message || (c.path ? `requires ${shortenIri(c.path)}` : 'constraint')}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               ))}
             </div>
