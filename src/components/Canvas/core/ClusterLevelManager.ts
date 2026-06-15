@@ -87,7 +87,7 @@ export class ClusterLevelManager {
 
   getSnapshot = (): LevelSnapshot => {
     const algorithm = this._getClusteringAlgorithm();
-    const maxFoldLevel: 2 | 3 = this._l3EverBuilt ? 3 : 2;
+    const maxFoldLevel: 2 | 3 = (this._l3EverBuilt || algorithm !== 'none') ? 3 : 2;
     const canGoUp =
       this._currentLevel < maxFoldLevel &&
       !(this._currentLevel === 2 && algorithm === 'none');

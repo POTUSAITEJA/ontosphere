@@ -6,11 +6,11 @@ function makeManager(algorithm = 'louvain') {
 }
 
 describe('ClusterLevelManager — initial state', () => {
-  it('starts at level 0, maxFoldLevel 2, canGoUp true, canGoDown false', () => {
+  it('starts at level 0, maxFoldLevel 3 (algorithm set), canGoUp true, canGoDown false', () => {
     const m = makeManager();
     const s = m.getSnapshot();
     expect(s.currentLevel).toBe(0);
-    expect(s.maxFoldLevel).toBe(2);
+    expect(s.maxFoldLevel).toBe(3);
     expect(s.canGoUp).toBe(true);
     expect(s.canGoDown).toBe(false);
   });
@@ -35,9 +35,11 @@ describe('ClusterLevelManager — initial state', () => {
     expect(m.getSnapshot().canGoDown).toBe(false);
   });
 
-  it('maxFoldLevel is 2 initially (l3EverBuilt false)', () => {
-    const m = makeManager();
-    expect(m.getSnapshot().maxFoldLevel).toBe(2);
+  it('maxFoldLevel is 3 when algorithm set, 2 when none', () => {
+    const m = makeManager('louvain');
+    expect(m.getSnapshot().maxFoldLevel).toBe(3);
+    const m2 = makeManager('none');
+    expect(m2.getSnapshot().maxFoldLevel).toBe(2);
   });
 });
 
