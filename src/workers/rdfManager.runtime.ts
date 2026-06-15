@@ -1166,9 +1166,60 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     }
 
     const SH_NODESHAPE = "http://www.w3.org/ns/shacl#NodeShape";
+    const SH_NODEKIND = "http://www.w3.org/ns/shacl#nodeKind";
+    const SH_IRI = "http://www.w3.org/ns/shacl#IRI";
+    const SH_TARGET_CLASS = "http://www.w3.org/ns/shacl#targetClass";
+    const SH_FILTER_SHAPE = "http://www.w3.org/ns/shacl#filterShape";
+
     const shapeCount = [...shapesDs].filter(
       (q: any) => q.predicate.value === RDF_TYPE && q.object.value === SH_NODESHAPE,
     ).length;
+
+    // Pre-filter: honour sh:nodeKind sh:IRI and sh:filterShape on shapes.
+    // Shapes declaring sh:nodeKind sh:IRI → collect their sh:targetClass IRIs
+    // and remove blank-node instances of those classes from the data dataset
+    // so the SHACL engine never sees them as focus nodes.
+    const iriOnlyTargetClasses = new Set<string>();
+    const shapesArr = [...shapesDs] as any[];
+
+    // Direct sh:nodeKind sh:IRI on shape
+    const iriOnlyShapes = new Set(
+      shapesArr
+        .filter(q => q.predicate.value === SH_NODEKIND && q.object.value === SH_IRI)
+        .map(q => q.subject.value),
+    );
+    // sh:filterShape pointing to a blank node with sh:nodeKind sh:IRI
+    for (const q of shapesArr) {
+      if (q.predicate.value === SH_FILTER_SHAPE) {
+        const filterNode = q.object.value;
+        const hasIriKind = shapesArr.some(
+          (fq: any) => fq.subject.value === filterNode && fq.predicate.value === SH_NODEKIND && fq.object.value === SH_IRI,
+        );
+        if (hasIriKind) iriOnlyShapes.add(q.subject.value);
+      }
+    }
+    for (const q of shapesArr) {
+      if (q.predicate.value === SH_TARGET_CLASS && iriOnlyShapes.has(q.subject.value)) {
+        iriOnlyTargetClasses.add(q.object.value);
+      }
+    }
+
+    if (iriOnlyTargetClasses.size > 0) {
+      const toRemove: any[] = [];
+      for (const q of [...dataDs] as any[]) {
+        if (
+          q.predicate.value === RDF_TYPE &&
+          iriOnlyTargetClasses.has(q.object.value) &&
+          q.subject.termType === "BlankNode"
+        ) {
+          toRemove.push(q);
+        }
+      }
+      for (const q of toRemove) dataDs.delete(q);
+      if (toRemove.length > 0) {
+        debugLog(`[SHACL] Pre-filtered ${toRemove.length} blank-node focus nodes (sh:nodeKind sh:IRI)`);
+      }
+    }
 
     const validator = new SHACLValidator(shapesDs, { factory });
     let report: any;

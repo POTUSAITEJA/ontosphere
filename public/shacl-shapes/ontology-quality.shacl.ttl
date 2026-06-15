@@ -9,6 +9,7 @@
 <urn:shacl:ontology-quality:ClassLabel>
   a sh:NodeShape ;
   sh:targetClass owl:Class ;
+  sh:nodeKind sh:IRI ;
   sh:property [
     sh:path rdfs:label ;
     sh:minCount 1 ;
@@ -19,6 +20,7 @@
 <urn:shacl:ontology-quality:ClassComment>
   a sh:NodeShape ;
   sh:targetClass owl:Class ;
+  sh:nodeKind sh:IRI ;
   sh:property [
     sh:path rdfs:comment ;
     sh:minCount 1 ;
