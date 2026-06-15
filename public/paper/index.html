@@ -273,7 +273,7 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
         <section id="abstract">
           <h2>Abstract</h2>
           <div datatype="rdf:HTML" property="schema:abstract">
-            <p><!-- TODO: Write abstract --></p>
+            <p>Ontology engineering has traditionally required installing desktop applications such as Prot&eacute;g&eacute; or deploying server-side infrastructure, creating a significant barrier to entry for newcomers, educators, and practitioners who need to explore or author knowledge graphs quickly. We present <em>Ontosphere</em>, a zero-install, browser-based semantic web workbench that runs entirely client-side. Ontosphere integrates an in-memory RDF triple store (N3.js), a visual graph editor (Reactodia), and &mdash; to our knowledge &mdash; the first in-browser OWL&nbsp;2&nbsp;DL reasoner, achieved by compiling Konclude to WebAssembly with SharedArrayBuffer-backed threading. The system further exposes 31 tools via the Model Context Protocol (MCP), enabling any MCP-compatible AI agent to manipulate, reason over, and validate knowledge graphs through natural-language interaction. A bookmarklet-based AI Relay Bridge extends this integration to arbitrary AI chat interfaces without requiring API keys or server infrastructure. Ontosphere is available as a live deployment at <a href="https://thhanke.github.io/ontosphere/">https://thhanke.github.io/ontosphere/</a> under the Apache&nbsp;2.0 licence.</p>
           </div>
         </section>
 
@@ -282,12 +282,12 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
           <h2>Keywords</h2>
           <div>
             <ul>
+              <li property="schema:about">Ontology Engineering</li>
               <li property="schema:about">Semantic Web</li>
-              <li property="schema:about">OWL Reasoning</li>
+              <li property="schema:about">OWL 2 DL Reasoning</li>
               <li property="schema:about">Knowledge Graph Visualization</li>
-              <li property="schema:about">RDF Editor</li>
-              <li property="schema:about">Browser-Based</li>
-              <li property="schema:about">FAIR Data</li>
+              <li property="schema:about">Model Context Protocol</li>
+              <li property="schema:about">Browser-Based Tools</li>
             </ul>
           </div>
         </section>
@@ -296,7 +296,14 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
         <section id="introduction" rel="schema:hasPart" resource="#introduction">
           <h2 property="schema:name">Introduction</h2>
           <div datatype="rdf:HTML" property="schema:description">
-            <p><!-- TODO: Write introduction --></p>
+            <p>Ontology engineering remains a cornerstone of the Semantic Web, yet the tools available for building and exploring ontologies impose substantial prerequisites. Prot&eacute;g&eacute;&nbsp;<a class="ref" href="#ref-5">[5]</a>, the de facto standard, requires a Java runtime and local installation. Server-based platforms such as Vitro demand deployment infrastructure and system administration. Even lightweight visualisation tools like WebVOWL&nbsp;<a class="ref" href="#ref-6">[6]</a> offer read-only views without editing or reasoning capabilities. These requirements create friction in educational settings, collaborative workshops, and rapid prototyping scenarios where participants may lack the ability or permission to install software.</p>
+            <p>We address this gap with <em>Ontosphere</em>, a semantic web workbench that runs entirely in the browser. A user opens a URL and immediately has access to a full-featured ontology editor with visual graph authoring, OWL&nbsp;2&nbsp;DL reasoning, SHACL validation, and AI-agent integration &mdash; with no installation, no server, and no account creation. All computation, including description-logic inference, executes client-side via Web Workers and WebAssembly.</p>
+            <p>The contributions of this work are threefold:</p>
+            <ol>
+              <li><strong>In-browser OWL&nbsp;2&nbsp;DL reasoning.</strong> We compile the Konclude tableau reasoner&nbsp;<a class="ref" href="#ref-1">[1]</a> to WebAssembly and execute it in a SharedArrayBuffer-backed Web Worker, providing full SROIQ(D) expressivity within the browser &mdash; a capability not previously available in any browser-based ontology tool.</li>
+              <li><strong>A 31-tool MCP surface for AI integration.</strong> Ontosphere exposes a comprehensive Model Context Protocol&nbsp;<a class="ref" href="#ref-4">[4]</a> server that allows any MCP-compatible AI agent to build, query, reason over, and export knowledge graphs programmatically.</li>
+              <li><strong>Zero-install architecture.</strong> The entire system &mdash; triple store, reasoner, layout engines, graph editor, and MCP server &mdash; is packaged as a static single-page application served from a CDN, requiring only a modern browser with SharedArrayBuffer support.</li>
+            </ol>
           </div>
         </section>
 
@@ -304,7 +311,13 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
         <section id="system-overview" rel="schema:hasPart" resource="#system-overview">
           <h2 property="schema:name">System Overview</h2>
           <div datatype="rdf:HTML" property="schema:description">
-            <p><!-- TODO: Write system overview --></p>
+            <p>Ontosphere is implemented as a Vite-bundled React single-page application (v1.4.1) in which all data processing occurs client-side. The architecture comprises six principal components, each running in the browser without server dependencies.</p>
+            <p><strong>RDF Triple Store.</strong> An in-memory quad store powered by N3.js&nbsp;<a class="ref" href="#ref-3">[3]</a> serves as the single source of truth. The store manages three named graphs: <code>urn:vg:data</code> for asserted triples, <code>urn:vg:inferred</code> for reasoner-derived triples, and <code>urn:vg:shapes</code> for SHACL constraints. The store supports loading from Turtle, JSON-LD, RDF/XML, N-Triples, and N3 serialisations, as well as from SPARQL endpoints and Apache Fuseki datasets. A Comunica-based SPARQL engine provides SELECT, CONSTRUCT, and UPDATE query capabilities over the store.</p>
+            <p><strong>Visual Graph Editor.</strong> The Reactodia&nbsp;<a class="ref" href="#ref-2">[2]</a> canvas provides an interactive workspace with pan, zoom, minimap navigation, and entity-group support. Ontosphere extends Reactodia with an always-on authoring mode: users add nodes via search, draw edges by dragging a halo handle between nodes, and edit annotation properties inline. The canvas maintains two views &mdash; TBox (classes and properties) and ABox (individuals) &mdash; each with independent fold state.</p>
+            <p><strong>OWL&nbsp;2&nbsp;DL Reasoner.</strong> The Konclude reasoner&nbsp;<a class="ref" href="#ref-1">[1]</a>, a complete tableau reasoner for the description logic SROIQ(D), is compiled to WebAssembly and executed in a dedicated Web Worker with SharedArrayBuffer-backed pthreads. Reasoning completes in 250&thinsp;ms&ndash;2.5&thinsp;s for typical benchmark ontologies (LUBM, GALEN, Pizza). Inferred triples are visually distinguished with amber dashed edges and italic type annotations. Automatic OWL&nbsp;DL consistency checking runs alongside inference, reporting per-entity clash details when contradictions are detected.</p>
+            <p><strong>Layout Engines.</strong> Multiple graph layout algorithms &mdash; Dagre&nbsp;<a class="ref" href="#ref-8">[8]</a> (horizontal/vertical) and ELK&nbsp;<a class="ref" href="#ref-8">[8]</a> (layered, force, stress, radial) &mdash; run as Web Workers to maintain UI responsiveness. Spacing is adjustable and re-layout triggers automatically on graph changes when auto-layout is enabled.</p>
+            <p><strong>Hierarchical Clustering.</strong> A three-level fold hierarchy manages visual complexity for large graphs. Level&nbsp;L1 controls per-node annotation property visibility. Level&nbsp;L2 collapses subclass chains and OWL collection axioms into representative group nodes. Level&nbsp;L3 applies community-detection algorithms &mdash; Louvain&nbsp;<a class="ref" href="#ref-10">[10]</a>, Label Propagation, or K-Means &mdash; and activates automatically above a configurable node threshold.</p>
+            <p><strong>MCP Server and AI Relay Bridge.</strong> Ontosphere registers 31 tools with the browser&rsquo;s <code>navigator.modelContext</code> API, organised into seven categories: graph management, node operations, link operations, layout and navigation, reasoning, namespace management, and SHACL validation. For AI chat interfaces that lack native MCP support, the AI Relay Bridge provides a bookmarklet-based integration: a browser-side script watches the AI&rsquo;s output for JSON-RPC&nbsp;2.0 tool calls, executes them in Ontosphere via a BroadcastChannel, and injects results back into the chat input &mdash; requiring no server, extension, or API keys.</p>
           </div>
         </section>
 
@@ -312,7 +325,32 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
         <section id="key-features" rel="schema:hasPart" resource="#key-features">
           <h2 property="schema:name">Key Features and Novel Contributions</h2>
           <div datatype="rdf:HTML" property="schema:description">
-            <p><!-- TODO: Write key features and novel contributions --></p>
+
+            <section>
+              <h3>In-Browser OWL 2 DL Reasoning</h3>
+              <p>Existing browser-based ontology tools are limited to lightweight reasoning profiles. WebVOWL&nbsp;<a class="ref" href="#ref-6">[6]</a> provides no reasoning at all. OWL&thinsp;2&thinsp;EL reasoners have been demonstrated in JavaScript, but the full OWL&nbsp;2&nbsp;DL profile &mdash; encompassing SROIQ(D) with nominals, number restrictions, role chains, and full Boolean class constructors &mdash; has not previously been available in the browser. Ontosphere achieves this by packaging the Konclude reasoner&nbsp;<a class="ref" href="#ref-1">[1]</a> as a WebAssembly binary with pthread support via SharedArrayBuffer. The reasoner runs in a dedicated Web Worker, preserving UI responsiveness during classification. This approach supports all OWL&nbsp;2&nbsp;DL constructs including <code>owl:someValuesFrom</code>, <code>owl:allValuesFrom</code>, <code>owl:hasValue</code>, <code>owl:intersectionOf</code>, <code>owl:unionOf</code>, <code>owl:complementOf</code>, <code>owl:propertyChainAxiom</code>, and cardinality restrictions. The bundled reasoning demo exercises 13 distinct OWL&nbsp;2&nbsp;DL construct patterns on a small employee ontology.</p>
+            </section>
+
+            <section>
+              <h3>MCP Tool Surface for AI Agents</h3>
+              <p>Ontosphere exposes 31 tools via the Model Context Protocol&nbsp;<a class="ref" href="#ref-4">[4]</a>, organised into seven categories: (1)&nbsp;graph management &mdash; loading RDF from URLs or inline Turtle, querying via SPARQL, and exporting in multiple serialisations; (2)&nbsp;node operations &mdash; creating, removing, expanding, filtering, inspecting, and updating entities; (3)&nbsp;link operations &mdash; asserting and removing triples, listing edges; (4)&nbsp;layout and navigation &mdash; applying layout algorithms, panning to nodes, fitting the viewport, switching TBox/ABox views, neighbourhood exploration, and path finding; (5)&nbsp;reasoning &mdash; triggering OWL&nbsp;2&nbsp;DL inference and clearing inferred triples; (6)&nbsp;namespace management &mdash; registering, removing, and listing IRI prefixes; and (7)&nbsp;SHACL validation &mdash; loading shapes and validating the data graph. This tool surface enables AI agents to perform complete ontology engineering workflows: from loading an upper ontology, through authoring classes and individuals, to running reasoning and exporting the result &mdash; all through natural-language interaction.</p>
+            </section>
+
+            <section>
+              <h3>AI Relay Bridge</h3>
+              <p>While the MCP server supports programmatic access via <code>navigator.modelContext</code> and headless browser automation (e.g., Playwright), many users interact with AI through web-based chat interfaces such as ChatGPT, Claude.ai, or Gemini. The AI Relay Bridge addresses this by using a bookmarklet that injects a DOM-level relay script into the AI chat tab. The script monitors the AI&rsquo;s output for backtick-wrapped JSON-RPC&nbsp;2.0 tool calls, routes them to Ontosphere via a BroadcastChannel popup, and injects the JSON-RPC response back into the chat input field. This mechanism requires no server infrastructure, no browser extension, and no API keys &mdash; only a bookmarklet click.</p>
+            </section>
+
+            <section>
+              <h3>SHACL Validation</h3>
+              <p>Ontosphere supports SHACL&nbsp;<a class="ref" href="#ref-7">[7]</a> constraint validation alongside OWL&nbsp;2&nbsp;DL reasoning, addressing two complementary quality assurance needs: logical consistency (via Konclude) and data-shape conformance (via rdf-validate-shacl). Shapes can be loaded as inline Turtle through the <code>loadShacl</code> MCP tool, and validation results include structured violation reports with focus nodes, constraint paths, and human-readable messages.</p>
+            </section>
+
+            <section>
+              <h3>Three-Level Hierarchical Clustering</h3>
+              <p>To manage the visual complexity of large ontologies, Ontosphere implements a three-level fold hierarchy. L1&nbsp;controls per-node annotation property visibility. L2&nbsp;collapses subclass chains and OWL collection axioms (<code>owl:intersectionOf</code>, <code>owl:unionOf</code>) into representative group nodes. L3&nbsp;applies community-detection clustering using Louvain&nbsp;<a class="ref" href="#ref-10">[10]</a>, Label Propagation, or K-Means, and activates automatically when the node count exceeds a configurable threshold. Each TBox and ABox view maintains independent fold state, allowing users to work at different levels of abstraction simultaneously.</p>
+            </section>
+
           </div>
         </section>
 
@@ -320,7 +358,15 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
         <section id="demo-scenario" rel="schema:hasPart" resource="#demo-scenario">
           <h2 property="schema:name">Demo Scenario</h2>
           <div datatype="rdf:HTML" property="schema:description">
-            <p><!-- TODO: Write demo scenario --></p>
+            <p>The live demonstration follows a three-minute walkthrough designed to showcase Ontosphere&rsquo;s core capabilities through a continuous narrative rather than a feature checklist. The demo is available at <a href="https://thhanke.github.io/ontosphere/">https://thhanke.github.io/ontosphere/</a>.</p>
+            <p><strong>Zero-install entry</strong> (0:00&ndash;0:25). The presenter opens the Ontosphere URL in a standard browser. No software installation, login, or configuration is required. An OWL&nbsp;2&nbsp;DL ontology (the bundled reasoning demo with 13&nbsp;classes, 11&nbsp;properties, and 8&nbsp;individuals) loads automatically via URL parameter.</p>
+            <p><strong>Navigation and exploration</strong> (0:25&ndash;0:40). The presenter toggles between TBox (class/property) and ABox (individual) views, uses the search box to locate entities by label, and demonstrates zoom, pan, and minimap navigation.</p>
+            <p><strong>Visual authoring</strong> (0:40&ndash;1:10). A new <code>owl:Class</code> (<code>ex:Intern</code>) is created via search, connected to the existing <code>ex:Employee</code> class by dragging the halo link handle to establish an <code>rdfs:subClassOf</code> edge, and annotated with an <code>rdfs:comment</code> through the inline property editor. The undo/redo capability is demonstrated.</p>
+            <p><strong>Clustering and fold levels</strong> (1:10&ndash;1:30). The L2 structural fold is toggled to show expansion and re-collapse of subclass chains. Louvain community-detection clustering (L3) groups nodes into colour-coded communities, illustrating how the system manages visual complexity on larger ontologies.</p>
+            <p><strong>OWL&nbsp;2&nbsp;DL reasoning</strong> (1:30&ndash;2:00). The presenter triggers Konclude reasoning. Inferred triples appear as amber dashed edges and italic type annotations. The reasoning report is opened to inspect derived triples, including domain-based type inference (<code>ex:Dave</code> inferred as <code>ex:Manager</code>) and existential restrictions (<code>ex:Alice</code> inferred as <code>ex:ProjectContributor</code>).</p>
+            <p><strong>SHACL validation</strong> (2:00&ndash;2:15). SHACL shapes are loaded via an MCP tool call, and the data graph is validated. Constraint violations are reported with focus-node and path details.</p>
+            <p><strong>AI Relay Bridge</strong> (2:15&ndash;2:45). The bookmarklet is activated on an AI chat tab. The AI sends a JSON-RPC tool call via the relay, creating a new node in Ontosphere. The round-trip &mdash; from AI output to Ontosphere execution to result injection &mdash; completes without any server intermediary.</p>
+            <p><strong>Export</strong> (2:45&ndash;3:00). The graph is exported as Turtle. The namespace legend demonstrates live URI renaming with propagation across all stored triples.</p>
           </div>
         </section>
 
@@ -328,7 +374,8 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
         <section id="related-work" rel="schema:hasPart" resource="#related-work">
           <h2 property="schema:name">Related Work</h2>
           <div datatype="rdf:HTML" property="schema:description">
-            <p><!-- TODO: Write related work --></p>
+            <p>Prot&eacute;g&eacute;&nbsp;<a class="ref" href="#ref-5">[5]</a> is the most widely used ontology editor, offering comprehensive OWL&nbsp;2 editing and reasoning through desktop plugins (HermiT, Pellet). However, it requires Java installation and cannot run in a browser. WebProt&eacute;g&eacute; provides a web interface but depends on a server backend and does not support client-side reasoning. WebVOWL&nbsp;<a class="ref" href="#ref-6">[6]</a> visualises VOWL diagrams in the browser but is read-only: it supports neither editing nor reasoning. OWLGrEd offers visual OWL editing with UML-style notation but is a desktop application. LD-R provides a linked-data browser with faceted navigation but does not include OWL reasoning. Vitro is a server-based linked-data application that requires deployment infrastructure.</p>
+            <p>None of these tools combine zero-install browser execution, OWL&nbsp;2&nbsp;DL reasoning, visual graph editing, SHACL validation, and AI-agent integration in a single application. Ontosphere is, to our knowledge, the first system to offer full SROIQ(D) reasoning within the browser, and the first ontology workbench to expose its functionality through MCP for AI integration.</p>
           </div>
         </section>
 
@@ -337,7 +384,16 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
           <h2>References</h2>
           <div>
             <ol>
-              <li id="ref-1" property="schema:citation"><!-- TODO: Add references --></li>
+              <li id="ref-1" property="schema:citation">Steigmiller, A., Liebig, T., Glimm, B.: Konclude: System description. <em>J. Web Semantics</em> 27&ndash;28, 78&ndash;85 (2014). <a href="https://doi.org/10.1016/j.websem.2014.06.003">https://doi.org/10.1016/j.websem.2014.06.003</a></li>
+              <li id="ref-2" property="schema:citation">Mouromtsev, D., Pavlov, D., Emelyanov, Y., Morozov, A., Razdyakonov, D., Galkin, M.: The Simple Web-based Tool for Visualization and Sharing of Semantic Data and Ontologies. In: ISWC 2015 Posters &amp; Demos (2015). See also: <a href="https://github.com/reactodia/reactodia-workspace">https://github.com/reactodia/reactodia-workspace</a></li>
+              <li id="ref-3" property="schema:citation">Verborgh, R., Taelman, R.: N3.js: An open-source JavaScript library for RDF. <a href="https://github.com/rdfjs/N3.js">https://github.com/rdfjs/N3.js</a></li>
+              <li id="ref-4" property="schema:citation">Anthropic: Model Context Protocol Specification. <a href="https://modelcontextprotocol.io">https://modelcontextprotocol.io</a> (2024).</li>
+              <li id="ref-5" property="schema:citation">Musen, M.A.: The Prot&eacute;g&eacute; project: A look back and a look forward. <em>AI Matters</em> 1(4), 4&ndash;12 (2015). <a href="https://doi.org/10.1145/2757001.2757003">https://doi.org/10.1145/2757001.2757003</a></li>
+              <li id="ref-6" property="schema:citation">Lohmann, S., Link, V., Marber, E., Negru, S.: WebVOWL: Web-based Visualization of Ontologies. In: EKAW 2014 Satellite Events, pp.&nbsp;154&ndash;158. Springer (2015). <a href="https://doi.org/10.1007/978-3-319-17966-7_21">https://doi.org/10.1007/978-3-319-17966-7_21</a></li>
+              <li id="ref-7" property="schema:citation">Knublauch, H., Kontokostas, D.: Shapes Constraint Language (SHACL). W3C Recommendation (2017). <a href="https://www.w3.org/TR/shacl/">https://www.w3.org/TR/shacl/</a></li>
+              <li id="ref-8" property="schema:citation">Schulze, C.D., Spoenemann, M., von Hanxleden, R.: Drawing Layered Graphs with Port Constraints. <em>J. Visual Languages and Computing</em> 25(2), 89&ndash;106 (2014). <a href="https://doi.org/10.1016/j.jvlc.2013.11.005">https://doi.org/10.1016/j.jvlc.2013.11.005</a></li>
+              <li id="ref-9" property="schema:citation">Grau, B.C., Horrocks, I., Motik, B., Parsia, B., Patel-Schneider, P., Sattler, U.: OWL 2: The Next Step for OWL. <em>J. Web Semantics</em> 6(4), 309&ndash;322 (2008). <a href="https://doi.org/10.1016/j.websem.2008.05.001">https://doi.org/10.1016/j.websem.2008.05.001</a></li>
+              <li id="ref-10" property="schema:citation">Blondel, V.D., Guillaume, J.-L., Lambiotte, R., Lefebvre, E.: Fast unfolding of communities in large networks. <em>J. Statistical Mechanics: Theory and Experiment</em> 2008(10), P10008 (2008). <a href="https://doi.org/10.1088/1742-5468/2008/10/P10008">https://doi.org/10.1088/1742-5468/2008/10/P10008</a></li>
             </ol>
           </div>
         </section>
