@@ -1187,17 +1187,32 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       };
     }
 
-    const violations: ShaclViolation[] = (report.results ?? []).map((r: any) => ({
-      focusNode: r.focusNode?.value ?? null,
-      path: r.path?.value ?? null,
-      severity: r.severity?.value?.replace("http://www.w3.org/ns/shacl#", "sh:") ?? null,
-      message: Array.isArray(r.message)
-        ? r.message.map((m: any) => m.value).join("; ")
-        : (r.message?.value ?? null),
-      sourceShape: r.sourceShape?.value ?? null,
-      constraint: r.sourceConstraintComponent?.value ?? null,
-      source: "shacl" as const,
-    }));
+    // Build reverse map: property shape (blank node) → parent NodeShape IRI
+    const SH_PROPERTY = "http://www.w3.org/ns/shacl#property";
+    const propShapeToNodeShape = new Map<string, string>();
+    for (const q of [...shapesDs] as any[]) {
+      if (q.predicate.value === SH_PROPERTY && q.subject.termType === "NamedNode") {
+        propShapeToNodeShape.set(q.object.value, q.subject.value);
+      }
+    }
+
+    const violations: ShaclViolation[] = (report.results ?? []).map((r: any) => {
+      let shapeVal = r.sourceShape?.value ?? null;
+      if (shapeVal && propShapeToNodeShape.has(shapeVal)) {
+        shapeVal = propShapeToNodeShape.get(shapeVal)!;
+      }
+      return {
+        focusNode: r.focusNode?.value ?? null,
+        path: r.path?.value ?? null,
+        severity: r.severity?.value?.replace("http://www.w3.org/ns/shacl#", "sh:") ?? null,
+        message: Array.isArray(r.message)
+          ? r.message.map((m: any) => m.value).join("; ")
+          : (r.message?.value ?? null),
+        sourceShape: shapeVal,
+        constraint: r.sourceConstraintComponent?.value ?? null,
+        source: "shacl" as const,
+      };
+    });
 
     return { conforms: report.conforms, violations, shapeCount };
   }

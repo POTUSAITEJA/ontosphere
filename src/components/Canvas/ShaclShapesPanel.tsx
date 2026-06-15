@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { rdfManager } from '../../utils/rdfManager';
 import { Badge } from '../ui/badge';
-import { Shield, ChevronDown, ChevronRight, AlertTriangle, XCircle, ExternalLink } from 'lucide-react';
+import { Shield, ChevronDown, ChevronRight, AlertTriangle, XCircle } from 'lucide-react';
 import { useShaclResultStore, makeShaclMessageKey } from '../../stores/shaclResultStore';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import { cn } from '../../lib/utils';
@@ -156,12 +156,12 @@ export function ShaclShapesPanel() {
     ...shaclWarnings.map(w => ({ ...w, type: 'warning' as const })),
   ];
 
-  const getShapeMessages = (shapeIri: string) =>
-    allMessages.filter(m => m.sourceShape === shapeIri);
-
-  const ungroupedMessages = allMessages.filter(
-    m => !m.sourceShape || !groups.some(g => g.shapes.some(s => s.iri === m.sourceShape))
-  );
+  const getShapeMessages = (shapeIri: string, constraintMessages: (string | null)[]) => {
+    const byShape = allMessages.filter(m => m.sourceShape === shapeIri);
+    if (byShape.length > 0) return byShape;
+    const msgSet = new Set(constraintMessages.filter(Boolean));
+    return allMessages.filter(m => msgSet.has(m.message));
+  };
 
   if (shapeCount === 0 && !hasResults) {
     return (
@@ -179,28 +179,28 @@ export function ShaclShapesPanel() {
     const key = makeShaclMessageKey(m.type, m.nodeId, m.message);
     const isActive = activeMessageKey === key;
     return (
-      <div
+      <button
         key={idx}
         ref={isActive ? activeRef : undefined}
         className={cn(
-          'flex items-start gap-1.5 py-1 px-1.5 rounded text-xs transition-colors',
+          'w-full flex items-start gap-1.5 py-1.5 px-1.5 rounded text-xs text-left transition-colors cursor-pointer',
+          'hover:bg-accent/50',
           isActive && 'bg-accent ring-1 ring-ring',
         )}
+        onClick={() => m.nodeId && navigateToNode(m.nodeId)}
+        disabled={!m.nodeId}
+        title={m.nodeId ? `Navigate to ${shortenIri(m.nodeId)}` : undefined}
       >
         {severityIcon(m.type)}
         <div className="flex-1 min-w-0">
           <span className="break-words text-muted-foreground">{m.message}</span>
           {m.nodeId && (
-            <button
-              className="flex items-center gap-0.5 text-primary hover:underline mt-0.5 cursor-pointer text-[11px]"
-              onClick={() => navigateToNode(m.nodeId!)}
-            >
-              <ExternalLink className="w-2.5 h-2.5" />
-              {shortenIri(m.nodeId)}
-            </button>
+            <span className="block text-[11px] text-primary mt-0.5">
+              → {shortenIri(m.nodeId)}
+            </span>
           )}
         </div>
-      </div>
+      </button>
     );
   };
 
@@ -236,7 +236,7 @@ export function ShaclShapesPanel() {
           {expanded.has(group.source) && (
             <div className="border-t divide-y">
               {group.shapes.map(shape => {
-                const shapeMessages = getShapeMessages(shape.iri);
+                const shapeMessages = getShapeMessages(shape.iri, shape.constraints.map(c => c.message));
                 return (
                   <div key={shape.iri} className="px-2 py-1.5 text-xs space-y-1">
                     <div className="flex items-center gap-1.5">
@@ -281,29 +281,6 @@ export function ShaclShapesPanel() {
         </div>
       ))}
 
-      {ungroupedMessages.length > 0 && (
-        <div className="border rounded-md overflow-hidden">
-          <button
-            className="w-full flex items-center gap-1.5 px-2 py-1.5 text-xs hover:bg-accent/50 transition-colors"
-            onClick={() => toggleGroup('__ungrouped')}
-          >
-            {expanded.has('__ungrouped') ? (
-              <ChevronDown className="w-3 h-3 shrink-0" />
-            ) : (
-              <ChevronRight className="w-3 h-3 shrink-0" />
-            )}
-            <span className="font-medium">Other Findings</span>
-            <Badge variant="secondary" className="ml-auto text-[10px] h-4 px-1">
-              {ungroupedMessages.length}
-            </Badge>
-          </button>
-          {expanded.has('__ungrouped') && (
-            <div className="border-t px-2 py-1.5 space-y-0.5">
-              {ungroupedMessages.map((m, i) => renderMessage(m, i))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
