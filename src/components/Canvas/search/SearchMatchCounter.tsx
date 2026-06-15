@@ -221,10 +221,15 @@ function SearchMatchCounterInner() {
         zoomToElement(view.findAnyCanvas(), canvasEl);
       } else {
         const targetView = iriViewMap.get(iri);
-        if (targetView && targetView !== canvasState.viewMode) {
+        const switchTo = targetView && targetView !== canvasState.viewMode
+          ? targetView
+          : !targetView && canvasState.viewMode === 'tbox' ? 'abox'
+          : !targetView && canvasState.viewMode === 'abox' ? 'tbox'
+          : undefined;
+        if (switchTo) {
           pendingIriRef.current = iri;
           canvasActions.setCanvasReady(false);
-          canvasActions.setViewMode(targetView);
+          canvasActions.setViewMode(switchTo);
         }
       }
     });

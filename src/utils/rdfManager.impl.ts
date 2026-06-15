@@ -3,6 +3,7 @@ import type {
   ReasoningInference,
   ReasoningResult,
   ReasoningWarning,
+  ShaclViolation,
 } from "./reasoningTypes";
 import { createRdfManagerWorkerClient, RdfManagerWorkerClient } from "./rdfManager.workerClient";
 import type {
@@ -721,6 +722,16 @@ export class RDFManagerImpl {
         addedCount: typeof safe.addedCount === "number" ? safe.addedCount : undefined,
         ruleQuadCount: typeof safe.ruleQuadCount === "number" ? safe.ruleQuadCount : undefined,
       },
+    };
+  }
+
+  async runShaclValidation(): Promise<{ conforms: boolean; violations: ShaclViolation[]; shapeCount: number }> {
+    const response = await this.worker.call("runShaclValidation", undefined);
+    const safe = isPlainObject(response) ? response : {};
+    return {
+      conforms: typeof safe.conforms === "boolean" ? safe.conforms : true,
+      violations: Array.isArray(safe.violations) ? safe.violations : [],
+      shapeCount: typeof safe.shapeCount === "number" ? safe.shapeCount : 0,
     };
   }
 

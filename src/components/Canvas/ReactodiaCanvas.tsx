@@ -27,6 +27,8 @@ import { PrefixContext } from '@/providers/PrefixContext';
 import { generateEntityIri } from '@/utils/iriUtils';
 import ResizableNamespaceLegend from './ResizableNamespaceLegend';
 import { useAppConfigStore } from '@/stores/appConfigStore';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { useShaclResultStore } from '@/stores/shaclResultStore';
 import { getLayoutFunction } from './layout/getLayoutFunction';
 import { runSilentLayout, type SilentLayoutEdge } from './layout/silentLayout';
 import type { StructuralGroupMap } from './core/structuralGroups';
@@ -1029,6 +1031,12 @@ export default function ReactodiaCanvas() {
           });
         }
       }
+
+      // Re-trigger validation badges for elements now visible in this view mode
+      const affected = validationProvider.getAffectedIris();
+      if (affected.size > 0) {
+        ctx.editor.revalidateEntities(affected as ReadonlySet<Reactodia.ElementIri>);
+      }
     });
   }, [canvasState.viewMode]);
 
@@ -1042,6 +1050,7 @@ export default function ReactodiaCanvas() {
     let startupUrl = '';
     let startupApiKey = '';
     let startupApiKeyHeader = '';
+    let shaclShapesParam = '';
     try {
       const u = new URL(String(window.location.href));
       startupUrl =
@@ -1051,6 +1060,7 @@ export default function ReactodiaCanvas() {
         '';
       startupApiKey = u.searchParams.get('apiKey') || '';
       startupApiKeyHeader = u.searchParams.get('apiKeyHeader') || '';
+      shaclShapesParam = u.searchParams.get('shaclShapes') || '';
       // ?loadImports=false disables owl:imports auto-loading for this session only.
       const loadImportsParam = u.searchParams.get('loadImports');
       loadImportsEnabledRef.current = loadImportsParam !== 'false';
@@ -1155,6 +1165,23 @@ export default function ReactodiaCanvas() {
           }
         }
         actions.setLoading(false, 0, '');
+      }
+
+      // Load SHACL shapes: ?shaclShapes= param takes priority, otherwise use settings
+      const shaclUrl = shaclShapesParam || useSettingsStore.getState().settings.shaclShapesUrl;
+      if (shaclUrl) {
+        try {
+          const { loadShaclShapes } = await import('../../utils/shaclShapeLoader');
+          const manifest = await loadShaclShapes(shaclUrl);
+          if (manifest.loaded.length > 0) {
+            console.log('[ReactodiaCanvas] SHACL shapes loaded:', manifest.loaded.map(s => s.name));
+          }
+          for (const err of manifest.errors) {
+            console.warn('[ReactodiaCanvas] SHACL shape load error:', err.url, err.error);
+          }
+        } catch (err) {
+          console.warn('[ReactodiaCanvas] SHACL shapes load failed', err);
+        }
       }
     })();
   }, [loadKnowledgeGraph, loadAdditionalOntologies, actions]);
@@ -1333,6 +1360,7 @@ export default function ReactodiaCanvas() {
     setCurrentReasoning(null);
     setIsInconsistentDetected(false);
     validationProvider.clearErrors();
+    useShaclResultStore.getState().clearShaclResults();
     const ctx = contextRef.current;
     if (ctx) {
       const visibleIris = new Set(
@@ -1392,7 +1420,7 @@ export default function ReactodiaCanvas() {
       setCurrentReasoning(result);
       setReasoningHistory(h => [...h, result]);
       await handleApplyInferred();
-      // Highlight nodes with reasoning errors via the validation provider.
+      // Highlight nodes with reasoning errors/warnings via the validation provider.
       const errorMap = new Map<string, string[]>();
       for (const err of result.errors ?? []) {
         if (err.nodeId) {
@@ -1401,11 +1429,26 @@ export default function ReactodiaCanvas() {
           errorMap.set(err.nodeId, list);
         }
       }
-      validationProvider.setErrors(errorMap);
-      const ctx = contextRef.current;
-      if (ctx && errorMap.size > 0) {
-        ctx.editor.revalidateEntities(new Set(errorMap.keys()) as ReadonlySet<Reactodia.ElementIri>);
+      const warningMap = new Map<string, string[]>();
+      for (const warn of result.warnings ?? []) {
+        if (warn.nodeId) {
+          const list = warningMap.get(warn.nodeId) ?? [];
+          list.push(warn.message);
+          warningMap.set(warn.nodeId, list);
+        }
       }
+      validationProvider.setErrors(errorMap);
+      validationProvider.setWarnings(warningMap);
+      const affectedIris = new Set([...errorMap.keys(), ...warningMap.keys()]);
+      const ctx = contextRef.current;
+      if (ctx && affectedIris.size > 0) {
+        ctx.editor.revalidateEntities(affectedIris as ReadonlySet<Reactodia.ElementIri>);
+      }
+      const isShaclRule = (rule: string) => rule.startsWith('shacl:') || rule === 'sh:ValidationResult';
+      useShaclResultStore.getState().setShaclResults(
+        result.errors.filter(e => isShaclRule(e.rule)),
+        result.warnings.filter(w => isShaclRule(w.rule)),
+      );
       return result;
     } finally {
       setIsReasoning(false);
@@ -1785,6 +1828,13 @@ export default function ReactodiaCanvas() {
             </Reactodia.DefaultWorkspace>
           </PrefixContext.Provider>
         </Reactodia.Workspace>
+
+        <ReasoningReportModal
+          open={canvasState.showReasoningReport}
+          onOpenChange={actions.toggleReasoningReport}
+          currentReasoning={currentReasoning}
+          reasoningHistory={reasoningHistory}
+        />
       </div>
 
       {/* UI overlays — rendered OUTSIDE Workspace to avoid Radix UI + flushSync infinite loop */}
@@ -1872,12 +1922,6 @@ export default function ReactodiaCanvas() {
         </div>
       )}
 
-      <ReasoningReportModal
-        open={canvasState.showReasoningReport}
-        onOpenChange={actions.toggleReasoningReport}
-        currentReasoning={currentReasoning}
-        reasoningHistory={reasoningHistory}
-      />
     </div>
   );
 }

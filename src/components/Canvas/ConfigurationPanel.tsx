@@ -306,10 +306,11 @@ export const ConfigurationPanel = ({
         </DialogHeader>
 
         <Tabs defaultValue="ui" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="ui">Interface</TabsTrigger>
             <TabsTrigger value="performance">Performance</TabsTrigger>
             <TabsTrigger value="reasoning">Reasoning</TabsTrigger>
+            <TabsTrigger value="shacl">SHACL</TabsTrigger>
             <TabsTrigger value="workflows">Workflows</TabsTrigger>
             <TabsTrigger value="advanced">Advanced</TabsTrigger>
           </TabsList>
@@ -591,6 +592,115 @@ export const ConfigurationPanel = ({
                       }
                     }}
                   />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* SHACL Settings */}
+          <TabsContent value="shacl" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">SHACL Shapes</CardTitle>
+                <CardDescription>Configure SHACL shape sources for constraint validation</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Shapes URL</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Direct .ttl URL, GitHub folder URL, or comma-separated list. Clear to disable auto-loading.
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      value={appSettings.shaclShapesUrl}
+                      onChange={e => updateSettings({ shaclShapesUrl: e.target.value })}
+                      placeholder="https://raw.githubusercontent.com/..."
+                      className="flex-1 text-xs"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        try {
+                          const url = appSettings.shaclShapesUrl;
+                          if (!url.trim()) {
+                            toast.info('No SHACL shapes URL configured');
+                            return;
+                          }
+                          toast.loading('Loading SHACL shapes...', { id: 'shacl-reload' });
+                          const { loadShaclShapes } = await import('../../utils/shaclShapeLoader');
+                          const manifest = await loadShaclShapes(url);
+                          if (manifest.loaded.length > 0) {
+                            toast.success(`Loaded ${manifest.loaded.length} shape file(s)`, { id: 'shacl-reload' });
+                          } else if (manifest.errors.length > 0) {
+                            toast.error('Failed to load shapes', { id: 'shacl-reload', description: manifest.errors[0].error });
+                          } else {
+                            toast.info('No shapes found at URL', { id: 'shacl-reload' });
+                          }
+                        } catch (err) {
+                          toast.error('Shape loading failed', { id: 'shacl-reload', description: String(err) });
+                        }
+                      }}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Bundled Presets</Label>
+                  <div className="space-y-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full justify-start text-xs"
+                      onClick={() => {
+                        const base = window.location.origin + (import.meta.env.BASE_URL || '/');
+                        const url = `${base}shacl-shapes/ontology-quality.shacl.ttl`;
+                        updateSettings({ shaclShapesUrl: url });
+                        toast.success('Set to ontology quality shapes');
+                      }}
+                    >
+                      Ontology Quality — labels, comments, domain/range
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full justify-start text-xs"
+                      onClick={() => {
+                        const base = window.location.origin + (import.meta.env.BASE_URL || '/');
+                        const url = `${base}shacl-shapes/skos-quality.shacl.ttl`;
+                        updateSettings({ shaclShapesUrl: url });
+                        toast.success('Set to SKOS quality shapes');
+                      }}
+                    >
+                      SKOS Quality — prefLabel, inScheme
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full justify-start text-xs"
+                      onClick={() => {
+                        const base = window.location.origin + (import.meta.env.BASE_URL || '/');
+                        const url = `${base}shacl-shapes/reasoning-demo.shacl.ttl`;
+                        updateSettings({ shaclShapesUrl: url });
+                        toast.success('Set to reasoning-demo shapes (errors + warnings)');
+                      }}
+                    >
+                      Reasoning Demo — violations + warnings for reasoning-demo.ttl
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full justify-start text-xs"
+                      onClick={() => {
+                        updateSettings({ shaclShapesUrl: 'https://raw.githubusercontent.com/gcpdev/xpshacl/main/data/shark_shapes.ttl' });
+                        toast.success('Set to xpSHACL shark_shapes (uses SPARQL constraints)');
+                      }}
+                    >
+                      xpSHACL shark_shapes — SPARQL-based (limited support)
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>

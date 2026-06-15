@@ -17,6 +17,7 @@ import {
   Sparkles,
   Bot,
   HelpCircle,
+  Shield,
 } from 'lucide-react';
 import {
   Accordion,
@@ -33,11 +34,13 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { WorkflowTemplateCard } from './WorkflowTemplateCard';
+import { ShaclShapesPanel } from './ShaclShapesPanel';
 import { getWorkflowTemplates, type WorkflowTemplate } from '../../utils/workflowInstantiator';
 import { useAppConfigStore } from '../../stores/appConfigStore';
 import { useRelayBridge } from '../../hooks/useRelayBridge';
 import { RelaySection } from './RelaySection';
 import { cn } from '../../lib/utils';
+import { useShaclResultStore } from '../../stores/shaclResultStore';
 import bookmarkletTemplate from 'virtual:relay-bookmarklet';
 import readmeSrc from '../../../README.md?raw';
 
@@ -84,8 +87,18 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openAccordions, setOpenAccordions] = useState<string[]>(['ai-relay']);
+  const panelOpenRequest = useShaclResultStore(s => s.panelOpenRequest);
   const workflowCatalogEnabled = useAppConfigStore((s) => s.config.workflowCatalogEnabled);
   const { connected, callLog } = useRelayBridge(true);
+
+  useEffect(() => {
+    if (panelOpenRequest > 0) {
+      setOpenAccordions(prev =>
+        prev.includes('shacl-shapes') ? prev : [...prev, 'shacl-shapes']
+      );
+      if (!isExpanded) onToggle();
+    }
+  }, [panelOpenRequest, isExpanded, onToggle]);
 
   useEffect(() => {
     if (isExpanded && workflowCatalogEnabled) {
@@ -233,6 +246,20 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+
+            <TooltipPrimitive.Root>
+              <TooltipPrimitive.Trigger asChild>
+                <button className="rail-btn" onClick={() => { setOpenAccordions(['shacl-shapes']); onToggle(); }} aria-label="SHACL Shapes">
+                  <Shield className="h-[18px] w-[18px]" />
+                  <span>SHACL</span>
+                </button>
+              </TooltipPrimitive.Trigger>
+              <TooltipPrimitive.Portal>
+                <TooltipPrimitive.Content className="z-[99999] rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md" sideOffset={5} side="right">
+                  SHACL Shapes<TooltipPrimitive.Arrow className="fill-popover" />
+                </TooltipPrimitive.Content>
+              </TooltipPrimitive.Portal>
+            </TooltipPrimitive.Root>
 
             <TooltipPrimitive.Root>
                 <TooltipPrimitive.Trigger asChild>
@@ -469,6 +496,18 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                   </AccordionContent>
                 </AccordionItem>
               )}
+
+              <AccordionItem value="shacl-shapes" className="border-none">
+                <AccordionTrigger className="px-3 py-2 hover:bg-accent/5">
+                  <div className="flex items-center gap-2 text-foreground">
+                    <Shield className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">SHACL Shapes</span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="pb-2">
+                  <ShaclShapesPanel />
+                </AccordionContent>
+              </AccordionItem>
 
               <AccordionItem value="ai-relay" className="border-none">
                 <AccordionTrigger className="px-3 py-2 hover:bg-accent/5">

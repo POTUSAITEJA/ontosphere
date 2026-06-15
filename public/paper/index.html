@@ -365,6 +365,15 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
           <h2 property="schema:name">Demo Scenario</h2>
           <div datatype="rdf:HTML" property="schema:description">
             <p>The live demonstration follows a three-minute walkthrough designed to showcase Ontosphere&rsquo;s core capabilities through a continuous narrative rather than a feature checklist. The demo is available at <a href="https://thhanke.github.io/ontosphere/">https://thhanke.github.io/ontosphere/</a>.</p>
+
+            <figure id="fig-demo-video">
+              <video controls width="100%" preload="metadata" poster="media/architecture.svg">
+                <source src="https://thhanke.github.io/ontosphere/demo-videos/iswc2026-comprehensive.mp4" type="video/mp4" />
+                <p>Demo video: <a href="https://thhanke.github.io/ontosphere/demo-videos/iswc2026-comprehensive.mp4">download mp4</a></p>
+              </video>
+              <figcaption>Screencast of the live demonstration (~80&thinsp;s). The full walkthrough is described below.</figcaption>
+            </figure>
+
             <p><strong>Zero-install entry</strong> (0:00&ndash;0:25). The presenter opens the Ontosphere URL in a standard browser. No software installation, login, or configuration is required. An OWL&nbsp;2&nbsp;DL ontology (the bundled reasoning demo with 13&nbsp;classes, 11&nbsp;properties, and 8&nbsp;individuals) loads automatically via URL parameter.</p>
             <p><strong>Navigation and exploration</strong> (0:25&ndash;0:40). The presenter toggles between TBox (class/property) and ABox (individual) views, uses the search box to locate entities by label, and demonstrates zoom, pan, and minimap navigation.</p>
             <p><strong>Visual authoring</strong> (0:40&ndash;1:10). A new <code>owl:Class</code> (<code>ex:Intern</code>) is created via search, connected to the existing <code>ex:Employee</code> class by dragging the halo link handle to establish an <code>rdfs:subClassOf</code> edge, and annotated with an <code>rdfs:comment</code> through the inline property editor. The undo/redo capability is demonstrated.</p>

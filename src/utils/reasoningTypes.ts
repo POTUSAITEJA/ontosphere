@@ -4,6 +4,7 @@ export interface ReasoningError {
   message: string;
   rule: string;
   severity: "critical" | "error";
+  sourceShape?: string;
 }
 
 export interface ReasoningWarning {
@@ -12,6 +13,7 @@ export interface ReasoningWarning {
   message: string;
   rule: string;
   severity?: "critical" | "warning" | "info";
+  sourceShape?: string;
 }
 
 export interface ReasoningInference {
@@ -20,6 +22,16 @@ export interface ReasoningInference {
   predicate: string;
   object: string;
   confidence: number;
+}
+
+export interface ShaclViolation {
+  focusNode: string | null;
+  path: string | null;
+  severity: string | null;
+  message: string | null;
+  sourceShape: string | null;
+  constraint: string | null;
+  source: "shacl";
 }
 
 export interface ReasoningResult {

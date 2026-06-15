@@ -262,7 +262,7 @@ class KoncludeReasoner {
       const inferredGraphNode = N3.DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI);
       store.removeQuads(store.getQuads(null, null, null, inferredGraphNode));
 
-      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows"]);
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:shapes"]);
       const allQuads: N3.Quad[] = store.getQuads(null, null, null, null);
       const sourceQuads = allQuads.filter((q) => {
         const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
@@ -328,7 +328,7 @@ class KoncludeReasoner {
 
   checkConsistency(store: N3.Store): Promise<boolean> {
     const result = this._queue.then(async () => {
-      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred"]);
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes"]);
       const candidates: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
         const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
         return !EXCLUDED_GRAPHS.has(g);
@@ -341,7 +341,7 @@ class KoncludeReasoner {
 
   explainInconsistency(store: N3.Store, maxJustifications = 1): Promise<N3.Quad[][]> {
     const result = this._queue.then(async () => {
-      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred"]);
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes"]);
       const allBase: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
         const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
         return !EXCLUDED_GRAPHS.has(g);
@@ -1102,6 +1102,123 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     }
 
     return { warnings, errors };
+  }
+
+  interface ShaclViolation {
+    focusNode: string | null;
+    path: string | null;
+    severity: string | null;
+    message: string | null;
+    sourceShape: string | null;
+    constraint: string | null;
+    source: "shacl";
+  }
+
+  interface ShaclValidationResult {
+    conforms: boolean;
+    violations: ShaclViolation[];
+    shapeCount: number;
+  }
+
+  async function runShaclValidation(): Promise<ShaclValidationResult> {
+    const { DataFactory } = resolveN3();
+    if (!DataFactory) throw new Error("n3-datafactory-unavailable");
+    const store = getSharedStore();
+
+    const shapesGraph = DataFactory.namedNode("urn:vg:shapes");
+    const shapesQuads = store.getQuads(null, null, null, shapesGraph) || [];
+    if (shapesQuads.length === 0) {
+      return { conforms: true, violations: [], shapeCount: 0 };
+    }
+
+    const dataGraph = DataFactory.namedNode("urn:vg:data");
+    const inferredGraph = DataFactory.namedNode("urn:vg:inferred");
+    const dataQuads = [
+      ...(store.getQuads(null, null, null, dataGraph) || []),
+      ...(store.getQuads(null, null, null, inferredGraph) || []),
+    ];
+
+    const [shaclMod, sparqlMod, dataModelMod, datasetMod] = await Promise.all([
+      import("shacl-engine") as Promise<any>,
+      import("shacl-engine/sparql.js") as Promise<any>,
+      import("@rdfjs/data-model") as Promise<any>,
+      import("@rdfjs/dataset") as Promise<any>,
+    ]);
+    const { Validator } = shaclMod;
+    const { targetResolvers } = sparqlMod;
+    const factory = dataModelMod.default ?? dataModelMod;
+    const dataset = datasetMod.default?.dataset ?? datasetMod.dataset;
+
+    function convertTerm(term: any) {
+      if (term.termType === "BlankNode") return factory.blankNode(term.value);
+      if (term.termType === "Literal")
+        return factory.literal(term.value, term.language || (term.datatype ? factory.namedNode(term.datatype.value) : undefined));
+      return factory.namedNode(term.value);
+    }
+
+    const shapesDs = dataset();
+    for (const q of shapesQuads) {
+      shapesDs.add(factory.quad(convertTerm(q.subject), factory.namedNode(q.predicate.value), convertTerm(q.object)));
+    }
+
+    const dataDs = dataset();
+    for (const q of dataQuads) {
+      dataDs.add(factory.quad(convertTerm(q.subject), factory.namedNode(q.predicate.value), convertTerm(q.object)));
+    }
+
+    const SH_NODESHAPE = "http://www.w3.org/ns/shacl#NodeShape";
+
+    const shapeCount = [...shapesDs].filter(
+      (q: any) => q.predicate.value === RDF_TYPE && q.object.value === SH_NODESHAPE,
+    ).length;
+
+    const validator = new Validator(shapesDs, { factory, targetResolvers });
+    let report: any;
+    try {
+      report = await validator.validate({ dataset: dataDs });
+    } catch (valErr: any) {
+      const msg = valErr?.message ?? String(valErr);
+      return {
+        conforms: false,
+        violations: [{
+          focusNode: null, path: null, severity: "sh:Violation",
+          message: `Validation engine error: ${msg}`,
+          sourceShape: null, constraint: null, source: "shacl" as const,
+        }],
+        shapeCount,
+      };
+    }
+
+    // Build reverse map: property shape (blank node) → parent NodeShape IRI
+    const SH_PROPERTY = "http://www.w3.org/ns/shacl#property";
+    const propShapeToNodeShape = new Map<string, string>();
+    for (const q of [...shapesDs] as any[]) {
+      if (q.predicate.value === SH_PROPERTY && q.subject.termType === "NamedNode") {
+        propShapeToNodeShape.set(q.object.value, q.subject.value);
+      }
+    }
+
+    const violations: ShaclViolation[] = (report.results ?? []).map((r: any) => {
+      let shapeVal = r.shape?.ptr?.term?.value ?? null;
+      if (shapeVal && propShapeToNodeShape.has(shapeVal)) {
+        shapeVal = propShapeToNodeShape.get(shapeVal)!;
+      }
+      const pathVal = Array.isArray(r.path) ? (r.path[0]?.predicates?.[0]?.value ?? null) : (r.path?.value ?? null);
+      const msgVal = Array.isArray(r.message)
+        ? r.message.map((m: any) => m.value).join("; ")
+        : (typeof r.message === "string" ? r.message : (r.message?.value ?? null));
+      return {
+        focusNode: r.focusNode?.value ?? null,
+        path: pathVal,
+        severity: r.severity?.value?.replace("http://www.w3.org/ns/shacl#", "sh:") ?? null,
+        message: msgVal,
+        sourceShape: shapeVal,
+        constraint: r.constraintComponent?.value ?? null,
+        source: "shacl" as const,
+      };
+    });
+
+    return { conforms: report.conforms, violations, shapeCount };
   }
 
   function collectGraphCountsFromStore(store: any): Record<string, number> {
@@ -2420,6 +2537,10 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           };
           break;
         }
+        case "runShaclValidation": {
+          result = await runShaclValidation();
+          break;
+        }
         default:
           throw new Error(`Unsupported command: ${String(msg.command)}`);
       }
@@ -2643,6 +2764,31 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       }
 
       const { warnings: kWarnings, errors: kShaclErrors } = collectShaclResults(kAddedQuads);
+
+      // Run SHACL validation against urn:vg:shapes if shapes are loaded
+      try {
+        const shaclResult = await runShaclValidation();
+        if (!shaclResult.conforms) {
+          for (const v of shaclResult.violations) {
+            const severity = v.severity;
+            const entry = {
+              nodeId: v.focusNode ?? undefined,
+              message: v.message || "SHACL validation issue",
+              rule: "shacl:" + (v.constraint?.split("#").pop() ?? "constraint"),
+              severity: severity === "sh:Violation" ? "error" as const : "warning" as const,
+              sourceShape: v.sourceShape ?? undefined,
+            };
+            if (severity === "sh:Violation") {
+              kShaclErrors.push({ ...entry, severity: "error" });
+            } else {
+              kWarnings.push(entry);
+            }
+          }
+        }
+      } catch (shaclErr) {
+        debugLog("[VG_REASONING_WORKER] SHACL validation failed (non-blocking)", shaclErr);
+      }
+
       const kErrors: ReasoningError[] = [...kMipsErrors, ...kShaclErrors];
       if (!kUsedReasoner && kIsConsistent === null) {
         kWarnings.push({
@@ -3091,6 +3237,30 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     }
 
     const { warnings, errors } = collectShaclResults(effectiveAdded);
+
+    // Run SHACL validation against urn:vg:shapes if shapes are loaded
+    try {
+      const shaclResult = await runShaclValidation();
+      if (!shaclResult.conforms) {
+        for (const v of shaclResult.violations) {
+          const severity = v.severity;
+          const entry = {
+            nodeId: v.focusNode ?? undefined,
+            message: v.message || "SHACL validation issue",
+            rule: "shacl:" + (v.constraint?.split("#").pop() ?? "constraint"),
+            severity: severity === "sh:Violation" ? "error" as const : "warning" as const,
+            sourceShape: v.sourceShape ?? undefined,
+          };
+          if (severity === "sh:Violation") {
+            errors.push({ ...entry, severity: "error" });
+          } else {
+            warnings.push(entry);
+          }
+        }
+      }
+    } catch (shaclErr) {
+      debugLog("[VG_REASONING_WORKER] SHACL validation failed (non-blocking)", shaclErr);
+    }
 
     const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     const inferences: ReasoningInference[] = effectiveAdded

@@ -239,9 +239,10 @@ export const TopBar: React.FC<TopBarProps> = ({
               type="button"
               className={`reactodia-btn reactodia-btn-default glass-btn ${
                 isReasoning ? '' :
-                currentReasoning?.errors?.length ? 'glass-btn--status-error' :
-                currentReasoning?.warnings?.length ? 'glass-btn--status-warn' :
-                currentReasoning ? 'glass-btn--status-ok' : ''
+                !currentReasoning ? '' :
+                currentReasoning.isConsistent === false || (currentReasoning.errors?.length ?? 0) > 0
+                  ? 'glass-btn--status-error'
+                  : 'glass-btn--status-ok'
               }`}
               onClick={onOpenReasoningReport}
               title={currentReasoning?.isConsistent === false ? "OWL DL inconsistency — see reasoning report" : "View reasoning results"}
@@ -263,21 +264,21 @@ export const TopBar: React.FC<TopBarProps> = ({
                     Reasoning…
                   </>
                 )
-              ) : currentReasoning ? (
-                currentReasoning.isConsistent === false ? (
-                  <span>⊗ Inconsistent</span>
-                ) : currentReasoning.errors?.length ? (
-                  <span>
-                    ⚠ {currentReasoning.errors.length} Error{currentReasoning.errors.length !== 1 ? 's' : ''}
-                  </span>
-                ) : currentReasoning.warnings?.length ? (
-                  <span>
-                    ⚠ {currentReasoning.warnings.length} Warning{currentReasoning.warnings.length !== 1 ? 's' : ''}
-                  </span>
-                ) : (
-                  <span>✓ Valid</span>
-                )
-              ) : (
+              ) : currentReasoning ? (() => {
+                const errs = currentReasoning.errors?.length ?? 0;
+                const warns = currentReasoning.warnings?.length ?? 0;
+                const consistent = currentReasoning.isConsistent !== false;
+                if (!consistent) {
+                  return <span>⊗ Inconsistent · {errs > 0 ? `${errs} error${errs !== 1 ? 's' : ''}` : `${warns} warning${warns !== 1 ? 's' : ''}`}</span>;
+                }
+                if (errs > 0) {
+                  return <span>⚠ Consistent · {errs} error{errs !== 1 ? 's' : ''}</span>;
+                }
+                if (warns > 0) {
+                  return <span>✓ Consistent · {warns} warning{warns !== 1 ? 's' : ''}</span>;
+                }
+                return <span>✓ Consistent</span>;
+              })() : (
                 'Ready'
               )}
             </button>
