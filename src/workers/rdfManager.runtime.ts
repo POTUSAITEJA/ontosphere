@@ -1138,93 +1138,44 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       ...(store.getQuads(null, null, null, inferredGraph) || []),
     ];
 
-    const [{ default: SHACLValidator }, { default: factory }] = await Promise.all([
-      import("rdf-validate-shacl"),
-      import("rdf-validate-shacl/src/defaultEnv.js" as string),
+    const [shaclMod, sparqlMod, dataModelMod, datasetMod] = await Promise.all([
+      import("shacl-engine") as Promise<any>,
+      import("shacl-engine/sparql.js") as Promise<any>,
+      import("@rdfjs/data-model") as Promise<any>,
+      import("@rdfjs/dataset") as Promise<any>,
     ]);
+    const { Validator } = shaclMod;
+    const { targetResolvers } = sparqlMod;
+    const factory = dataModelMod.default ?? dataModelMod;
+    const dataset = datasetMod.default?.dataset ?? datasetMod.dataset;
 
-    const shapesDs = factory.dataset();
-    for (const q of shapesQuads) {
-      shapesDs.add(factory.quad(
-        q.subject.termType === "BlankNode" ? factory.blankNode(q.subject.value) : factory.namedNode(q.subject.value),
-        factory.namedNode(q.predicate.value),
-        q.object.termType === "Literal"
-          ? factory.literal(q.object.value, q.object.language || (q.object.datatype ? factory.namedNode(q.object.datatype.value) : undefined))
-          : q.object.termType === "BlankNode" ? factory.blankNode(q.object.value) : factory.namedNode(q.object.value),
-      ));
+    function convertTerm(term: any) {
+      if (term.termType === "BlankNode") return factory.blankNode(term.value);
+      if (term.termType === "Literal")
+        return factory.literal(term.value, term.language || (term.datatype ? factory.namedNode(term.datatype.value) : undefined));
+      return factory.namedNode(term.value);
     }
 
-    const dataDs = factory.dataset();
+    const shapesDs = dataset();
+    for (const q of shapesQuads) {
+      shapesDs.add(factory.quad(convertTerm(q.subject), factory.namedNode(q.predicate.value), convertTerm(q.object)));
+    }
+
+    const dataDs = dataset();
     for (const q of dataQuads) {
-      dataDs.add(factory.quad(
-        q.subject.termType === "BlankNode" ? factory.blankNode(q.subject.value) : factory.namedNode(q.subject.value),
-        factory.namedNode(q.predicate.value),
-        q.object.termType === "Literal"
-          ? factory.literal(q.object.value, q.object.language || (q.object.datatype ? factory.namedNode(q.object.datatype.value) : undefined))
-          : q.object.termType === "BlankNode" ? factory.blankNode(q.object.value) : factory.namedNode(q.object.value),
-      ));
+      dataDs.add(factory.quad(convertTerm(q.subject), factory.namedNode(q.predicate.value), convertTerm(q.object)));
     }
 
     const SH_NODESHAPE = "http://www.w3.org/ns/shacl#NodeShape";
-    const SH_NODEKIND = "http://www.w3.org/ns/shacl#nodeKind";
-    const SH_IRI = "http://www.w3.org/ns/shacl#IRI";
-    const SH_TARGET_CLASS = "http://www.w3.org/ns/shacl#targetClass";
-    const SH_FILTER_SHAPE = "http://www.w3.org/ns/shacl#filterShape";
 
     const shapeCount = [...shapesDs].filter(
       (q: any) => q.predicate.value === RDF_TYPE && q.object.value === SH_NODESHAPE,
     ).length;
 
-    // Pre-filter: honour sh:nodeKind sh:IRI and sh:filterShape on shapes.
-    // Shapes declaring sh:nodeKind sh:IRI → collect their sh:targetClass IRIs
-    // and remove blank-node instances of those classes from the data dataset
-    // so the SHACL engine never sees them as focus nodes.
-    const iriOnlyTargetClasses = new Set<string>();
-    const shapesArr = [...shapesDs] as any[];
-
-    // Direct sh:nodeKind sh:IRI on shape
-    const iriOnlyShapes = new Set(
-      shapesArr
-        .filter(q => q.predicate.value === SH_NODEKIND && q.object.value === SH_IRI)
-        .map(q => q.subject.value),
-    );
-    // sh:filterShape pointing to a blank node with sh:nodeKind sh:IRI
-    for (const q of shapesArr) {
-      if (q.predicate.value === SH_FILTER_SHAPE) {
-        const filterNode = q.object.value;
-        const hasIriKind = shapesArr.some(
-          (fq: any) => fq.subject.value === filterNode && fq.predicate.value === SH_NODEKIND && fq.object.value === SH_IRI,
-        );
-        if (hasIriKind) iriOnlyShapes.add(q.subject.value);
-      }
-    }
-    for (const q of shapesArr) {
-      if (q.predicate.value === SH_TARGET_CLASS && iriOnlyShapes.has(q.subject.value)) {
-        iriOnlyTargetClasses.add(q.object.value);
-      }
-    }
-
-    if (iriOnlyTargetClasses.size > 0) {
-      const toRemove: any[] = [];
-      for (const q of [...dataDs] as any[]) {
-        if (
-          q.predicate.value === RDF_TYPE &&
-          iriOnlyTargetClasses.has(q.object.value) &&
-          q.subject.termType === "BlankNode"
-        ) {
-          toRemove.push(q);
-        }
-      }
-      for (const q of toRemove) dataDs.delete(q);
-      if (toRemove.length > 0) {
-        debugLog(`[SHACL] Pre-filtered ${toRemove.length} blank-node focus nodes (sh:nodeKind sh:IRI)`);
-      }
-    }
-
-    const validator = new SHACLValidator(shapesDs, { factory });
+    const validator = new Validator(shapesDs, { factory, targetResolvers });
     let report: any;
     try {
-      report = await validator.validate(dataDs);
+      report = await validator.validate({ dataset: dataDs });
     } catch (valErr: any) {
       const msg = valErr?.message ?? String(valErr);
       return {
@@ -1248,19 +1199,21 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     }
 
     const violations: ShaclViolation[] = (report.results ?? []).map((r: any) => {
-      let shapeVal = r.sourceShape?.value ?? null;
+      let shapeVal = r.shape?.ptr?.term?.value ?? null;
       if (shapeVal && propShapeToNodeShape.has(shapeVal)) {
         shapeVal = propShapeToNodeShape.get(shapeVal)!;
       }
+      const pathVal = Array.isArray(r.path) ? (r.path[0]?.predicates?.[0]?.value ?? null) : (r.path?.value ?? null);
+      const msgVal = Array.isArray(r.message)
+        ? r.message.map((m: any) => m.value).join("; ")
+        : (typeof r.message === "string" ? r.message : (r.message?.value ?? null));
       return {
         focusNode: r.focusNode?.value ?? null,
-        path: r.path?.value ?? null,
+        path: pathVal,
         severity: r.severity?.value?.replace("http://www.w3.org/ns/shacl#", "sh:") ?? null,
-        message: Array.isArray(r.message)
-          ? r.message.map((m: any) => m.value).join("; ")
-          : (r.message?.value ?? null),
+        message: msgVal,
         sourceShape: shapeVal,
-        constraint: r.sourceConstraintComponent?.value ?? null,
+        constraint: r.constraintComponent?.value ?? null,
         source: "shacl" as const,
       };
     });

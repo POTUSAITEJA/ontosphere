@@ -4,9 +4,7 @@
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-# Ontology quality shapes: best-practice constraints for OWL ontologies
-
-<urn:shacl:ontology-quality:ClassLabel>
+<urn:test:ClassLabel>
   a sh:NodeShape ;
   sh:target [
     a sh:SPARQLTarget ;
@@ -19,7 +17,7 @@
     sh:message "OWL class should have an rdfs:label" ;
   ] .
 
-<urn:shacl:ontology-quality:ClassComment>
+<urn:test:ClassComment>
   a sh:NodeShape ;
   sh:target [
     a sh:SPARQLTarget ;
@@ -32,7 +30,7 @@
     sh:message "OWL class should have an rdfs:comment for documentation" ;
   ] .
 
-<urn:shacl:ontology-quality:ObjectPropertyLabel>
+<urn:test:ObjectPropertyLabel>
   a sh:NodeShape ;
   sh:targetClass owl:ObjectProperty ;
   sh:property [
@@ -40,34 +38,4 @@
     sh:minCount 1 ;
     sh:severity sh:Warning ;
     sh:message "Object property should have an rdfs:label" ;
-  ] .
-
-<urn:shacl:ontology-quality:ObjectPropertyDomain>
-  a sh:NodeShape ;
-  sh:targetClass owl:ObjectProperty ;
-  sh:property [
-    sh:path rdfs:domain ;
-    sh:minCount 1 ;
-    sh:severity sh:Info ;
-    sh:message "Object property should declare rdfs:domain" ;
-  ] .
-
-<urn:shacl:ontology-quality:ObjectPropertyRange>
-  a sh:NodeShape ;
-  sh:targetClass owl:ObjectProperty ;
-  sh:property [
-    sh:path rdfs:range ;
-    sh:minCount 1 ;
-    sh:severity sh:Info ;
-    sh:message "Object property should declare rdfs:range" ;
-  ] .
-
-<urn:shacl:ontology-quality:DatatypePropertyLabel>
-  a sh:NodeShape ;
-  sh:targetClass owl:DatatypeProperty ;
-  sh:property [
-    sh:path rdfs:label ;
-    sh:minCount 1 ;
-    sh:severity sh:Warning ;
-    sh:message "Datatype property should have an rdfs:label" ;
   ] .
