@@ -35,29 +35,23 @@ export class RdfValidationProvider implements ValidationProvider {
 
   async validate(e: ValidationEvent): Promise<ValidationResult> {
     const items: ValidatedElement[] = [];
-    const errors = e.target.properties?.[ERROR_PRED] ?? [];
-    const warnings = e.target.properties?.[WARNING_PRED] ?? [];
+    const target = e.target.id as ElementIri;
+    const propErrors = e.target.properties?.[ERROR_PRED] ?? [];
+    const propWarnings = e.target.properties?.[WARNING_PRED] ?? [];
     const injectedErrors = this._errorMap.get(e.target.id as string) ?? [];
     const injectedWarnings = this._warningMap.get(e.target.id as string) ?? [];
 
-    if (errors.length > 0 || injectedErrors.length > 0) {
-      const msg = injectedErrors[0] ?? (errors[0] as any)?.value ?? 'Reasoning error';
-      items.push({
-        type: 'element',
-        target: e.target.id as ElementIri,
-        severity: 'error',
-        message: msg,
-      });
+    for (const msg of injectedErrors) {
+      items.push({ type: 'element', target, severity: 'error', message: msg });
     }
-
-    if (warnings.length > 0 || injectedWarnings.length > 0) {
-      const msg = injectedWarnings[0] ?? (warnings[0] as any)?.value ?? 'Reasoning warning';
-      items.push({
-        type: 'element',
-        target: e.target.id as ElementIri,
-        severity: 'warning',
-        message: msg,
-      });
+    for (const v of propErrors) {
+      items.push({ type: 'element', target, severity: 'error', message: (v as any)?.value ?? 'Reasoning error' });
+    }
+    for (const msg of injectedWarnings) {
+      items.push({ type: 'element', target, severity: 'warning', message: msg });
+    }
+    for (const v of propWarnings) {
+      items.push({ type: 'element', target, severity: 'warning', message: (v as any)?.value ?? 'Reasoning warning' });
     }
 
     return { items };
