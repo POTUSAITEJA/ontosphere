@@ -240,60 +240,21 @@ test('iswc2026-comprehensive', async ({ page }) => {
 
   // ── Act 7 — AI Relay Bridge (2:15 – 2:45) ─────────────────────────────────
 
-  // Scene 14–16 — Relay demo using the stage (side-by-side mock chat + Ontosphere)
-  // Re-open the app in stage mode for the relay segment
-  await runner.openStage();
-  await runner.captionPause('AI Relay Bridge — connects any AI chat to Ontosphere', 2_000);
-
-  // Inject bookmarklet into the mock chat
-  await runner.injectBookmarklet();
-  await runner.captionPause('Relay connected — bookmarklet bridges two browser tabs', 1_500);
-
-  // Scene 15 — AI sends tool calls via relay
-  // Use the 'single' scenario to demonstrate a simple addNode via relay
-  await runner.caption('AI sends a tool call through the relay...');
-  await runner.clickScenario('single');
-  await runner.waitForResult(20_000);
-  await runner.captionPause('AI tool call executed — node appears on Ontosphere canvas', 2_500);
-
-  // Scene 16 — Show the full workflow scenario briefly
-  await runner.clearChat();
-  await runner.caption('Full workflow — nodes, links, layout via relay...');
-  await runner.clickScenario('full');
-  await runner.waitForResult(30_000);
-  await runner.captionPause('Graph built by AI tool calls through the relay', 3_000);
+  // The relay bridge demo requires openStage() (side-by-side iframes) which is
+  // environment-sensitive. Show a caption overlay describing the capability instead.
+  // The advert-intro spec covers the full relay recording when the stage works.
+  await runner.captionPause('AI Relay Bridge — bookmarklet connects any AI chat to Ontosphere', 2_500);
+  await runner.captionPause('AI sends JSON-RPC tool calls → Ontosphere executes → result injected back', 2_500);
+  await runner.captionPause('No server, no extension, no API keys — just a bookmarklet click', 2_500);
 
   // ── Act 8 — Export and Close (2:45 – 3:00) ─────────────────────────────────
 
-  // Scene 17 — Export as Turtle
-  // Switch back to full-app mode for the export
-  await runner.openApp();
-
-  // Re-load the ontology since openApp starts fresh
-  await page.evaluate(async () => {
-    const loadRdf = (window as any).__mcpTools?.['loadRdf'];
-    if (loadRdf) await loadRdf({ url: `${window.location.origin}/reasoning-demo.ttl` });
-  });
-  await runner.pauseMs(2_000);
-
-  // Layout and fit
-  await page.evaluate(async () => {
-    const layout = (window as any).__mcpTools?.['runLayout'];
-    if (layout) await layout({ algorithm: 'dagre-tb', spacing: 200 });
-  });
-  await runner.pauseMs(500);
-  await page.evaluate(async () => {
-    const fit = (window as any).__mcpTools?.['fitCanvas'];
-    if (fit) await fit({});
-  });
-  await runner.pauseMs(500);
-
-  // Trigger export via MCP tool
-  await page.evaluate(async () => {
-    const exportTool = (window as any).__mcpTools?.['exportGraph'];
-    if (exportTool) await exportTool({ format: 'turtle' });
-  });
-  await runner.pauseMs(500);
+  // Scene 17 — Export as Turtle (still on the same app instance from earlier acts)
+  const exportTurn = turns.find(t => t.toolCalls.some(c => c.name === 'exportGraph'));
+  if (exportTurn) {
+    await runner.runSeedTurn(exportTurn, 400);
+    await runner.pauseMs(500);
+  }
 
   await runner.captionPause('Export Turtle / RDF-XML / JSON-LD — namespace management with live URI renaming', 2_500);
 
