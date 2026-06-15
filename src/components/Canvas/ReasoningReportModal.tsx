@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { ScrollArea } from '../ui/scroll-area';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Separator } from '../ui/separator';
-import { AlertTriangle, CheckCircle, XCircle, Lightbulb, Clock } from 'lucide-react';
+import { AlertTriangle, CheckCircle, XCircle, Lightbulb, Clock, Shield } from 'lucide-react';
 import type { ReasoningResult } from '../../utils/rdfManager';
 
 /**
@@ -255,6 +255,12 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
 
   const inferredCount = graphCounts['urn:vg:inferred'] || 0;
 
+  const isShaclRule = (rule: string) => rule.startsWith('shacl:') || rule === 'sh:ValidationResult';
+  const shaclErrors = errors.filter(e => isShaclRule(e.rule));
+  const shaclWarnings = warnings.filter(w => isShaclRule(w.rule));
+  const shaclTotal = shaclErrors.length + shaclWarnings.length;
+  const shaclConforms = shaclTotal === 0;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] max-w-[min(90vw,64rem)] overflow-y-auto">
@@ -307,7 +313,7 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
           </TabsList>
 
           <TabsContent value="summary" className="space-y-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm flex items-center gap-2">
@@ -319,7 +325,7 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                   <div className="text-2xl font-bold text-destructive">{errors.length}</div>
                 </CardContent>
               </Card>
-              
+
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm flex items-center gap-2">
@@ -331,7 +337,7 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                   <div className="text-2xl font-bold text-warning">{warnings.length}</div>
                 </CardContent>
               </Card>
-              
+
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm flex items-center gap-2">
@@ -343,7 +349,21 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                   <div className="text-2xl font-bold text-primary">{inferences.length}</div>
                 </CardContent>
               </Card>
-              
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-blue-500" />
+                    SHACL
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className={`text-sm font-medium ${shaclConforms ? 'text-green-600' : 'text-destructive'}`}>
+                    {shaclConforms ? 'Conforms' : `${shaclTotal} violations`}
+                  </div>
+                </CardContent>
+              </Card>
+
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm flex items-center gap-2">
@@ -427,7 +447,10 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                         <CardTitle className="text-sm flex items-center gap-2">
                           <XCircle className="w-4 h-4 text-destructive" />
                           <span>{error.rule}</span>
-                          <Badge variant="destructive" className="ml-auto">
+                          <Badge variant={isShaclRule(error.rule) ? 'outline' : 'secondary'} className="ml-auto text-[10px]">
+                            {isShaclRule(error.rule) ? 'SHACL' : 'OWL'}
+                          </Badge>
+                          <Badge variant="destructive">
                             {error.severity}
                           </Badge>
                         </CardTitle>
@@ -461,6 +484,9 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                         <CardTitle className="text-sm flex items-center gap-2">
                           <AlertTriangle className="w-4 h-4 text-warning" />
                           <span>{warning.rule}</span>
+                          <Badge variant={isShaclRule(warning.rule) ? 'outline' : 'secondary'} className="ml-auto text-[10px]">
+                            {isShaclRule(warning.rule) ? 'SHACL' : 'OWL'}
+                          </Badge>
                         </CardTitle>
                       </CardHeader>
                       <CardContent>

@@ -9,6 +9,7 @@ export type {
   ReasoningInference,
   ReasoningResult,
   ReasoningWarning,
+  ShaclViolation,
 } from "./reasoningTypes";
 
 import { RDFManagerImpl } from "./rdfManager.impl";

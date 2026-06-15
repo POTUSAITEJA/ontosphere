@@ -136,6 +136,7 @@ export type RDFWorkerCommandPayloads = {
     limit?: number;
   };
   setDebug: { enabled: boolean };
+  runShaclValidation: undefined;
 };
 
 export const RDF_WORKER_COMMANDS = [
@@ -164,6 +165,7 @@ export const RDF_WORKER_COMMANDS = [
   "renameNamespaceUri",
   "sparqlQuery",
   "setDebug",
+  "runShaclValidation",
 ] as const;
 
 export type RDFWorkerCommandName = (typeof RDF_WORKER_COMMANDS)[number];
@@ -597,6 +599,9 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
   setDebug(payload) {
     assertPlainObject(payload, "setDebug payload must be an object");
     assertBoolean((payload as { enabled: unknown }).enabled, "setDebug.enabled must be a boolean");
+  },
+  runShaclValidation() {
+    // No payload needed
   },
 };
 

@@ -3,11 +3,6 @@ import type { McpTool, McpResult } from '@/mcp/types';
 import { rdfManager } from '@/utils/rdfManager';
 
 const SHACL_GRAPH = 'urn:vg:shapes';
-const DATA_GRAPH = 'urn:vg:data';
-
-const SH_NODESHAPE = 'http://www.w3.org/ns/shacl#NodeShape';
-const SH_PROPERTLYSHAPE = 'http://www.w3.org/ns/shacl#PropertyShape';
-const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 
 // ---------------------------------------------------------------------------
 // loadShacl
@@ -29,10 +24,12 @@ const loadShacl: McpTool = {
 
       await rdfManager.loadRDFIntoGraph(turtle, SHACL_GRAPH, 'text/turtle');
 
-      // Count loaded shapes (NodeShape or PropertyShape)
+      const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+      const SH_NODESHAPE = 'http://www.w3.org/ns/shacl#NodeShape';
+      const SH_PROPERTYSHAPE = 'http://www.w3.org/ns/shacl#PropertyShape';
       const { items } = await rdfManager.fetchQuadsPage({ graphName: SHACL_GRAPH, limit: 0 });
       const shapes = (items ?? [])
-        .filter(q => q.predicate === RDF_TYPE && (q.object === SH_NODESHAPE || q.object === SH_PROPERTLYSHAPE))
+        .filter(q => q.predicate === RDF_TYPE && (q.object === SH_NODESHAPE || q.object === SH_PROPERTYSHAPE))
         .map(q => q.subject);
 
       return { success: true, data: { loaded: shapes.length, shapes } };
@@ -47,64 +44,46 @@ const loadShacl: McpTool = {
 // ---------------------------------------------------------------------------
 const validateGraph: McpTool = {
   name: 'validateGraph',
-  description: 'Validate the asserted graph (urn:vg:data) against SHACL shapes loaded in urn:vg:shapes. Returns conforms flag and structured violation list.',
+  description: 'Validate the asserted graph (urn:vg:data) plus inferred graph against SHACL shapes loaded in urn:vg:shapes. Returns conforms flag and structured violation list.',
   inputSchema: {
     type: 'object',
     properties: {},
   },
   async handler(): Promise<McpResult> {
     try {
-      // Lazy import to avoid bundling issues when not used
-      const [{ default: SHACLValidator }, { default: factory }, { Parser }] = await Promise.all([
-        import('rdf-validate-shacl'),
-        // Use the bundled default environment which has clownface + dataset support
-        import('rdf-validate-shacl/src/defaultEnv.js' as string),
-        import('n3'),
-      ]);
-
-      // Fetch shapes and data quads from the worker store
-      const [shapesPage, dataPage] = await Promise.all([
-        rdfManager.fetchQuadsPage({ graphName: SHACL_GRAPH, limit: 0 }),
-        rdfManager.fetchQuadsPage({ graphName: DATA_GRAPH, limit: 0 }),
-      ]);
-
-      // Rebuild RDF/JS datasets from the flat quad arrays
-      function quadsToDataset(items: Array<{ subject: string; predicate: string; object: string }>) {
-        const ds = factory.dataset();
-        for (const q of items ?? []) {
-          // Classify subject/object as named node or literal
-          const s = factory.namedNode(q.subject);
-          const p = factory.namedNode(q.predicate);
-          const o = q.object.startsWith('_:')
-            ? factory.blankNode(q.object.slice(2))
-            : /^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(q.object)
-              ? factory.namedNode(q.object)
-              : factory.literal(q.object);
-          ds.add(factory.quad(s, p, o));
-        }
-        return ds;
-      }
-
-      const shapesDs = quadsToDataset(shapesPage.items ?? []);
-      const dataDs = quadsToDataset(dataPage.items ?? []);
-
-      const validator = new SHACLValidator(shapesDs, { factory });
-      const report = await validator.validate(dataDs);
-
-      const violations = (report.results ?? []).map((r: any) => ({
-        focusNode: r.focusNode?.value ?? null,
-        path: r.path?.value ?? null,
-        constraint: r.sourceConstraintComponent?.value ?? null,
-        severity: r.severity?.value?.replace('http://www.w3.org/ns/shacl#', 'sh:') ?? null,
-        message: Array.isArray(r.message) ? r.message.map((m: any) => m.value).join('; ') : (r.message?.value ?? null),
-        sourceShape: r.sourceShape?.value ?? null,
-      }));
-
-      return { success: true, data: { conforms: report.conforms, violations } };
+      const result = await rdfManager.runShaclValidation();
+      return { success: true, data: { conforms: result.conforms, violations: result.violations } };
     } catch (e) {
       return { success: false, error: String(e) };
     }
   },
 };
 
-export const shaclTools: McpTool[] = [loadShacl, validateGraph];
+// ---------------------------------------------------------------------------
+// loadShaclFromUrl
+// ---------------------------------------------------------------------------
+const loadShaclFromUrl: McpTool = {
+  name: 'loadShaclFromUrl',
+  description: 'Load SHACL shapes from a URL into urn:vg:shapes. Supports direct .ttl file URLs, GitHub folder tree URLs (auto-discovers .ttl/.shacl files), and comma-separated mixes.',
+  inputSchema: {
+    type: 'object',
+    required: ['url'],
+    properties: {
+      url: { type: 'string', description: 'URL to load shapes from. Can be a direct .ttl URL, a GitHub tree URL (https://github.com/owner/repo/tree/branch/path), or comma-separated mix of both.' },
+    },
+  },
+  async handler(params): Promise<McpResult> {
+    try {
+      const { url } = params as { url: string };
+      if (!url?.trim()) return { success: false, error: 'url is required' };
+
+      const { loadShaclShapes } = await import('@/utils/shaclShapeLoader');
+      const manifest = await loadShaclShapes(url);
+      return { success: true, data: manifest };
+    } catch (e) {
+      return { success: false, error: String(e) };
+    }
+  },
+};
+
+export const shaclTools: McpTool[] = [loadShacl, validateGraph, loadShaclFromUrl];

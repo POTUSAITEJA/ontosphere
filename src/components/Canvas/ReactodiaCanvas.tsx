@@ -27,6 +27,7 @@ import { PrefixContext } from '@/providers/PrefixContext';
 import { generateEntityIri } from '@/utils/iriUtils';
 import ResizableNamespaceLegend from './ResizableNamespaceLegend';
 import { useAppConfigStore } from '@/stores/appConfigStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { getLayoutFunction } from './layout/getLayoutFunction';
 import { runSilentLayout, type SilentLayoutEdge } from './layout/silentLayout';
 import type { StructuralGroupMap } from './core/structuralGroups';
@@ -1042,6 +1043,7 @@ export default function ReactodiaCanvas() {
     let startupUrl = '';
     let startupApiKey = '';
     let startupApiKeyHeader = '';
+    let shaclShapesParam = '';
     try {
       const u = new URL(String(window.location.href));
       startupUrl =
@@ -1051,6 +1053,7 @@ export default function ReactodiaCanvas() {
         '';
       startupApiKey = u.searchParams.get('apiKey') || '';
       startupApiKeyHeader = u.searchParams.get('apiKeyHeader') || '';
+      shaclShapesParam = u.searchParams.get('shaclShapes') || '';
       // ?loadImports=false disables owl:imports auto-loading for this session only.
       const loadImportsParam = u.searchParams.get('loadImports');
       loadImportsEnabledRef.current = loadImportsParam !== 'false';
@@ -1155,6 +1158,23 @@ export default function ReactodiaCanvas() {
           }
         }
         actions.setLoading(false, 0, '');
+      }
+
+      // Load SHACL shapes: ?shaclShapes= param takes priority, otherwise use settings
+      const shaclUrl = shaclShapesParam || useSettingsStore.getState().settings.shaclShapesUrl;
+      if (shaclUrl) {
+        try {
+          const { loadShaclShapes } = await import('../../utils/shaclShapeLoader');
+          const manifest = await loadShaclShapes(shaclUrl);
+          if (manifest.loaded.length > 0) {
+            console.log('[ReactodiaCanvas] SHACL shapes loaded:', manifest.loaded.map(s => s.name));
+          }
+          for (const err of manifest.errors) {
+            console.warn('[ReactodiaCanvas] SHACL shape load error:', err.url, err.error);
+          }
+        } catch (err) {
+          console.warn('[ReactodiaCanvas] SHACL shapes load failed', err);
+        }
       }
     })();
   }, [loadKnowledgeGraph, loadAdditionalOntologies, actions]);

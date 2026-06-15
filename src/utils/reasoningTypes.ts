@@ -22,6 +22,16 @@ export interface ReasoningInference {
   confidence: number;
 }
 
+export interface ShaclViolation {
+  focusNode: string | null;
+  path: string | null;
+  severity: string | null;
+  message: string | null;
+  sourceShape: string | null;
+  constraint: string | null;
+  source: "shacl";
+}
+
 export interface ReasoningResult {
   id: string;
   timestamp: number;
