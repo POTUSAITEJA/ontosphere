@@ -1,27 +1,14 @@
-import { memo, useState, useEffect, useCallback } from 'react';
+import { memo, useState, useEffect, useCallback, useRef } from 'react';
 import { rdfManager } from '../../utils/rdfManager';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog';
 import { Badge } from '../ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { ScrollArea } from '../ui/scroll-area';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
-import { Separator } from '../ui/separator';
-import { AlertTriangle, CheckCircle, XCircle, Lightbulb, Clock, Shield, ExternalLink } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
+import { AlertTriangle, CheckCircle, XCircle, Lightbulb, Clock, Shield, ExternalLink, X } from 'lucide-react';
 import type { ReasoningResult } from '../../utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import { useShaclResultStore, makeShaclMessageKey } from '@/stores/shaclResultStore';
 
-/**
- * Lazy paginated table for inferred triples.
- * Fetches only the current page from the authoritative inferred graph (urn:vg:inferred)
- * when the page or pageSize changes.
- */
 const InferredTriplesTable = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -30,7 +17,6 @@ const InferredTriplesTable = () => {
   const [pageItems, setPageItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
 
-  // Fetch the page items lazily from the rdfManager's indexed API
   const fetchPage = useCallback(async (p: number, ps: number) => {
     setLoading(true);
     try {
@@ -53,7 +39,6 @@ const InferredTriplesTable = () => {
   }, []);
 
   useEffect(() => {
-    // load initial page
     void fetchPage(page, pageSize);
   }, [page, pageSize, fetchPage]);
 
@@ -86,13 +71,10 @@ const InferredTriplesTable = () => {
         adds.push({ subject: q.subject, predicate: q.predicate, object: q.object });
       }
 
-      // Persist into data graph and emit subject updates so canvas remaps
       await rdfManager.applyBatch({ removes: [], adds }, "urn:vg:data");
       try { await rdfManager.emitAllSubjects("urn:vg:data"); } catch (_) { /* ignore */ }
       window.alert(`Promoted ${adds.length} triples into urn:vg:data`);
-      // clear selection
       setSelected({});
-      // refresh current page to reflect potential changes
       void fetchPage(page, pageSize);
     } catch (e) {
       console.error("Promote failed", e);
@@ -103,8 +85,8 @@ const InferredTriplesTable = () => {
   const copyTriple = async (q: any) => {
     try {
       const t = `${q.subject} ${q.predicate} ${q.object}`;
-      if (navigator && (navigator as any).clipboard && typeof (navigator as any).clipboard.writeText === "function") {
-        await (navigator as any).clipboard.writeText(t);
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(t);
         window.alert("Copied triple to clipboard");
       } else {
         window.prompt("Copy the triple below", t);
@@ -119,7 +101,6 @@ const InferredTriplesTable = () => {
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <button className="btn" onClick={() => {
-            // select all on current page (local indices)
             const newSel = { ...selected };
             pageItems.forEach((_, i) => { newSel[i] = true; });
             setSelected(newSel);
@@ -200,6 +181,7 @@ interface ReasoningReportModalProps {
 
 export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning, reasoningHistory }: ReasoningReportModalProps) => {
   const [graphCounts, setGraphCounts] = useState<Record<string, number>>({});
+  const panelRef = useRef<HTMLDivElement>(null);
   const reasoningId = currentReasoning?.id ?? null;
   const hasReasoning = !!currentReasoning;
 
@@ -229,24 +211,24 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
   }, [onOpenChange]);
 
   useEffect(() => {
+    if (!open) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onOpenChange(false);
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [open, onOpenChange]);
+
+  useEffect(() => {
     let cancelled = false;
     const loadGraphCounts = async () => {
       if (!open || !hasReasoning) {
-        if (!cancelled) {
-          setGraphCounts((prev) => {
-            if (!prev || Object.keys(prev).length === 0) {
-              return prev;
-            }
-            return {};
-          });
-        }
+        if (!cancelled) setGraphCounts(prev => Object.keys(prev).length === 0 ? prev : {});
         return;
       }
       try {
         const counts = await rdfManager.getGraphCounts();
-        if (!cancelled) {
-          setGraphCounts(counts || {});
-        }
+        if (!cancelled) setGraphCounts(counts || {});
       } catch (err) {
         if (!cancelled) {
           console.warn("[ReasoningReportModal] Failed to fetch graph counts", err);
@@ -254,32 +236,35 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
         }
       }
     };
-
     void loadGraphCounts();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [open, reasoningId, hasReasoning]);
+
+  if (!open) return null;
 
   if (!currentReasoning) {
     return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-[min(90vw,64rem)] max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Reasoning Report</DialogTitle>
-            <DialogDescription>
-              No reasoning results available. Run reasoning on your knowledge graph to see analysis.
-            </DialogDescription>
-          </DialogHeader>
-        </DialogContent>
-      </Dialog>
+      <div
+        className="absolute inset-0 z-50 flex items-start justify-center bg-black/60 pt-8"
+        onMouseDown={e => { if (e.target === e.currentTarget) onOpenChange(false); }}
+      >
+        <div className="w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-lg font-semibold">Reasoning Report</h2>
+            <button onClick={() => onOpenChange(false)} className="rounded-sm p-1 opacity-70 hover:opacity-100 hover:bg-accent transition-colors">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            No reasoning results available. Run reasoning on your knowledge graph to see analysis.
+          </p>
+        </div>
+      </div>
     );
   }
 
   const { errors, warnings, inferences, status, duration, timestamp } = currentReasoning;
   const isConsistent = currentReasoning?.isConsistent;
-
   const inferredCount = graphCounts['urn:vg:inferred'] || 0;
 
   const isShaclRule = (rule: string) => rule.startsWith('shacl:') || rule === 'sh:ValidationResult';
@@ -289,25 +274,37 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
   const shaclHasErrors = shaclErrors.length > 0;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] max-w-[min(90vw,64rem)] overflow-y-auto left-[calc(50%+9rem)]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <span>Reasoning Report</span>
-            <Badge variant={status === 'completed' ? 'default' : status === 'error' ? 'destructive' : 'secondary'}>
-              {status}
-            </Badge>
-          </DialogTitle>
-          <DialogDescription className="flex items-center gap-4">
-            <span>Generated at {new Date(timestamp).toLocaleString()}</span>
-            {duration && (
-              <span className="flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                {duration}ms
-              </span>
-            )}
-          </DialogDescription>
-        </DialogHeader>
+    <div
+      className="absolute inset-0 z-50 flex items-start justify-center bg-black/60 pt-4"
+      onMouseDown={e => { if (e.target === e.currentTarget) onOpenChange(false); }}
+    >
+      <div
+        ref={panelRef}
+        className="w-full max-w-[min(90%,64rem)] max-h-[calc(100%-2rem)] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              Reasoning Report
+              <Badge variant={status === 'completed' ? 'default' : status === 'error' ? 'destructive' : 'secondary'}>
+                {status}
+              </Badge>
+            </h2>
+            <p className="text-sm text-muted-foreground flex items-center gap-4 mt-1">
+              <span>Generated at {new Date(timestamp).toLocaleString()}</span>
+              {duration && (
+                <span className="flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  {duration}ms
+                </span>
+              )}
+            </p>
+          </div>
+          <button onClick={() => onOpenChange(false)} className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
 
         <Tabs defaultValue="summary" className="w-full">
           <TabsList className="grid w-full grid-cols-5">
@@ -405,7 +402,7 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                 </CardContent>
               </Card>
             </div>
-            
+
             {isConsistent === false && (
               <Card className="bg-destructive/10 border-destructive/20">
                 <CardContent className="pt-4">
@@ -433,13 +430,12 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
               </Card>
             )}
 
-            {/* Quick preview of top warnings/messages so users see issues immediately in Summary */}
-            {(warnings && warnings.length > 0) && (
+            {warnings.length > 0 && (
               <Card className="border-warning/10 bg-warning/5">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 text-warning" />
-                    Inference / Validation Messages (preview)
+                    Validation Messages (preview)
                     <Badge variant="secondary" className="ml-auto">{warnings.length}</Badge>
                   </CardTitle>
                 </CardHeader>
@@ -464,7 +460,7 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                       </div>
                     ))}
                     {warnings.length > 5 && (
-                      <div className="text-xs text-muted-foreground">Showing 5 of {warnings.length} messages. See Warnings tab for full list.</div>
+                      <div className="text-xs text-muted-foreground">Showing 5 of {warnings.length}. See Warnings tab.</div>
                     )}
                   </div>
                 </CardContent>
@@ -568,8 +564,6 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
           <TabsContent value="inferences">
             <ScrollArea className="h-[400px]">
               <div className="space-y-3">
-                {/* Removed the Inferences (summary) preview card per request; keep inferences tab focused on table */}
-                {/* Inferred triples table (derived from urn:vg:inferred) */}
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm flex items-center gap-2">
@@ -595,14 +589,14 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                     No reasoning history available.
                   </div>
                 ) : (
-                  reasoningHistory.map((result, index) => (
+                  reasoningHistory.map((result) => (
                     <Card key={result.id}>
                       <CardHeader className="pb-2">
                         <CardTitle className="text-sm flex items-center justify-between">
                           <span>{new Date(result.timestamp).toLocaleString()}</span>
                           <div className="flex items-center gap-2">
                             <Badge variant={
-                              result.status === 'completed' ? 'default' : 
+                              result.status === 'completed' ? 'default' :
                               result.status === 'error' ? 'destructive' : 'secondary'
                             }>
                               {result.status}
@@ -636,8 +630,8 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
             </ScrollArea>
           </TabsContent>
         </Tabs>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 });
 

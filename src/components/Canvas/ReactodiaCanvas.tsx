@@ -1828,6 +1828,13 @@ export default function ReactodiaCanvas() {
             </Reactodia.DefaultWorkspace>
           </PrefixContext.Provider>
         </Reactodia.Workspace>
+
+        <ReasoningReportModal
+          open={canvasState.showReasoningReport}
+          onOpenChange={actions.toggleReasoningReport}
+          currentReasoning={currentReasoning}
+          reasoningHistory={reasoningHistory}
+        />
       </div>
 
       {/* UI overlays — rendered OUTSIDE Workspace to avoid Radix UI + flushSync infinite loop */}
@@ -1915,12 +1922,6 @@ export default function ReactodiaCanvas() {
         </div>
       )}
 
-      <ReasoningReportModal
-        open={canvasState.showReasoningReport}
-        onOpenChange={actions.toggleReasoningReport}
-        currentReasoning={currentReasoning}
-        reasoningHistory={reasoningHistory}
-      />
     </div>
   );
 }
