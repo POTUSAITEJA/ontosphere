@@ -42,14 +42,14 @@ interface SettingsStore {
 }
 
 const SETTINGS_STORAGE_KEY = "ontology-painter-settings";
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 
 const defaultSettings: Settings = {
   ontologies: [
     { url: "http://xmlns.com/foaf/0.1/", name: "FOAF", enabled: true },
     { url: "https://www.w3.org/TR/vocab-org/", name: "Organization", enabled: true },
   ],
-  shaclShapesUrl: "/shacl-shapes/ontology-quality.shacl.ttl",
+  shaclShapesUrl: "https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/shacl-shapes/ontology-quality.shacl.ttl",
   autoReasoning: false,
   layoutAlgorithm: "horizontal",
   enableValidation: true,
