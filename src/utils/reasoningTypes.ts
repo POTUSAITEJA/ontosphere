@@ -4,6 +4,7 @@ export interface ReasoningError {
   message: string;
   rule: string;
   severity: "critical" | "error";
+  sourceShape?: string;
 }
 
 export interface ReasoningWarning {
@@ -12,6 +13,7 @@ export interface ReasoningWarning {
   message: string;
   rule: string;
   severity?: "critical" | "warning" | "info";
+  sourceShape?: string;
 }
 
 export interface ReasoningInference {

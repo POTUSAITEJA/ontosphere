@@ -40,6 +40,7 @@ import { useAppConfigStore } from '../../stores/appConfigStore';
 import { useRelayBridge } from '../../hooks/useRelayBridge';
 import { RelaySection } from './RelaySection';
 import { cn } from '../../lib/utils';
+import { useShaclResultStore } from '../../stores/shaclResultStore';
 import bookmarkletTemplate from 'virtual:relay-bookmarklet';
 import readmeSrc from '../../../README.md?raw';
 
@@ -86,8 +87,18 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openAccordions, setOpenAccordions] = useState<string[]>(['ai-relay']);
+  const panelOpenRequest = useShaclResultStore(s => s.panelOpenRequest);
   const workflowCatalogEnabled = useAppConfigStore((s) => s.config.workflowCatalogEnabled);
   const { connected, callLog } = useRelayBridge(true);
+
+  useEffect(() => {
+    if (panelOpenRequest > 0) {
+      setOpenAccordions(prev =>
+        prev.includes('shacl-shapes') ? prev : [...prev, 'shacl-shapes']
+      );
+      if (!isExpanded) onToggle();
+    }
+  }, [panelOpenRequest, isExpanded, onToggle]);
 
   useEffect(() => {
     if (isExpanded && workflowCatalogEnabled) {

@@ -28,6 +28,7 @@ import { generateEntityIri } from '@/utils/iriUtils';
 import ResizableNamespaceLegend from './ResizableNamespaceLegend';
 import { useAppConfigStore } from '@/stores/appConfigStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useShaclResultStore } from '@/stores/shaclResultStore';
 import { getLayoutFunction } from './layout/getLayoutFunction';
 import { runSilentLayout, type SilentLayoutEdge } from './layout/silentLayout';
 import type { StructuralGroupMap } from './core/structuralGroups';
@@ -1359,6 +1360,7 @@ export default function ReactodiaCanvas() {
     setCurrentReasoning(null);
     setIsInconsistentDetected(false);
     validationProvider.clearErrors();
+    useShaclResultStore.getState().clearShaclResults();
     const ctx = contextRef.current;
     if (ctx) {
       const visibleIris = new Set(
@@ -1442,6 +1444,11 @@ export default function ReactodiaCanvas() {
       if (ctx && affectedIris.size > 0) {
         ctx.editor.revalidateEntities(affectedIris as ReadonlySet<Reactodia.ElementIri>);
       }
+      const isShaclRule = (rule: string) => rule.startsWith('shacl:') || rule === 'sh:ValidationResult';
+      useShaclResultStore.getState().setShaclResults(
+        result.errors.filter(e => isShaclRule(e.rule)),
+        result.warnings.filter(w => isShaclRule(w.rule)),
+      );
       return result;
     } finally {
       setIsReasoning(false);

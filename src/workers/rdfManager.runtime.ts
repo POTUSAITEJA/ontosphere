@@ -2757,6 +2757,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               message: v.message || "SHACL validation issue",
               rule: "shacl:" + (v.constraint?.split("#").pop() ?? "constraint"),
               severity: severity === "sh:Violation" ? "error" as const : "warning" as const,
+              sourceShape: v.sourceShape ?? undefined,
             };
             if (severity === "sh:Violation") {
               kShaclErrors.push({ ...entry, severity: "error" });
@@ -3229,6 +3230,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             message: v.message || "SHACL validation issue",
             rule: "shacl:" + (v.constraint?.split("#").pop() ?? "constraint"),
             severity: severity === "sh:Violation" ? "error" as const : "warning" as const,
+            sourceShape: v.sourceShape ?? undefined,
           };
           if (severity === "sh:Violation") {
             errors.push({ ...entry, severity: "error" });

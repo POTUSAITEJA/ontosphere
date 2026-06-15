@@ -15,6 +15,7 @@ import { Separator } from '../ui/separator';
 import { AlertTriangle, CheckCircle, XCircle, Lightbulb, Clock, Shield, ExternalLink } from 'lucide-react';
 import type { ReasoningResult } from '../../utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
+import { useShaclResultStore, makeShaclMessageKey } from '@/stores/shaclResultStore';
 
 /**
  * Lazy paginated table for inferred triples.
@@ -208,6 +209,23 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
       navigateToIri?.(iri);
       onOpenChange(false);
     } catch { /* workspace not ready */ }
+  }, [onOpenChange]);
+
+  const navigateToShaclMessage = useCallback((
+    severity: string,
+    nodeId: string | undefined,
+    message: string,
+  ) => {
+    const store = useShaclResultStore.getState();
+    store.highlightMessage(makeShaclMessageKey(severity, nodeId, message));
+    store.requestOpenPanel();
+    if (nodeId) {
+      try {
+        const { navigateToIri } = getWorkspaceRefs();
+        navigateToIri?.(nodeId);
+      } catch { /* workspace not ready */ }
+    }
+    onOpenChange(false);
   }, [onOpenChange]);
 
   useEffect(() => {
@@ -434,7 +452,10 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                         {w.nodeId && (
                           <button
                             className="flex items-center gap-1 text-xs text-primary hover:underline mt-0.5 cursor-pointer"
-                            onClick={() => navigateToNode(w.nodeId!)}
+                            onClick={() => isShaclRule(w.rule)
+                              ? navigateToShaclMessage('warning', w.nodeId, w.message)
+                              : navigateToNode(w.nodeId!)
+                            }
                           >
                             <ExternalLink className="w-3 h-3" />
                             {w.nodeId.split(/[#/]/).pop() || w.nodeId}
@@ -478,7 +499,10 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                         {error.nodeId ? (
                           <button
                             className="flex items-center gap-1 text-xs text-primary hover:underline mt-2 cursor-pointer"
-                            onClick={() => navigateToNode(error.nodeId!)}
+                            onClick={() => isShaclRule(error.rule)
+                              ? navigateToShaclMessage('error', error.nodeId, error.message)
+                              : navigateToNode(error.nodeId!)
+                            }
                           >
                             <ExternalLink className="w-3 h-3" />
                             {error.nodeId.split(/[#/]/).pop() || error.nodeId}
@@ -520,7 +544,10 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                         {warning.nodeId ? (
                           <button
                             className="flex items-center gap-1 text-xs text-primary hover:underline mt-2 cursor-pointer"
-                            onClick={() => navigateToNode(warning.nodeId!)}
+                            onClick={() => isShaclRule(warning.rule)
+                              ? navigateToShaclMessage('warning', warning.nodeId, warning.message)
+                              : navigateToNode(warning.nodeId!)
+                            }
                           >
                             <ExternalLink className="w-3 h-3" />
                             {warning.nodeId.split(/[#/]/).pop() || warning.nodeId}
