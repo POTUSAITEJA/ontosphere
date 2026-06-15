@@ -11,6 +11,7 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
 | Run it locally | [Quick start (development)](#quick-start-development) |
 | Load my own data | [Startup / URL parameters](#startup--url-parameters) |
 | Contribute code | [Contributing](#contributing--development-notes) |
+| Read the paper | [ISWC 2026 Demo Paper ↗](https://thhanke.github.io/ontosphere/paper/) |
 
 ## Table of Contents
 
