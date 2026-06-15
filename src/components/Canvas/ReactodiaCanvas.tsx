@@ -416,7 +416,7 @@ function scheduleSilentLayoutWorker(
         .filter((lk): lk is Reactodia.RelationLink => lk instanceof Reactodia.RelationLink)
         .map(lk => ({ source: lk.data.sourceId, target: lk.data.targetId }));
 
-      const { groupMap } = dataProvider.getStructuralGroups();
+      const { groupMap } = dataProvider.getStructuralGroupsForView(dataProvider.currentViewMode);
       const entityMemberToRoot = new Map<string, string>();
       for (const entityIri of allEntityIris) {
         const rootIri = groupMap.get(entityIri);
@@ -860,7 +860,7 @@ export default function ReactodiaCanvas() {
 
         // L2 incremental fold: classify newly arrived elements into structural groups
         if (!isFullRefresh && addedFiltered.length > 0) {
-          const { groupMap } = dataProvider.getStructuralGroups();
+          const { groupMap } = dataProvider.getStructuralGroupsForView(dataProvider.currentViewMode);
           if (groupMap.size > 0) {
             const unpersistedIris = getUnpersistedIris(ctx);
             const l2Count = updateL2GroupsForNewElements(ctx, model, addedFiltered, groupMap, unpersistedIris);

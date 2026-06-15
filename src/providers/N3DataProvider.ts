@@ -425,16 +425,31 @@ export class N3DataProvider implements DataProvider {
       return [];
     }
 
-    // Build edges: any RDF triple where both subject and object are named-node view subjects
+    // Contract L2 structural groups into super-nodes so L2 members stay together
+    const { groupMap } = this.getStructuralGroupsForView(viewMode);
+    const memberToRoot = new Map<string, string>();
+    const l2Membership = new Map<string, Set<string>>();
+    for (const [member, root] of groupMap) {
+      if (!viewSubjects.has(member)) continue;
+      memberToRoot.set(member, root);
+      if (!l2Membership.has(root)) l2Membership.set(root, new Set([root]));
+      l2Membership.get(root)!.add(member);
+    }
+    const effectiveId = (iri: string) => memberToRoot.get(iri) ?? iri;
+
+    // Build edges on the contracted super-node graph
     const connectivity = new Map<string, number>();
-    for (const iri of viewSubjects) connectivity.set(iri, 0);
+    for (const iri of viewSubjects) {
+      const eid = effectiveId(iri);
+      if (!connectivity.has(eid)) connectivity.set(eid, 0);
+    }
     const seenEdges = new Set<string>();
     const edges: ClusterEdge[] = [];
     for (const quad of dataset.iterateMatches(null, null, null)) {
       if (quad.subject.termType !== 'NamedNode' || quad.object.termType !== 'NamedNode') continue;
-      const src = quad.subject.value as string;
-      const tgt = quad.object.value as string;
-      if (!viewSubjects.has(src) || !viewSubjects.has(tgt) || src === tgt) continue;
+      const src = effectiveId(quad.subject.value as string);
+      const tgt = effectiveId(quad.object.value as string);
+      if (!connectivity.has(src) || !connectivity.has(tgt) || src === tgt) continue;
       const edgeKey = `${src}\x00${tgt}`;
       if (seenEdges.has(edgeKey)) continue;
       seenEdges.add(edgeKey);
@@ -443,20 +458,38 @@ export class N3DataProvider implements DataProvider {
       connectivity.set(tgt, (connectivity.get(tgt) ?? 0) + 1);
     }
 
-    const nodes: ClusterNode[] = [...viewSubjects].map(iri => ({
-      id: iri,
-      connectivity: connectivity.get(iri) ?? 0,
-      position: { x: 0, y: 0 },
-    }));
+    // Deduplicated super-node list
+    const processedIds = new Set<string>();
+    const nodes: ClusterNode[] = [];
+    for (const iri of viewSubjects) {
+      const eid = effectiveId(iri);
+      if (processedIds.has(eid)) continue;
+      processedIds.add(eid);
+      nodes.push({
+        id: eid,
+        connectivity: connectivity.get(eid) ?? 0,
+        position: { x: 0, y: 0 },
+      });
+    }
 
     const compute = algorithm === 'louvain'
       ? computeClustersLouvainNgraph
       : computeClustersLabelPropagation;
     const { clusters } = compute(nodes, edges, { threshold: 2 });
 
+    // Expand super-node assignments back to individual IRIs
     const result: CommunityClusterEntry[] = [];
     for (const [, cluster] of clusters) {
-      if (cluster.nodeIds.length >= 2) result.push({ iris: cluster.nodeIds });
+      const expanded: string[] = [];
+      for (const nodeId of cluster.nodeIds) {
+        const members = l2Membership.get(nodeId);
+        if (members) {
+          for (const m of members) expanded.push(m);
+        } else {
+          expanded.push(nodeId);
+        }
+      }
+      if (expanded.length >= 2) result.push({ iris: expanded });
     }
 
     this.communityGroupsCache.set(key, result);
@@ -646,6 +679,22 @@ export class N3DataProvider implements DataProvider {
     const allQuads = [...dataset.iterateMatches(null, null, null)] as RdfQuadLike[];
     this.structuralGroupCache = computeStructuralGroups(allQuads);
     return this.structuralGroupCache;
+  }
+
+  /**
+   * Structural groups filtered to the given view mode.
+   * Post-filters the global groupMap so only entries where both
+   * member and root belong to the requested view are included.
+   */
+  getStructuralGroupsForView(viewMode: ViewMode): StructuralGroupResult {
+    const base = this.getStructuralGroups();
+    const filtered: StructuralGroupMap = new Map();
+    for (const [member, root] of base.groupMap) {
+      if (this._matchesIriToMode(member, viewMode) && this._matchesIriToMode(root, viewMode)) {
+        filtered.set(member, root);
+      }
+    }
+    return { groupMap: filtered, subclassParent: base.subclassParent };
   }
 
   connectedLinkStats(p: { elementId: ElementIri; inexactCount?: boolean; signal?: AbortSignal }): Promise<DataProviderLinkCount[]> {

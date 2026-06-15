@@ -280,7 +280,8 @@ export class ClusterLevelManager {
     if (!ctx || !model) return null;
 
     if (this._currentLevel === 1) {
-      const result = this._dataProvider?.getStructuralGroups();
+      const viewMode = this._dataProvider?.currentViewMode ?? 'abox';
+      const result = this._dataProvider?.getStructuralGroupsForView(viewMode);
       const groupMap = result?.groupMap;
       if (!groupMap || groupMap.size === 0) return null;
 
@@ -379,7 +380,8 @@ export class ClusterLevelManager {
     ctx: Reactodia.WorkspaceContext,
     model: Reactodia.DataDiagramModel,
   ): void {
-    const { groupMap, subclassParent } = this._dataProvider?.getStructuralGroups()
+    const viewMode = this._dataProvider?.currentViewMode ?? 'abox';
+    const { groupMap, subclassParent } = this._dataProvider?.getStructuralGroupsForView(viewMode)
       ?? { groupMap: new Map(), subclassParent: new Map() };
     const unpersistedIris = this._getUnpersistedIris(ctx);
     const created = applyL2Fold(ctx, model, groupMap, subclassParent, unpersistedIris);
@@ -404,10 +406,21 @@ export class ClusterLevelManager {
     model: Reactodia.DataDiagramModel,
     algorithm: string
   ): boolean {
-    const existingGroups = model.elements.filter(
+    // Capture L2 group membership before ungrouping so L2 members stay together
+    const l2Groups = model.elements.filter(
       (el): el is Reactodia.EntityGroup => el instanceof Reactodia.EntityGroup
     );
-    if (existingGroups.length) model.ungroupAll(existingGroups);
+    const l2Membership = new Map<string, Set<string>>();
+    const memberToRoot = new Map<string, string>();
+    for (const group of l2Groups) {
+      const rootIri = group.items[0]?.data.id as string;
+      if (!rootIri) continue;
+      const members = new Set(group.items.map(item => item.data.id as string));
+      l2Membership.set(rootIri, members);
+      for (const m of members) memberToRoot.set(m, rootIri);
+    }
+
+    if (l2Groups.length) model.ungroupAll(l2Groups);
 
     const entityElements = model.elements.filter(
       (el): el is Reactodia.EntityElement => el instanceof Reactodia.EntityElement
@@ -418,37 +431,81 @@ export class ClusterLevelManager {
 
     if (entityElements.length < 2) return false;
 
+    // Map each entity to its effective super-node ID (L2 root or self)
+    const effectiveId = (iri: string) => memberToRoot.get(iri) ?? iri;
+
+    // Build connectivity on the contracted (super-node) graph
     const connectivity = new Map<string, number>();
-    for (const el of entityElements) connectivity.set(el.data.id, 0);
+    const seenEdges = new Set<string>();
+    for (const el of entityElements) {
+      const eid = effectiveId(el.data.id);
+      if (!connectivity.has(eid)) connectivity.set(eid, 0);
+    }
     for (const lk of relationLinks) {
-      connectivity.set(lk.data.sourceId, (connectivity.get(lk.data.sourceId) ?? 0) + 1);
-      connectivity.set(lk.data.targetId, (connectivity.get(lk.data.targetId) ?? 0) + 1);
+      const src = effectiveId(lk.data.sourceId);
+      const tgt = effectiveId(lk.data.targetId);
+      if (src === tgt) continue;
+      const key = `${src}\0${tgt}`;
+      if (seenEdges.has(key)) continue;
+      seenEdges.add(key);
+      connectivity.set(src, (connectivity.get(src) ?? 0) + 1);
+      connectivity.set(tgt, (connectivity.get(tgt) ?? 0) + 1);
     }
 
-    const clusterNodes: ClusterNode[] = entityElements.map(el => ({
-      id: el.data.id,
-      connectivity: connectivity.get(el.data.id) ?? 0,
-      position: { x: el.position.x, y: el.position.y },
-    }));
-    const clusterEdges: ClusterEdge[] = relationLinks.map(lk => ({
-      id: lk.id,
-      source: lk.data.sourceId,
-      target: lk.data.targetId,
-    }));
+    // Super-node positions: centroid of L2 members
+    const superNodePositions = new Map<string, Reactodia.Vector>();
+    const elementByIri = new Map(entityElements.map(el => [el.data.id, el]));
+    for (const [rootIri, members] of l2Membership) {
+      const memberEls = [...members]
+        .map(m => elementByIri.get(m))
+        .filter((el): el is Reactodia.EntityElement => el !== undefined);
+      if (memberEls.length > 0) {
+        superNodePositions.set(rootIri, computeCentroid(memberEls));
+      }
+    }
+
+    // Build deduplicated node/edge lists for the super-node graph
+    const processedIds = new Set<string>();
+    const clusterNodes: ClusterNode[] = [];
+    for (const el of entityElements) {
+      const eid = effectiveId(el.data.id);
+      if (processedIds.has(eid)) continue;
+      processedIds.add(eid);
+      clusterNodes.push({
+        id: eid,
+        connectivity: connectivity.get(eid) ?? 0,
+        position: superNodePositions.get(eid) ?? { x: el.position.x, y: el.position.y },
+      });
+    }
+
+    const clusterEdges: ClusterEdge[] = [];
+    const edgeSet = new Set<string>();
+    for (const lk of relationLinks) {
+      const src = effectiveId(lk.data.sourceId);
+      const tgt = effectiveId(lk.data.targetId);
+      if (src === tgt) continue;
+      const key = `${src}\0${tgt}`;
+      if (edgeSet.has(key)) continue;
+      edgeSet.add(key);
+      clusterEdges.push({ id: lk.id, source: src, target: tgt });
+    }
 
     const { clusters } = selectAlgorithm(algorithm, clusterNodes, clusterEdges, { threshold: 2 });
     if (clusters.size === 0) return false;
 
-    const elementByIri = new Map(entityElements.map(el => [el.data.id, el]));
+    // Expand super-node cluster assignments back to individual entities
     const alreadyGrouped = new Set<string>();
     const newCache: ClusterEntry[] = [];
 
     for (const [, clusterInfo] of clusters) {
       const members: Reactodia.EntityElement[] = [];
-      for (const iri of clusterInfo.nodeIds) {
-        if (alreadyGrouped.has(iri)) continue;
-        const el = elementByIri.get(iri);
-        if (el) members.push(el);
+      for (const nodeId of clusterInfo.nodeIds) {
+        const expandedIris = l2Membership.get(nodeId) ?? new Set([nodeId]);
+        for (const iri of expandedIris) {
+          if (alreadyGrouped.has(iri)) continue;
+          const el = elementByIri.get(iri);
+          if (el) members.push(el);
+        }
       }
       if (members.length < 2) continue;
       for (const m of members) alreadyGrouped.add(m.data.id);
@@ -515,7 +572,8 @@ export class ClusterLevelManager {
       this._applyCache(model, this._l2Setup);
       return;
     }
-    const { groupMap, subclassParent } = this._dataProvider?.getStructuralGroups()
+    const viewMode = this._dataProvider?.currentViewMode ?? 'abox';
+    const { groupMap, subclassParent } = this._dataProvider?.getStructuralGroupsForView(viewMode)
       ?? { groupMap: new Map(), subclassParent: new Map() };
     const unpersistedIris = this._getUnpersistedIris(ctx);
     applyL2Fold(ctx, model, groupMap, subclassParent, unpersistedIris);
@@ -536,7 +594,8 @@ export class ClusterLevelManager {
         .map(el => [el.data.id as string, { ...el.position }])
     );
 
-    const groupMap = this._dataProvider?.getStructuralGroups()?.groupMap ?? new Map();
+    const viewMode = this._dataProvider?.currentViewMode ?? 'abox';
+    const groupMap = this._dataProvider?.getStructuralGroupsForView(viewMode)?.groupMap ?? new Map();
     const unpersistedIris = this._getUnpersistedIris(ctx);
 
     const rootToMembers = new Map<string, Reactodia.EntityElement[]>();
