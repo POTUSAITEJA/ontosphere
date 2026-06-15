@@ -26,6 +26,13 @@ export class RdfValidationProvider implements ValidationProvider {
     this._warningMap.clear();
   }
 
+  getAffectedIris(): Set<string> {
+    const iris = new Set<string>();
+    for (const k of this._errorMap.keys()) iris.add(k);
+    for (const k of this._warningMap.keys()) iris.add(k);
+    return iris;
+  }
+
   async validate(e: ValidationEvent): Promise<ValidationResult> {
     const items: ValidatedElement[] = [];
     const errors = e.target.properties?.[ERROR_PRED] ?? [];

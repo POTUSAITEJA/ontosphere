@@ -1030,6 +1030,12 @@ export default function ReactodiaCanvas() {
           });
         }
       }
+
+      // Re-trigger validation badges for elements now visible in this view mode
+      const affected = validationProvider.getAffectedIris();
+      if (affected.size > 0) {
+        ctx.editor.revalidateEntities(affected as ReadonlySet<Reactodia.ElementIri>);
+      }
     });
   }, [canvasState.viewMode]);
 
