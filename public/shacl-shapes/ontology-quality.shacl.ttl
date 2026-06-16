@@ -3,8 +3,13 @@
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 
-# Ontology quality shapes: best-practice constraints for OWL ontologies
+# ═══════════════════════════════════════════════════════════════════════
+# Ontology quality shapes — best-practice constraints for OWL + SKOS
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── owl:Class ─────────────────────────────────────────────────────────
 
 <urn:shacl:ontology-quality:ClassLabel>
   a sh:NodeShape ;
@@ -31,6 +36,8 @@
     sh:severity sh:Info ;
     sh:message "OWL class should have an rdfs:comment for documentation" ;
   ] .
+
+# ── owl:ObjectProperty ───────────────────────────────────────────────
 
 <urn:shacl:ontology-quality:ObjectPropertyLabel>
   a sh:NodeShape ;
@@ -62,6 +69,8 @@
     sh:message "Object property should declare rdfs:range" ;
   ] .
 
+# ── owl:DatatypeProperty ─────────────────────────────────────────────
+
 <urn:shacl:ontology-quality:DatatypePropertyLabel>
   a sh:NodeShape ;
   sh:targetClass owl:DatatypeProperty ;
@@ -70,4 +79,38 @@
     sh:minCount 1 ;
     sh:severity sh:Warning ;
     sh:message "Datatype property should have an rdfs:label" ;
+  ] .
+
+# ── skos:Concept ─────────────────────────────────────────────────────
+
+<urn:shacl:ontology-quality:ConceptPrefLabel>
+  a sh:NodeShape ;
+  sh:targetClass skos:Concept ;
+  sh:property [
+    sh:path skos:prefLabel ;
+    sh:minCount 1 ;
+    sh:severity sh:Warning ;
+    sh:message "SKOS concept must have a skos:prefLabel" ;
+  ] .
+
+<urn:shacl:ontology-quality:ConceptInScheme>
+  a sh:NodeShape ;
+  sh:targetClass skos:Concept ;
+  sh:property [
+    sh:path skos:inScheme ;
+    sh:minCount 1 ;
+    sh:severity sh:Info ;
+    sh:message "SKOS concept should be in a concept scheme (skos:inScheme)" ;
+  ] .
+
+# ── skos:ConceptScheme ───────────────────────────────────────────────
+
+<urn:shacl:ontology-quality:ConceptSchemeLabel>
+  a sh:NodeShape ;
+  sh:targetClass skos:ConceptScheme ;
+  sh:property [
+    sh:path rdfs:label ;
+    sh:minCount 1 ;
+    sh:severity sh:Warning ;
+    sh:message "SKOS concept scheme should have an rdfs:label" ;
   ] .

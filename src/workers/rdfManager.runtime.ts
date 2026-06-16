@@ -1226,6 +1226,13 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       }
     }
 
+    // Collect subjects present in user data so we can exclude ontology classes
+    // that reasoning materialized into the inferred graph.
+    const dataSubjects = new Set<string>();
+    for (const q of store.getQuads(null, null, null, dataGraph) || []) {
+      if (q.subject?.value) dataSubjects.add(q.subject.value);
+    }
+
     const violations: ShaclViolation[] = (report.results ?? []).map((r: any) => {
       let shapeVal = r.shape?.ptr?.term?.value ?? null;
       if (shapeVal && propShapeToNodeShape.has(shapeVal)) {
@@ -1244,7 +1251,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         constraint: r.constraintComponent?.value ?? null,
         source: "shacl" as const,
       };
-    });
+    }).filter((v: ShaclViolation) => !v.focusNode || dataSubjects.has(v.focusNode));
 
     return { conforms: report.conforms, violations, shapeCount };
   }

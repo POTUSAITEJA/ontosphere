@@ -98,9 +98,9 @@ slug: dave-inferred
 
 ---
 
-**Assistant:** Loading SHACL shapes for Employee validation.
+**Assistant:** Loading SHACL shapes designed for the reasoning demo entities.
 
-`{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"loadShacl","arguments":{"turtle":"@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix ex: <http://example.com/reasoning-demo#> .\n\nex:EmployeeShape a sh:NodeShape ;\n  sh:targetClass ex:Employee ;\n  sh:property [\n    sh:path ex:worksOn ;\n    sh:minCount 1 ;\n    sh:message \"Every Employee must work on at least one project.\"\n  ] ."}}}`
+`{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"loadShaclFromUrl","arguments":{"url":"http://localhost:8080/shacl-shapes/reasoning-demo.shacl.ttl"}}}`
 
 ```tool-result
 <!-- runner fills this in -->

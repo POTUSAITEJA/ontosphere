@@ -114,6 +114,7 @@ Pause one second, clear caption.
 
 Click the **Run reasoning** button (play icon **[14]**) in the top-right toolbar. A spinner
 appears in the reasoning status indicator **[12]** while Konclude runs in-browser via WASM.
+(v1.5.0 adds a 3-minute safety timeout on WASM calls to prevent browser hangs.)
 
 After one to two seconds, reasoning completes. New amber dashed edges and amber italic type
 annotations appear across the graph — these are inferred triples. The reasoning status
@@ -146,32 +147,18 @@ amber italic alongside the asserted types.
 
 **Scene 13 — Load shapes and validate (15 s)**
 
-This scene demonstrates AI-driven SHACL validation via MCP tools. An AI agent (or the
-viewer following along) calls:
+This scene demonstrates SHACL validation via the bundled shapes file. Load the
+pre-authored shapes from `public/shacl-shapes/reasoning-demo.shacl.ttl` which
+contains 4 constraint shapes targeting the reasoning demo entities:
 
-```
-loadShacl({ turtle: `
-  @prefix sh:  <http://www.w3.org/ns/shacl#> .
-  @prefix ex:  <http://example.org/> .
-  ex:EmployeeShape a sh:NodeShape ;
-    sh:targetClass ex:Employee ;
-    sh:property [
-      sh:path ex:worksFor ;
-      sh:minCount 1 ;
-      sh:message "Every Employee must work for at least one organisation."
-    ] .
-` })
-```
+- ProjectDescription (Violation): every Project must have rdfs:comment
+- ContractorSupervisor (Violation): every Contractor must have hasSupervisor
+- EmployeeJobTitle (Warning): employees should have jobTitle
+- IndividualDocumentation (Warning): named individuals should have rdfs:comment
 
-Then:
-
-```
-validateGraph({})
-```
-
-The validation result returns: conformance status and any violations. If violations exist,
-the report shows the focus node, the path, and the constraint message — e.g., "Carol: Every
-Employee must work for at least one organisation."
+Call `loadShaclFromUrl` with the shapes URL, then `validateGraph`. The result
+shows violations (projectAlpha missing description, frank missing supervisor)
+and warnings (employees missing job titles, individuals missing documentation).
 
 Caption "SHACL validation — load shapes, validate, inspect violations".
 Pause one second, clear caption.

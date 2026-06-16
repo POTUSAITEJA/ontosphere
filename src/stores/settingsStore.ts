@@ -49,7 +49,7 @@ const defaultSettings: Settings = {
     { url: "http://xmlns.com/foaf/0.1/", name: "FOAF", enabled: true },
     { url: "https://www.w3.org/TR/vocab-org/", name: "Organization", enabled: true },
   ],
-  shaclShapesUrl: "https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/shacl-shapes/ontology-quality.shacl.ttl",
+  shaclShapesUrl: "shacl-shapes/ontology-quality.shacl.ttl",
   autoReasoning: false,
   layoutAlgorithm: "horizontal",
   enableValidation: true,

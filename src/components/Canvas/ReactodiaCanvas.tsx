@@ -727,9 +727,34 @@ export default function ReactodiaCanvas() {
       }, 50);
     };
     model.events.on('changeCells', syncClustered);
+
+    // Revalidate elements that appear on the diagram after SHACL reasoning has
+    // already run — badges must show up even when the node was added later.
+    let revalidateTimer: ReturnType<typeof setTimeout> | null = null;
+    const revalidateNewElements = (e: { updateAll: boolean; changedElement?: unknown }) => {
+      const affected = validationProvider.getAffectedIris();
+      if (affected.size === 0) return;
+      if (revalidateTimer) clearTimeout(revalidateTimer);
+      revalidateTimer = setTimeout(() => {
+        revalidateTimer = null;
+        const toRevalidate = new Set<Reactodia.ElementIri>();
+        for (const el of model.elements) {
+          for (const entity of Reactodia.iterateEntitiesOf(el)) {
+            if (affected.has(entity.id)) toRevalidate.add(entity.id);
+          }
+        }
+        if (toRevalidate.size > 0) {
+          editor.revalidateEntities(toRevalidate);
+        }
+      }, 100);
+    };
+    model.events.on('changeCells', revalidateNewElements);
+
     signal.addEventListener('abort', () => {
       model.events.off('changeCells', syncClustered);
+      model.events.off('changeCells', revalidateNewElements);
       if (syncClusteredTimer) { clearTimeout(syncClusteredTimer); syncClusteredTimer = null; }
+      if (revalidateTimer) { clearTimeout(revalidateTimer); revalidateTimer = null; }
     });
   }, []);
 
