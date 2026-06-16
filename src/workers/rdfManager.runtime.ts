@@ -244,10 +244,25 @@ class KoncludeReasoner {
     });
   }
 
+  private static readonly CALL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+
   private _call(method: string, args: unknown[], transfer?: Transferable[]): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        this._handleTimeout(method);
+        reject(new Error(
+          `Konclude WASM timed out after ${KoncludeReasoner.CALL_TIMEOUT_MS / 1000}s during "${method}". ` +
+          `This usually means the input data contains OWL DL violations (e.g. literal values on ObjectProperties) ` +
+          `that cause non-termination. The reasoner worker has been recycled.`
+        ));
+      }, KoncludeReasoner.CALL_TIMEOUT_MS);
+
+      this.pending.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
       const request = { id, method, args };
       if (transfer && transfer.length > 0) {
         this.worker.postMessage(request, transfer);
@@ -255,6 +270,12 @@ class KoncludeReasoner {
         this.worker.postMessage(request);
       }
     });
+  }
+
+  private _handleTimeout(method: string): void {
+    console.error(`[Konclude] WASM call "${method}" timed out — terminating worker`);
+    this.terminate();
+    _koncludeReasoner = null;
   }
 
   reason(store: N3.Store): Promise<void> {
@@ -443,6 +464,13 @@ function getKoncludeReasoner(): KoncludeReasoner {
     _koncludeReasoner = new KoncludeReasoner();
   }
   return _koncludeReasoner;
+}
+
+function resetKoncludeReasoner(): void {
+  if (_koncludeReasoner) {
+    _koncludeReasoner.terminate();
+    _koncludeReasoner = null;
+  }
 }
 
 /**
@@ -1447,6 +1475,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               );
             }
           }
+          if (removed > 0) resetKoncludeReasoner();
           result = { graphName, removed };
           break;
         }
@@ -1787,6 +1816,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             emitChange({ reason: "unloadOntologySubjects", ontologyUrl: unloadUrl, removed: removedSubjects.length });
             emitSubjects(emission.subjects, emission.quadsBySubject, emission.snapshot, { reason: "unloadOntologySubjects", ontologyUrl: unloadUrl, removedSubjects });
           }
+          if (removedSubjects.length > 0) resetKoncludeReasoner();
           result = { removed: removedSubjects.length, removedSubjects };
           break;
         }
