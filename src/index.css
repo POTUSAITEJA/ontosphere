@@ -519,3 +519,32 @@
 .dark .rail-btn:hover {
   background: rgba(140, 110, 240, 0.15);
 }
+
+/* Touch device support for Reactodia validation indicators.
+   Native title tooltips don't fire on mobile — show via ::after on tap. */
+@media (hover: none) {
+  .reactodia-authoring-state__item-validation {
+    position: relative;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .reactodia-authoring-state__item-validation:hover::after,
+  .reactodia-authoring-state__item-validation:active::after {
+    content: attr(title);
+    position: absolute;
+    bottom: calc(100% + 4px);
+    right: 0;
+    background: var(--popover);
+    color: var(--popover-foreground);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    max-width: 240px;
+    min-width: 120px;
+    z-index: 1000;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+}

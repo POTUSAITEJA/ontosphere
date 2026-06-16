@@ -1,9 +1,6 @@
 import React from 'react';
 import type { ReasoningResult } from '../../utils/rdfManager';
-import { Popover, PopoverTrigger, PopoverContent } from '../ui/popover';
-import { toast } from 'sonner';
 import { useAppConfigStore } from '../../stores/appConfigStore';
-import { useOntologyStore } from '../../stores/ontologyStore';
 
 interface TopBarProps {
   viewMode: 'abox' | 'tbox';
@@ -12,13 +9,14 @@ interface TopBarProps {
   onOpenReasoningReport?: () => void;
   onRunReason?: () => void;
   onClearInferred?: () => void;
+  onToggleOntologyList?: () => void;
   currentReasoning?: ReasoningResult | null;
   isReasoning?: boolean;
   isInconsistentDetected?: boolean;
-  foldLevel?: number;       // 0=∅ 1=L1 2=L2 3=L3, default 0
-  maxFoldLevel?: number;    // max reachable level (2 normally, 3 after L3 ran)
-  canLevelUp?: boolean;     // ► enabled
-  canLevelDown?: boolean;   // ◄ enabled
+  foldLevel?: number;
+  maxFoldLevel?: number;
+  canLevelUp?: boolean;
+  canLevelDown?: boolean;
   onLevelUp?: () => void;
   onLevelDown?: () => void;
 }
@@ -30,6 +28,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenReasoningReport,
   onRunReason,
   onClearInferred,
+  onToggleOntologyList,
   currentReasoning = null,
   isReasoning = false,
   isInconsistentDetected = false,
@@ -40,19 +39,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onLevelUp,
   onLevelDown,
 }) => {
-  const config = useAppConfigStore((s) => s.config);
   const clusteringAlgorithm = useAppConfigStore(s => s.config.clusteringAlgorithm);
   const setClusteringAlgorithm = useAppConfigStore(s => s.setClusteringAlgorithm);
-  const loadedOntologies = useOntologyStore((s) => s.loadedOntologies ?? []);
-  const removeLoadedOntology = useOntologyStore((s) => s.removeLoadedOntology);
-  const addAdditionalOntology = useAppConfigStore((s) => s.addAdditionalOntology);
-  const removeAdditionalOntology = useAppConfigStore((s) => s.removeAdditionalOntology);
-  const additionalOntologies = useAppConfigStore((s) => s.config.additionalOntologies ?? []);
-
-  const normalizeOntUrl = (u: string) => {
-    try { return new URL(u.trim()).toString().replace(/[/#]+$/, '').replace(/^http:\/\//i, 'https://'); }
-    catch { return u.trim().replace(/[/#]+$/, '').replace(/^http:\/\//i, 'https://'); }
-  };
 
   return (
     <div className="reactodia-toolbar" role="toolbar" style={{
@@ -131,178 +119,92 @@ export const TopBar: React.FC<TopBarProps> = ({
         </button>
       </div>
 
-        {/* Ontology count */}
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="reactodia-btn reactodia-btn-default glass-btn"
-              title="Loaded ontologies"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="16"/>
-                <circle cx="5" cy="19" r="3"/><line x1="12" y1="16" x2="5" y2="16"/>
-                <circle cx="19" cy="19" r="3"/><line x1="12" y1="16" x2="19" y2="16"/>
-              </svg>
-              {ontologyCount}
-            </button>
-          </PopoverTrigger>
-        <PopoverContent align="end" className="w-96 p-3" style={{ zIndex: 100 }}>
-          <div className="space-y-2">
-            <h4 className="font-medium text-sm">Loaded ontologies</h4>
-            {loadedOntologies.length > 0 ? (
-              <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                {loadedOntologies.map((ont: any, idx: number) => {
-                  const ontologyUrl = ont?.url || ont?.uri;
-                  const normUrl = ontologyUrl ? normalizeOntUrl(ontologyUrl) : '';
-                  const inAutoloadConfig = normUrl && additionalOntologies.some(
-                    (u) => normalizeOntUrl(u) === normUrl
-                  );
-                  const isAutoSource = ont?.source === 'fetched' || ont?.source === 'auto';
-                  const isAutoloaded = !!(inAutoloadConfig || isAutoSource);
-                  const isCore = ont?.source === 'auto';
-                  return (
-                    <div key={idx} className="border-b pb-2 last:border-0">
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium text-sm">{ont?.name || 'Unknown'}</div>
-                          <div className="text-xs text-muted-foreground truncate">{ontologyUrl || 'No URI'}</div>
-                          <div className="text-xs mt-1 flex items-center gap-1">
-                            {ont?.loadStatus === 'fail'
-                              ? <span className="text-red-500" title={ont?.loadError}>Failed</span>
-                              : ont?.loadStatus === 'pending'
-                              ? <span className="text-muted-foreground">Loading…</span>
-                              : <span className="text-green-600">Loaded</span>
-                            }
-                            {isAutoloaded && <span className="text-muted-foreground">· autoload</span>}
-                            {isCore && <span className="text-muted-foreground">· core</span>}
-                          </div>
-                        </div>
-                        <div className="flex gap-1 shrink-0">
-                          {!isCore && ontologyUrl && (
-                            isAutoloaded ? (
-                              <button
-                                className="glass-btn"
-                                style={{ fontSize: 12, padding: '3px 8px' }}
-                                onClick={() => {
-                                  const exactEntry = additionalOntologies.find(u => normalizeOntUrl(u) === normUrl);
-                                  removeAdditionalOntology(exactEntry ?? ontologyUrl);
-                                  toast.success(`Removed ${ont?.name || 'ontology'} from autoload`);
-                                }}
-                              >
-                                Remove from autoload
-                              </button>
-                            ) : (
-                              <button
-                                className="glass-btn"
-                                style={{ fontSize: 12, padding: '3px 8px' }}
-                                onClick={() => {
-                                  addAdditionalOntology(ontologyUrl);
-                                  toast.success(`Added ${ont?.name || 'ontology'} to autoload`);
-                                }}
-                              >
-                                Add to autoload
-                              </button>
-                            )
-                          )}
-                          {config?.persistedAutoload && !isCore && (
-                            <button
-                              className="glass-btn glass-btn--status-error"
-                              style={{ fontSize: 12, padding: '3px 8px' }}
-                              onClick={() => {
-                                if (ontologyUrl) {
-                                  removeLoadedOntology(ontologyUrl);
-                                  toast.success(`Unloaded ${ont?.name || 'ontology'}`);
-                                }
-                              }}
-                            >
-                              Unload
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">No ontologies loaded</p>
-            )}
-          </div>
-        </PopoverContent>
-      </Popover>
+      {/* Ontology count — trigger only, panel renders in workspace container */}
+      <button
+        type="button"
+        className="reactodia-btn reactodia-btn-default glass-btn"
+        title="Loaded ontologies"
+        onClick={onToggleOntologyList}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+          <circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="16"/>
+          <circle cx="5" cy="19" r="3"/><line x1="12" y1="16" x2="5" y2="16"/>
+          <circle cx="19" cy="19" r="3"/><line x1="12" y1="16" x2="19" y2="16"/>
+        </svg>
+        {ontologyCount}
+      </button>
 
-        {/* Reasoning group */}
-        {onOpenReasoningReport && onRunReason && (
-          <div className="reactodia-btn-group reactodia-btn-group-sm">
-            <button
-              type="button"
-              className={`reactodia-btn reactodia-btn-default glass-btn ${
-                isReasoning ? '' :
-                !currentReasoning ? '' :
-                currentReasoning.isConsistent === false || (currentReasoning.errors?.length ?? 0) > 0
-                  ? 'glass-btn--status-error'
-                  : 'glass-btn--status-ok'
-              }`}
-              onClick={onOpenReasoningReport}
-              title={currentReasoning?.isConsistent === false ? "OWL DL inconsistency — see reasoning report" : "View reasoning results"}
-            >
-              {isReasoning ? (
-                isInconsistentDetected ? (
-                  <>
-                    <span style={{ flexShrink: 0 }}>⊗ Inconsistent —</span>
-                    <svg width="12" height="12" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="32" strokeLinecap="round" />
-                    </svg>
-                    Explaining…
-                  </>
-                ) : (
-                  <>
-                    <svg width="12" height="12" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="32" strokeLinecap="round" />
-                    </svg>
-                    Reasoning…
-                  </>
-                )
-              ) : currentReasoning ? (() => {
-                const errs = currentReasoning.errors?.length ?? 0;
-                const warns = currentReasoning.warnings?.length ?? 0;
-                const consistent = currentReasoning.isConsistent !== false;
-                if (!consistent) {
-                  return <span>⊗ Inconsistent · {errs > 0 ? `${errs} error${errs !== 1 ? 's' : ''}` : `${warns} warning${warns !== 1 ? 's' : ''}`}</span>;
-                }
-                if (errs > 0) {
-                  return <span>⚠ Consistent · {errs} error{errs !== 1 ? 's' : ''}</span>;
-                }
-                if (warns > 0) {
-                  return <span>✓ Consistent · {warns} warning{warns !== 1 ? 's' : ''}</span>;
-                }
-                return <span>✓ Consistent</span>;
-              })() : (
-                'Ready'
-              )}
-            </button>
-            <button
-              type="button"
-              className="reactodia-btn reactodia-btn-default"
-              onClick={onClearInferred}
-              disabled={!currentReasoning || isReasoning}
-              title="Clear inferred graph"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'inline', verticalAlign: 'middle' }}>
-                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="reactodia-btn reactodia-btn-default"
-              onClick={onRunReason}
-              title="Run reasoning"
-            >
-              ▶
-            </button>
-          </div>
-        )}
+      {/* Reasoning group */}
+      {onOpenReasoningReport && onRunReason && (
+        <div className="reactodia-btn-group reactodia-btn-group-sm">
+          <button
+            type="button"
+            className={`reactodia-btn reactodia-btn-default glass-btn ${
+              isReasoning ? '' :
+              !currentReasoning ? '' :
+              currentReasoning.isConsistent === false || (currentReasoning.errors?.length ?? 0) > 0
+                ? 'glass-btn--status-error'
+                : 'glass-btn--status-ok'
+            }`}
+            onClick={onOpenReasoningReport}
+            title={currentReasoning?.isConsistent === false ? "OWL DL inconsistency — see reasoning report" : "View reasoning results"}
+          >
+            {isReasoning ? (
+              isInconsistentDetected ? (
+                <>
+                  <span style={{ flexShrink: 0 }}>⊗ Inconsistent —</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="32" strokeLinecap="round" />
+                  </svg>
+                  Explaining…
+                </>
+              ) : (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="32" strokeLinecap="round" />
+                  </svg>
+                  Reasoning…
+                </>
+              )
+            ) : currentReasoning ? (() => {
+              const errs = currentReasoning.errors?.length ?? 0;
+              const warns = currentReasoning.warnings?.length ?? 0;
+              const consistent = currentReasoning.isConsistent !== false;
+              if (!consistent) {
+                return <span>⊗ Inconsistent · {errs > 0 ? `${errs} error${errs !== 1 ? 's' : ''}` : `${warns} warning${warns !== 1 ? 's' : ''}`}</span>;
+              }
+              if (errs > 0) {
+                return <span>⚠ Consistent · {errs} error{errs !== 1 ? 's' : ''}</span>;
+              }
+              if (warns > 0) {
+                return <span>✓ Consistent · {warns} warning{warns !== 1 ? 's' : ''}</span>;
+              }
+              return <span>✓ Consistent</span>;
+            })() : (
+              'Ready'
+            )}
+          </button>
+          <button
+            type="button"
+            className="reactodia-btn reactodia-btn-default"
+            onClick={onClearInferred}
+            disabled={!currentReasoning || isReasoning}
+            title="Clear inferred graph"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'inline', verticalAlign: 'middle' }}>
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="reactodia-btn reactodia-btn-default"
+            onClick={onRunReason}
+            title="Run reasoning"
+          >
+            ▶
+          </button>
+        </div>
+      )}
     </div>
   );
 };

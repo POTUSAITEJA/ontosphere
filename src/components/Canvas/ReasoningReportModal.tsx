@@ -245,13 +245,13 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
   if (!currentReasoning) {
     return (
       <div
-        className="absolute inset-0 z-50 flex items-start justify-center bg-black/60 pt-8"
+        className="absolute inset-0 z-50 flex items-start justify-center bg-black/60 pt-4"
         onMouseDown={e => { if (e.target === e.currentTarget) onOpenChange(false); }}
       >
-        <div className="w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg">
+        <div className="w-full max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-lg font-semibold">Reasoning Report</h2>
-            <button onClick={() => onOpenChange(false)} className="rounded-sm p-1 opacity-70 hover:opacity-100 hover:bg-accent transition-colors">
+            <button onClick={() => onOpenChange(false)} className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent transition-colors">
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -307,33 +307,33 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
         </div>
 
         <Tabs defaultValue="summary" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="summary">Summary</TabsTrigger>
-            <TabsTrigger value="errors" className="flex items-center gap-1">
+          <TabsList className="flex w-full overflow-x-auto">
+            <TabsTrigger value="summary" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3">Summary</TabsTrigger>
+            <TabsTrigger value="errors" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3 flex items-center gap-1">
               Errors
               {errors.length > 0 && (
-                <Badge variant="destructive" className="ml-1 h-4 w-4 p-0 text-xs">
+                <Badge variant="destructive" className="ml-1 h-4 min-w-4 px-1 text-[10px]">
                   {errors.length}
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="warnings" className="flex items-center gap-1">
+            <TabsTrigger value="warnings" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3 flex items-center gap-1">
               Warnings
               {warnings.length > 0 && (
-                <Badge variant="secondary" className="ml-1 h-4 w-4 p-0 text-xs">
+                <Badge variant="secondary" className="ml-1 h-4 min-w-4 px-1 text-[10px]">
                   {warnings.length}
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="inferences" className="flex items-center gap-1">
-              Inferences
+            <TabsTrigger value="inferences" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3 flex items-center gap-1">
+              Infer
               {inferences.length > 0 && (
-                <Badge variant="outline" className="ml-1 h-4 w-4 p-0 text-xs">
+                <Badge variant="outline" className="ml-1 h-4 min-w-4 px-1 text-[10px]">
                   {inferences.length}
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="history">History</TabsTrigger>
+            <TabsTrigger value="history" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3">History</TabsTrigger>
           </TabsList>
 
           <TabsContent value="summary" className="space-y-4">

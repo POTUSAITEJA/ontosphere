@@ -10,14 +10,7 @@ import { Switch } from '../ui/switch';
 import { Slider } from '../ui/slider';
 import { Badge } from '../ui/badge';
 import { Input } from '../ui/input';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '../ui/dialog';
+// Tailwind-native dialog (no Radix)
 import {
   Select,
   SelectContent,
@@ -260,59 +253,36 @@ export const ConfigurationPanel = ({
     toast.success('Configuration reset to defaults');
   };
 
+  if (!isOpen) return null;
+
   return (
-    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      {triggerVariant === 'fixed-icon' ? (
-        <div className="fixed top-4 right-4 z-50">
-          <DialogTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className="p-2 rounded-full bg-card/90 border border-border shadow-md hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-primary/40"
-              aria-label="Open configuration"
-            >
-              <Settings className="h-4 w-4" />
-              <span className="sr-only">Configuration</span>
-            </Button>
-          </DialogTrigger>
-        </div>
-      ) : triggerVariant === 'inline-icon' ? (
-        <DialogTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="p-2 rounded-md bg-card/90 border border-border shadow-sm hover:shadow focus:outline-none focus:ring-2 focus:ring-primary/20"
-            aria-label="Open configuration"
-            title="Open configuration"
+    <div
+      className="absolute inset-0 z-50 flex items-start justify-center bg-black/60 pt-4"
+      onMouseDown={e => { if (e.target === e.currentTarget) handleOpenChange(false); }}
+    >
+      <div className="w-full max-w-[min(90%,42rem)] max-h-[calc(100%-2rem)] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-lg font-semibold leading-none tracking-tight">Application Configuration</h2>
+            <p className="text-sm text-muted-foreground mt-1">Manage persistent settings and preferences for Ontosphere.</p>
+          </div>
+          <button
+            className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent transition-colors text-sm leading-none"
+            onClick={() => handleOpenChange(false)}
+            aria-label="Close"
           >
-            <Settings className="h-4 w-4" />
-            <span className="sr-only">Configuration</span>
-          </Button>
-        </DialogTrigger>
-      ) : triggerVariant === 'none' ? null : (
-        <DialogTrigger asChild>
-          <Button variant="outline" size="sm" className="shadow-glass backdrop-blur-sm">
-            <Settings className="h-4 w-4 mr-2" />
-            Config
-          </Button>
-        </DialogTrigger>
-      )}
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Application Configuration</DialogTitle>
-          <DialogDescription>
-            Manage persistent settings and preferences for Ontosphere.
-          </DialogDescription>
-        </DialogHeader>
+            ✕
+          </button>
+        </div>
 
         <Tabs defaultValue="ui" className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
-            <TabsTrigger value="ui">Interface</TabsTrigger>
-            <TabsTrigger value="performance">Performance</TabsTrigger>
-            <TabsTrigger value="reasoning">Reasoning</TabsTrigger>
-            <TabsTrigger value="shacl">SHACL</TabsTrigger>
-            <TabsTrigger value="workflows">Workflows</TabsTrigger>
-            <TabsTrigger value="advanced">Advanced</TabsTrigger>
+          <TabsList className="flex w-full overflow-x-auto">
+            <TabsTrigger value="ui" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3">Interface</TabsTrigger>
+            <TabsTrigger value="performance" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3">Perf</TabsTrigger>
+            <TabsTrigger value="reasoning" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3">Reasoning</TabsTrigger>
+            <TabsTrigger value="shacl" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3">SHACL</TabsTrigger>
+            <TabsTrigger value="workflows" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3">Workflows</TabsTrigger>
+            <TabsTrigger value="advanced" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3">Advanced</TabsTrigger>
           </TabsList>
 
           {/* UI Settings */}
@@ -1133,7 +1103,7 @@ export const ConfigurationPanel = ({
             </Card>
           </TabsContent>
         </Tabs>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 };

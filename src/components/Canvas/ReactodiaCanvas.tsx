@@ -34,6 +34,8 @@ import { runSilentLayout, type SilentLayoutEdge } from './layout/silentLayout';
 import type { StructuralGroupMap } from './core/structuralGroups';
 import { ClusterLevelManager } from './core/ClusterLevelManager';
 import { LayoutPopover } from './LayoutPopover';
+import { LayoutSettingsPanel } from './LayoutSettingsPanel';
+import { OntologyListPanel } from './OntologyListPanel';
 import { RdfPropertyEditor } from './rdfPropertyEditor';
 import { toast } from 'sonner';
 import { Label } from '../ui/label';
@@ -552,6 +554,8 @@ export default function ReactodiaCanvas() {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [loadOntologyOpen, setLoadOntologyOpen] = React.useState(false);
   const [ontologyUrlInput, setOntologyUrlInput] = React.useState('');
+  const [ontologyListOpen, setOntologyListOpen] = React.useState(false);
+  const [layoutPanelOpen, setLayoutPanelOpen] = React.useState(false);
   const [isReasoning, setIsReasoning] = React.useState(false);
   const [isInconsistentDetected, setIsInconsistentDetected] = React.useState(false);
   const [isClustered, setIsClustered] = React.useState(false);
@@ -1687,7 +1691,7 @@ export default function ReactodiaCanvas() {
 
   return (
     <div
-      style={{ width: '100vw', height: '100vh', position: 'relative', background: 'var(--canvas-bg)' }}
+      style={{ width: '100vw', height: '100dvh', position: 'relative', background: 'var(--canvas-bg)' }}
     >
       {/* Hidden file input for RDF file loading */}
       <input
@@ -1804,7 +1808,7 @@ export default function ReactodiaCanvas() {
 
                   {/* Action buttons — never shrinks, scrolls internally */}
                   <div className="reactodia-toolbar" role="toolbar" style={{ display: 'flex', alignItems: 'center', gap: 4, pointerEvents: 'auto', overflowX: 'auto', overflowY: 'hidden', flexShrink: isMobile ? 0 : 1, maxWidth: '100%', ...(isMobile ? { width: '100%' } : {}) }}>
-                    <LayoutPopover onApplyLayout={() => performLayoutRef.current?.()} />
+                    <LayoutPopover onToggle={() => { setLayoutPanelOpen(v => !v); setOntologyListOpen(false); }} />
                     <TopBar
                       viewMode={canvasState.viewMode as 'abox' | 'tbox'}
                       onViewModeChange={actions.setViewMode}
@@ -1816,6 +1820,7 @@ export default function ReactodiaCanvas() {
                       onLevelUp={handleLevelUp}
                       onLevelDown={handleLevelDown}
                       onOpenReasoningReport={() => actions.toggleReasoningReport(true)}
+                      onToggleOntologyList={() => { setOntologyListOpen(v => !v); setLayoutPanelOpen(false); }}
                       onRunReason={handleRunReasoning}
                       onClearInferred={handleClearInferred}
                       currentReasoning={currentReasoning}
@@ -1835,9 +1840,89 @@ export default function ReactodiaCanvas() {
           currentReasoning={currentReasoning}
           reasoningHistory={reasoningHistory}
         />
+
+        <OntologyListPanel
+          open={ontologyListOpen}
+          onClose={() => setOntologyListOpen(false)}
+        />
+
+        <LayoutSettingsPanel
+          open={layoutPanelOpen}
+          onClose={() => setLayoutPanelOpen(false)}
+          onApplyLayout={() => performLayoutRef.current?.()}
+        />
+
+        {loadOntologyOpen && (
+          <div
+            className="absolute inset-0 z-50 flex items-start justify-center bg-black/60 pt-4"
+            onMouseDown={(e) => { if (e.target === e.currentTarget) setLoadOntologyOpen(false); }}
+          >
+            <div className="w-full max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-lg font-semibold leading-none tracking-tight">Load Ontology</h2>
+                  <p className="text-sm text-muted-foreground mt-1">Enter a URL or type to search well-known ontologies.</p>
+                </div>
+                <button
+                  className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent transition-colors text-sm leading-none"
+                  onClick={() => setLoadOntologyOpen(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="ontologyUrl">Ontology URL</Label>
+                  <OntologyUrlAutoComplete
+                    value={ontologyUrlInput}
+                    onChange={setOntologyUrlInput}
+                  />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setLoadOntologyOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    disabled={!ontologyUrlInput.trim()}
+                    onClick={async () => {
+                      const url = ontologyUrlInput.trim();
+                      if (!url) return;
+                      try {
+                        actions.setLoading(true, 10, 'Loading ontology...');
+                        await loadAdditionalOntologies([url], (progress, message) => {
+                          actions.setLoading(true, Math.max(progress, 30), message);
+                        });
+                        const wk = Object.values(WELL_KNOWN_BY_PREFIX).find(e => e.url === url);
+                        const loadedLabel = wk?.name ?? (() => {
+                          try { return new URL(url).pathname.split('/').filter(Boolean).pop()?.replace(/\.[^.]+$/, '') || url; }
+                          catch { return url; }
+                        })();
+                        toast.success(`Loaded: ${loadedLabel}`);
+                        setOntologyUrlInput('');
+                        setLoadOntologyOpen(false);
+                      } catch (err) {
+                        console.error('Failed to load ontology:', err);
+                      } finally {
+                        actions.setLoading(false, 0, '');
+                      }
+                    }}
+                  >
+                    Load Ontology
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <ConfigurationPanel
+          triggerVariant="none"
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+        />
       </div>
 
-      {/* UI overlays — rendered OUTSIDE Workspace to avoid Radix UI + flushSync infinite loop */}
       <LeftSidebar
         isExpanded={sidebarExpanded}
         onToggle={() => setSidebarExpanded(v => !v)}
@@ -1848,79 +1933,7 @@ export default function ReactodiaCanvas() {
         onSettings={() => setSettingsOpen(true)}
       />
 
-
-
       {canvasState.showLegend && <ResizableNamespaceLegend />}
-
-      <ConfigurationPanel
-        triggerVariant="none"
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-      />
-
-      {loadOntologyOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-black/80 pt-16"
-          onMouseDown={(e) => { if (e.target === e.currentTarget) setLoadOntologyOpen(false); }}
-          onKeyDown={(e) => { if (e.key === 'Escape') setLoadOntologyOpen(false); }}
-        >
-          <div className="relative w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg">
-            <button
-              className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring"
-              onClick={() => setLoadOntologyOpen(false)}
-              aria-label="Close"
-            >
-              ✕
-            </button>
-            <div className="mb-4">
-              <h2 className="text-lg font-semibold leading-none tracking-tight">Load Ontology</h2>
-              <p className="text-sm text-muted-foreground mt-1">Enter a URL or type to search well-known ontologies.</p>
-            </div>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="ontologyUrl">Ontology URL</Label>
-                <OntologyUrlAutoComplete
-                  value={ontologyUrlInput}
-                  onChange={setOntologyUrlInput}
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setLoadOntologyOpen(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  disabled={!ontologyUrlInput.trim()}
-                  onClick={async () => {
-                    const url = ontologyUrlInput.trim();
-                    if (!url) return;
-                    try {
-                      actions.setLoading(true, 10, 'Loading ontology...');
-                      await loadAdditionalOntologies([url], (progress, message) => {
-                        actions.setLoading(true, Math.max(progress, 30), message);
-                      });
-                      const wk = Object.values(WELL_KNOWN_BY_PREFIX).find(e => e.url === url);
-                      const loadedLabel = wk?.name ?? (() => {
-                        try { return new URL(url).pathname.split('/').filter(Boolean).pop()?.replace(/\.[^.]+$/, '') || url; }
-                        catch { return url; }
-                      })();
-                      toast.success(`Loaded: ${loadedLabel}`);
-                      setOntologyUrlInput('');
-                      setLoadOntologyOpen(false);
-                    } catch (err) {
-                      // ontologyStore already fires a detailed CORS-aware error toast; this is a fallback
-                      console.error('Failed to load ontology:', err);
-                    } finally {
-                      actions.setLoading(false, 0, '');
-                    }
-                  }}
-                >
-                  Load Ontology
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
     </div>
   );

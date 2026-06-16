@@ -106,7 +106,7 @@ export const WorkflowTemplatePanel: React.FC<WorkflowTemplatePanelProps> = ({
           </div>
 
           {/* Content */}
-          <div className="p-3 space-y-2 max-h-[calc(100vh-200px)] overflow-y-auto">
+          <div className="p-3 space-y-2 max-h-[calc(100dvh-200px)] overflow-y-auto">
             {loading && (
               <div className="text-sm text-muted-foreground text-center py-8">
                 Loading templates...

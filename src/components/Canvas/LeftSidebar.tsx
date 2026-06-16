@@ -3,7 +3,7 @@
  * Collapsible sidebar with file operations and workflow templates
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { rdfManager } from '../../utils/rdfManager';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import {
@@ -88,11 +88,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [openAccordions, setOpenAccordions] = useState<string[]>(['ai-relay']);
   const panelOpenRequest = useShaclResultStore(s => s.panelOpenRequest);
+  const lastHandledRequest = useRef(0);
   const workflowCatalogEnabled = useAppConfigStore((s) => s.config.workflowCatalogEnabled);
   const { connected, callLog } = useRelayBridge(true);
 
   useEffect(() => {
-    if (panelOpenRequest > 0) {
+    if (panelOpenRequest > lastHandledRequest.current) {
+      lastHandledRequest.current = panelOpenRequest;
       setOpenAccordions(prev =>
         prev.includes('shacl-shapes') ? prev : [...prev, 'shacl-shapes']
       );
