@@ -3,10 +3,32 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
+/** MCP tool call parsed from a seed. */
+export interface ToolCall {
+  kind: 'tool';
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+/** UI action parsed from an ```action block. */
+export interface SeedAction {
+  kind: 'action';
+  type: 'click' | 'fill' | 'scroll' | 'drag' | 'hover' | 'key' | 'wait' | 'waitFor';
+  selector?: string;
+  value?: string;
+  dx?: number;
+  dy?: number;
+  ms?: number;
+}
+
+/** One step in a seed — either a tool call or a UI action. */
+export type SeedStep = ToolCall | SeedAction;
+
 /** Parsed turn from a seed markdown file. */
 export interface SeedTurn {
   caption: string;
   toolCalls: Array<{ name: string; arguments: Record<string, unknown> }>;
+  steps: SeedStep[];
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -99,10 +121,59 @@ export class DemoRunner {
     );
   }
 
+  // ── Seed parsing ─────────────────────────────────────────────────────────
+
+  /** Parse an ```action block line into a SeedAction. Returns null for unknown types. */
+  private static parseActionLine(line: string): SeedAction | null {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return null;
+
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx === -1) return null;
+
+    const type = trimmed.slice(0, colonIdx).trim().toLowerCase();
+    const rest = trimmed.slice(colonIdx + 1).trim();
+
+    switch (type) {
+      case 'click':
+        return { kind: 'action', type: 'click', selector: rest };
+      case 'hover':
+        return { kind: 'action', type: 'hover', selector: rest };
+      case 'waitfor':
+        return { kind: 'action', type: 'waitFor', selector: rest };
+      case 'key':
+        return { kind: 'action', type: 'key', value: rest };
+      case 'wait': {
+        const ms = parseInt(rest, 10);
+        return isNaN(ms) ? null : { kind: 'action', type: 'wait', ms };
+      }
+      case 'fill': {
+        const pipeIdx = rest.indexOf('|');
+        if (pipeIdx === -1) return null;
+        return { kind: 'action', type: 'fill', selector: rest.slice(0, pipeIdx).trim(), value: rest.slice(pipeIdx + 1).trim() };
+      }
+      case 'scroll': {
+        const parts = rest.split(/\s+/).map(Number);
+        if (parts.length < 2 || parts.some(isNaN)) return null;
+        return { kind: 'action', type: 'scroll', dx: parts[0], dy: parts[1] };
+      }
+      case 'drag': {
+        const pipeIdx = rest.indexOf('|');
+        if (pipeIdx === -1) return null;
+        const sel = rest.slice(0, pipeIdx).trim();
+        const nums = rest.slice(pipeIdx + 1).trim().split(/\s+/).map(Number);
+        if (nums.length < 2 || nums.some(isNaN)) return null;
+        return { kind: 'action', type: 'drag', selector: sel, dx: nums[0], dy: nums[1] };
+      }
+      default:
+        return null;
+    }
+  }
+
   /**
    * Parse a seed markdown file into turns.
-   * Each turn groups the JSON-RPC tool calls under the nearest preceding
-   * snapshot caption (or the assistant turn prose if no snapshot follows).
+   * Each turn groups JSON-RPC tool calls and UI action blocks under the nearest
+   * preceding snapshot caption (or the assistant turn prose if no snapshot follows).
    */
   static parseSeed(seedPath: string): SeedTurn[] {
     const content = fs.readFileSync(seedPath, 'utf8');
@@ -110,14 +181,13 @@ export class DemoRunner {
     const turns: SeedTurn[] = [];
     let current: SeedTurn | null = null;
 
-    // Match backtick-wrapped JSON-RPC tool calls
     const TOOL_RE = /^`(\{"jsonrpc":"2\.0",.+\})`\s*$/;
-    // Match snapshot blocks: ```snapshot ... caption: ... ```
     let inSnapshot = false;
     let snapshotCaption = '';
+    let inAction = false;
 
     const flush = () => {
-      if (current && current.toolCalls.length > 0) {
+      if (current && current.steps.length > 0) {
         turns.push(current);
         current = null;
       }
@@ -126,6 +196,7 @@ export class DemoRunner {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
+      // Snapshot blocks
       if (line.startsWith('```snapshot')) {
         inSnapshot = true;
         snapshotCaption = '';
@@ -142,11 +213,29 @@ export class DemoRunner {
         continue;
       }
 
+      // Action blocks
+      if (line.startsWith('```action')) {
+        inAction = true;
+        if (!current) current = { caption: '', toolCalls: [], steps: [] };
+        continue;
+      }
+      if (inAction) {
+        if (line.startsWith('```')) {
+          inAction = false;
+          continue;
+        }
+        const action = DemoRunner.parseActionLine(line);
+        if (action && current) {
+          current.steps.push(action);
+        }
+        continue;
+      }
+
       // New assistant or user turn marker
       if (line.startsWith('**Assistant:**') || line.startsWith('**You:**')) {
         flush();
         const prose = line.replace(/\*\*(?:Assistant|You):\*\*\s*/, '').trim();
-        current = { caption: prose.substring(0, 120), toolCalls: [] };
+        current = { caption: prose.substring(0, 120), toolCalls: [], steps: [] };
         continue;
       }
 
@@ -155,7 +244,9 @@ export class DemoRunner {
         try {
           const rpc = JSON.parse(toolMatch[1]);
           if (rpc.params?.name && current) {
-            current.toolCalls.push({ name: rpc.params.name, arguments: rpc.params.arguments ?? {} });
+            const tc: ToolCall = { kind: 'tool', name: rpc.params.name, arguments: rpc.params.arguments ?? {} };
+            current.toolCalls.push({ name: tc.name, arguments: tc.arguments });
+            current.steps.push(tc);
           }
         } catch { /* skip malformed */ }
       }
@@ -164,9 +255,53 @@ export class DemoRunner {
     return turns;
   }
 
+  // ── Step execution ───────────────────────────────────────────────────────
+
+  /** Execute a single UI action on the page. */
+  private async executeAction(action: SeedAction): Promise<void> {
+    switch (action.type) {
+      case 'click':
+        await this.page.locator(action.selector!).click();
+        break;
+      case 'hover':
+        await this.page.locator(action.selector!).hover();
+        break;
+      case 'waitFor':
+        await this.page.locator(action.selector!).waitFor({ state: 'visible', timeout: 10_000 });
+        break;
+      case 'key':
+        await this.page.keyboard.press(action.value!);
+        break;
+      case 'wait':
+        await this.page.waitForTimeout(action.ms!);
+        break;
+      case 'fill':
+        await this.page.locator(action.selector!).fill(action.value!);
+        break;
+      case 'scroll': {
+        const vp = this.page.viewportSize() ?? { width: 1920, height: 1080 };
+        await this.page.mouse.move(vp.width / 2, vp.height / 2);
+        await this.page.mouse.wheel(action.dx!, action.dy!);
+        break;
+      }
+      case 'drag': {
+        const box = await this.page.locator(action.selector!).boundingBox();
+        if (box) {
+          const cx = box.x + box.width / 2;
+          const cy = box.y + box.height / 2;
+          await this.page.mouse.move(cx, cy);
+          await this.page.mouse.down();
+          await this.page.mouse.move(cx + action.dx!, cy + action.dy!, { steps: 10 });
+          await this.page.mouse.up();
+        }
+        break;
+      }
+    }
+  }
+
   /**
-   * Execute a parsed seed turn: call each tool on the app frame,
-   * pausing between calls for visibility.
+   * Execute a parsed seed turn: run each step (tool call or UI action) in order,
+   * pausing between steps for visibility.
    */
   async runSeedTurn(
     turn: SeedTurn,
@@ -174,16 +309,22 @@ export class DemoRunner {
     opts: { captionAfter?: boolean } = {},
   ): Promise<void> {
     if (turn.caption && !opts.captionAfter) await this.caption(turn.caption);
-    for (const call of turn.toolCalls) {
-      await this.page.evaluate(
-        async ([name, args]: [string, Record<string, unknown>]) => {
-          const tool = (window as any).__mcpTools?.[name];
-          if (tool) await tool(args);
-        },
-        [call.name, call.arguments] as [string, Record<string, unknown>],
-      );
+
+    for (const step of turn.steps) {
+      if (step.kind === 'tool') {
+        await this.page.evaluate(
+          async ([name, args]: [string, Record<string, unknown>]) => {
+            const tool = (window as any).__mcpTools?.[name];
+            if (tool) await tool(args);
+          },
+          [step.name, step.arguments] as [string, Record<string, unknown>],
+        );
+      } else {
+        await this.executeAction(step);
+      }
       await this.page.waitForTimeout(delayMs);
     }
+
     if (turn.caption && opts.captionAfter) await this.caption(turn.caption);
   }
 
