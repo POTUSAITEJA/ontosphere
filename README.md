@@ -553,24 +553,38 @@ Recording demo videos
 ---------------------
 See [docs/demo-scripts/HOWTO.md](docs/demo-scripts/HOWTO.md) for the full guide.
 
-Two styles of demo video are supported:
+Three styles of demo video are supported:
 
 **Seed-driven** — write a seed markdown file in `docs/mcp-demo/seeds/` with JSON-RPC
-tool calls embedded in backtick blocks. The runner parses the seed and executes each
-turn directly against `window.__mcpTools`. Existing seeds: `foaf-social-network`,
-`reasoning-demo`, `scene-ontology`, `pizza-tutorial`.
+tool calls and `\`\`\`action` UI action blocks. The runner parses the seed and executes each
+step (tool calls via `window.__mcpTools`, UI actions via Playwright locators).
 
 **Chat-style (side-by-side)** — open `demo-stage.html` (mock chat left, app right),
 inject messages programmatically via `addChatMessage()`, and call tools on the app
 iframe via `callToolOnStage()`. No relay popup needed. Example: `pizza-tutorial-chat`.
 
-### Demo videos
+**Feature demos** — focused 60–90 second demos, one per paper feature section. All use
+`reasoning-demo.ttl` as the shared dataset. Seeds mix MCP tool calls with UI action blocks.
+
+### Feature demos (paper-aligned)
+
+| Video | Paper Section | Description |
+|-------|---------------|-------------|
+| [feat-loading.mp4](docs/demo-videos/feat-loading.mp4) | §3.1 Zero-Install + RDF Loading | URL param load, file upload, SPARQL endpoint |
+| [feat-exploration.mp4](docs/demo-videos/feat-exploration.mp4) | §3.2 Visual Exploration | TBox/ABox toggle, search, zoom/pan, minimap |
+| [feat-authoring.mp4](docs/demo-videos/feat-authoring.mp4) | §3.3 Canvas Authoring | Add class, draw edge, edit annotation, undo/redo |
+| [feat-clustering.mp4](docs/demo-videos/feat-clustering.mp4) | §3.4 Hierarchical Clustering | L2 fold/unfold, L3 Louvain community detection |
+| [feat-reasoning.mp4](docs/demo-videos/feat-reasoning.mp4) | §3.5 OWL 2 DL Reasoning | Konclude WASM, inferred triples, ABox inspection |
+| [feat-shacl.mp4](docs/demo-videos/feat-shacl.mp4) | §3.6 SHACL Validation | Load shapes, validate, reasoning interplay |
+| [feat-ai-relay.mp4](docs/demo-videos/feat-ai-relay.mp4) | §3.7 MCP + AI Relay | Bookmarklet injection, AI tool calls, relay round trip |
+
+### Workflow demos
 
 | Video | Description |
 |-------|-------------|
+| [iswc2026-comprehensive.mp4](docs/demo-videos/iswc2026-comprehensive.mp4) | Full 3-minute walkthrough of all features |
 | [advert-intro.mp4](docs/demo-videos/advert-intro.mp4) | Relay bookmarklet — mock chat + Ontosphere side by side |
 | [foaf-social-network.mp4](docs/demo-videos/foaf-social-network.mp4) | AI builds a FOAF social graph with DL reasoning |
-| [reasoning-demo.mp4](docs/demo-videos/reasoning-demo.mp4) | AI builds an OWL ontology and runs DL reasoning (Konclude) |
 | [scene-ontology.mp4](docs/demo-videos/scene-ontology.mp4) | AI builds a film scene ontology on BFO/RO upper ontology |
 | [pizza-tutorial.mp4](docs/demo-videos/pizza-tutorial.mp4) | Manchester Pizza Ontology — class hierarchy, disjointness, DL reasoning |
 | [pizza-tutorial-chat.mp4](docs/demo-videos/pizza-tutorial-chat.mp4) | OWL pizza tutorial as AI tutor lesson, side-by-side chat |

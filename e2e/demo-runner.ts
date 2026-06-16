@@ -78,8 +78,8 @@ export class DemoRunner {
     const bookmarkletSrc = fs.readFileSync(
       path.resolve(__dirname, '../public/relay-bookmarklet.js'), 'utf8',
     )
-      .replace("var RELAY_ORIGIN = '__RELAY_ORIGIN__';", `var RELAY_ORIGIN = '${this.baseURL}';`)
-      .replace("var RELAY_URL    = '__RELAY_URL__';",    `var RELAY_URL = '${this.baseURL}/relay.html';`);
+      .replace(/__RELAY_ORIGIN__/g, this.baseURL)
+      .replace(/__RELAY_URL__/g, `${this.baseURL}/relay.html`);
 
     const popupPromise = this.page.waitForEvent('popup', { timeout: 10_000 });
     await this.chatFrameHandle.evaluate((src) => {

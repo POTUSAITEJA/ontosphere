@@ -11,7 +11,7 @@ import { workerComunicaPlugin, diagnosticsChannelStub } from './vite-plugin-work
 // between the AI chat tab (cross-origin opener) and the Ontosphere app.
 function coiHeadersPlugin(): Plugin {
   function middleware(req: any, res: any, next: () => void) {
-    if (!req.url?.includes('relay.html') && !req.url?.includes('relay-mock-chat.html')) {
+    if (!req.url?.includes('relay.html') && !req.url?.includes('relay-mock-chat.html') && !req.url?.includes('demo-stage.html')) {
       res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
       res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
     }

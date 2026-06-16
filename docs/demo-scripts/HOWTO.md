@@ -37,6 +37,46 @@ for (const turn of turns) {
 `parseSeed()` extracts tool calls and snapshot captions from the seed markdown.
 `runSeedTurn()` calls each tool directly on `window.__mcpTools` and shows the caption overlay.
 
+## Extended seed format — action blocks
+
+Seeds support `\`\`\`action` fenced blocks alongside JSON-RPC tool calls. Each line is one UI action:
+
+```
+\`\`\`action
+click: [selector]               — click a Playwright locator
+fill: [selector] | [text]       — type text into an input (clears first)
+scroll: [deltaX] [deltaY]       — mouse wheel scroll at viewport center
+drag: [selector] | [dx] [dy]    — drag element by offset
+hover: [selector]               — hover over element
+key: [key]                      — press key (e.g. "Control+z", "Enter")
+wait: [ms]                      — pause for N milliseconds
+waitFor: [selector]             — wait for element to be visible
+\`\`\`
+```
+
+Actions and tool calls are interleaved in encounter order within each turn. Unknown action types are silently skipped. Seeds without action blocks work exactly as before.
+
+**When to use actions vs MCP tools:** Use action blocks when the UI interaction is more visually compelling than the MCP equivalent (clicking buttons, typing in search, undo/redo). Use MCP tool calls for bulk operations (loading data, running reasoning, adding many triples).
+
+## Feature demos
+
+Feature demos are focused 60–90 second recordings, one per paper feature section. All use `reasoning-demo.ttl` as the shared dataset for a consistent narrative.
+
+| Slug | Paper Section | Duration |
+|------|---------------|----------|
+| `feat-loading` | Zero-Install + RDF Loading | 60 s |
+| `feat-exploration` | Visual Exploration | 60 s |
+| `feat-authoring` | Canvas Authoring | 75 s |
+| `feat-clustering` | Hierarchical Clustering | 75 s |
+| `feat-reasoning` | OWL 2 DL Reasoning | 90 s |
+| `feat-shacl` | SHACL Validation | 75 s |
+| `feat-ai-relay` | MCP + AI Relay Bridge | 90 s |
+
+Each has three files:
+- Screenplay: `docs/demo-scripts/feat-<slug>.md`
+- Seed: `docs/mcp-demo/seeds/feat-<slug>.md`
+- Spec: `e2e/demo-feat-<slug>.spec.ts`
+
 ## Runner primitives (`e2e/demo-runner.ts`)
 
 | Method | Description |
@@ -173,10 +213,24 @@ tool-call completion at each turn.
 
 ---
 
-## Planned videos
+## Video inventory
 
-- `advert-intro` — done (relay demo, mock chat + app side by side)
-- `foaf-social-network` — done (seed-driven, FOAF + employment + OWL-RL reasoning)
-- `reasoning-demo` — done (seed-driven, OWL-RL class/property hierarchy)
-- `scene-ontology` — done (seed-driven, film ontology on BFO/RO)
-- `basic-demo` — next: walkthrough of core UI, manual node authoring, layout, export
+### Feature demos (paper-aligned)
+
+- `feat-loading` — zero-install entry, URL param loading
+- `feat-exploration` — TBox/ABox toggle, search, zoom, minimap
+- `feat-authoring` — add class, draw edge, edit annotation, undo/redo
+- `feat-clustering` — L2 fold/unfold, L3 Louvain community detection
+- `feat-reasoning` — Konclude WASM, inferred triples, ABox inspection
+- `feat-shacl` — SHACL validation, reasoning interplay
+- `feat-ai-relay` — bookmarklet injection, AI tool calls via relay
+
+### Workflow demos
+
+- `iswc2026-comprehensive` — full 3-minute walkthrough of all features
+- `advert-intro` — relay demo, mock chat + app side by side
+- `foaf-social-network` — seed-driven, FOAF + employment + OWL-RL reasoning
+- `scene-ontology` — seed-driven, film ontology on BFO/RO
+- `pizza-tutorial` — seed-driven, Manchester Pizza OWL tutorial
+- `pizza-tutorial-chat` — OWL pizza tutorial as AI tutor lesson, side-by-side chat
+- `openwebui-socratic` — live OWUI session (separate recording pipeline)

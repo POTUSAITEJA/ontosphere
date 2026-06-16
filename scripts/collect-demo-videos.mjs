@@ -72,6 +72,7 @@ for (const name of specNames) {
       ? 'split[_bm][_bi];[_bi]crop=700:40:100:30,boxblur=8:2[_bl];[_bm][_bl]overlay=100:30'
       : '';
     let mp4ok = false;
+    const mp4MtimeBefore = fs.existsSync(mp4) ? fs.statSync(mp4).mtimeMs : 0;
     try {
       execFileSync('python3', [
         path.join(__dirname, 'shorten-idle.py'),
@@ -84,9 +85,12 @@ for (const name of specNames) {
         noCutLast,     // 1 = keep last freeze block at full length
         extraVf,       // per-demo post-concat vf (blur, crop, etc.)
       ], { stdio: 'inherit' });
-      const mp4size = (fs.statSync(mp4).size / 1024).toFixed(0);
-      console.log(`✓ docs/demo-videos/${name}.mp4   (${mp4size} KB)`);
-      mp4ok = true;
+      const mp4MtimeAfter = fs.existsSync(mp4) ? fs.statSync(mp4).mtimeMs : 0;
+      if (mp4MtimeAfter > mp4MtimeBefore) {
+        const mp4size = (fs.statSync(mp4).size / 1024).toFixed(0);
+        console.log(`✓ docs/demo-videos/${name}.mp4   (${mp4size} KB)`);
+        mp4ok = true;
+      }
     } catch {
       console.warn(`  shorten-idle.py failed — falling back to plain mp4 conversion`);
     }
