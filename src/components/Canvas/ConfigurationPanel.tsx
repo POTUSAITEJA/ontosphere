@@ -29,6 +29,7 @@ import { fallback } from '../../utils/startupDebug';
 import { toast } from 'sonner';
 import { getRdfManager } from '../../utils/storeHelpers';
 import { loadWorkflowCatalog, getWorkflowCatalogStats } from '../../utils/workflowCatalogLoader';
+import { useShaclResultStore } from '../../stores/shaclResultStore';
 
 
 
@@ -598,6 +599,7 @@ export const ConfigurationPanel = ({
                             return;
                           }
                           toast.loading('Loading SHACL shapes...', { id: 'shacl-reload' });
+                          useShaclResultStore.getState().clearShaclResults();
                           const { loadShaclShapes } = await import('../../utils/shaclShapeLoader');
                           const manifest = await loadShaclShapes(url);
                           if (manifest.loaded.length > 0) {

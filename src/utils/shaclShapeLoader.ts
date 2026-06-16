@@ -76,6 +76,9 @@ export async function loadShaclShapes(urlInput: string): Promise<ShapeLoadManife
   const loaded: ShapeLoadEntry[] = [];
   const errors: ShapeLoadError[] = [];
 
+  // Clear existing shapes so the graph only contains triples from the new source
+  await rdfManager.removeGraphAsync(SHACL_GRAPH);
+
   const urls = urlInput.split(',').map(s => s.trim()).filter(Boolean);
 
   for (const url of urls) {

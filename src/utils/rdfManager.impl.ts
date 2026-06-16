@@ -1096,6 +1096,11 @@ export class RDFManagerImpl {
     });
   }
 
+  async removeGraphAsync(graphName: string): Promise<void> {
+    if (!graphName) return;
+    await this.worker.call("syncRemoveGraph", { graphName });
+  }
+
   getNamespaces(): NamespaceEntry[] {
     return [...this.namespaces];
   }
