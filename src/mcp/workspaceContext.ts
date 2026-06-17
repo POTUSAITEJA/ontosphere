@@ -47,6 +47,7 @@ export function setWorkspaceContext(
   dataProvider: N3DataProvider
 ): void {
   refs = { ctx, dataProvider };
+  (window as any).__workspaceCtx = ctx;
   if (pendingReasoningCallback) {
     refs.runReasoning = pendingReasoningCallback;
     pendingReasoningCallback = null;

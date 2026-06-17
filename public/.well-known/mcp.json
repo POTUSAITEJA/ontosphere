@@ -1,6 +1,6 @@
 {
   "name": "Ontosphere",
-  "description": "Browser-based RDF/ontology knowledge graph editor. ABox authoring, DL reasoning by Konclude, layout, and export. All client-side, no backend.\n\nKEY RULES FOR AI AGENTS:\n• Two canvas views — ABox (individuals) and TBox (classes/properties). addNode writes to the store; the canvas shows the node in the correct view automatically. Use setViewMode to switch.\n• Ontology discovery first: loadOntology(query=\"use case\") → loadOntology(url=\"<prefix>\") × N → setNamespace × N. foaf: is pre-loaded. OWL/RDFS/RDF/XSD always available.\n• Prefer domain ontologies over schema.org: foaf:Person, ical:Vevent, org:Organization, bot:Building.\n• For 5+ individuals use loadRdf(turtle=...) instead of N×addNode — one round-trip.\n• OWL restrictions: use loadRdf(turtle=...) OR addTriple with blank-node labels (_:b0, _:b1…) — both paths work.\n• Batch up to 5 non-dependent calls per relay message. Send discovery (getNodes, queryGraph) alone.\n• Tool failed? Call help({tool:\"<name>\"}) for the exact parameter schema.\n\nGRAPH ARCHITECTURE\nurn:vg:data = asserted triples (all mutations go here)\nurn:vg:inferred = DL-derived (Konclude; runReasoning writes; clearInferred removes)\nurn:vg:shapes = SHACL constraints (loadShacl writes; validateGraph reads)\n\nPre-loaded prefixes: rdf: rdfs: owl: xsd: foaf: skos: dc: dcterms: schema: ex:\nAfter loadOntology or setNamespace, those prefixes work in all tool IRI arguments.\n\nRecommended workflow:\nloadOntology(query=…) → loadOntology(url=\"<prefix>\") × N → setNamespace × N\n→ setViewMode(\"tbox\") → addNode × N (owl:Class) → addTriple × N → runLayout\n→ setViewMode(\"abox\") → loadRdf(turtle=...) OR addNode × N → addTriple × N → runLayout\n→ runReasoning → fitCanvas + exportImage(svg)  [last three safe to batch]\n\nAgent integration: (1) Claude Code / Playwright — window.__mcpTools[name](params) via browser_evaluate. (2) AI Relay Bridge — any AI chat controls Ontosphere via bookmarklet relay; see docs/relay-bridge.md and AGENTS.md.",
+  "description": "Browser-based RDF/ontology knowledge graph editor. ABox authoring, DL reasoning by Konclude, layout, and export. All client-side, no backend.\n\nKEY RULES FOR AI AGENTS:\n• Two canvas views — ABox (individuals) and TBox (classes/properties). addNode writes to the store; the canvas shows the node in the correct view automatically. Use setViewMode to switch.\n• Ontology discovery first: loadOntology(query=\"use case\") → loadOntology(url=\"<prefix>\") × N → setNamespace × N. foaf: is pre-loaded. OWL/RDFS/RDF/XSD always available.\n• Prefer domain ontologies over schema.org: foaf:Person, ical:Vevent, org:Organization, bot:Building.\n• For 5+ individuals use loadRdf(turtle=...) instead of N×addNode — one round-trip.\n• OWL restrictions: use loadRdf(turtle=...) OR addTriple with blank-node labels (_:b0, _:b1…) — both paths work.\n• Batch up to 5 non-dependent calls per relay message. Send discovery (getNodes, queryGraph) alone.\n• Tool failed? Call help({tool:\"<name>\"}) for the exact parameter schema.\n\nGRAPH ARCHITECTURE\nurn:vg:data = asserted triples (all mutations go here)\nurn:vg:inferred = DL-derived (Konclude; runReasoning writes; clearInferred removes)\nurn:vg:shapes = SHACL constraints (loadShacl writes; validateGraph reads)\n\nPre-loaded prefixes: rdf: rdfs: owl: xsd: foaf: skos: dc: dcterms: schema: ex:\nAfter loadOntology or setNamespace, those prefixes work in all tool IRI arguments.\n\nRecommended workflow:\nloadOntology(query=…) → loadOntology(url=\"<prefix>\") × N → setNamespace × N\n→ setViewMode(\"tbox\") → addNode × N (owl:Class) → addTriple × N → runLayout\n→ setViewMode(\"abox\") → loadRdf(turtle=...) OR addNode × N → addTriple × N → runLayout\n→ runReasoning (includes SHACL validation by default) → getGraphState (check shacl.conforms) → fitCanvas + exportImage(svg)  [last three safe to batch]\n\nAgent integration: (1) Claude Code / Playwright — window.__mcpTools[name](params) via browser_evaluate. (2) AI Relay Bridge — any AI chat controls Ontosphere via bookmarklet relay; see docs/relay-bridge.md and AGENTS.md.",
   "tools": [
     {
       "name": "loadRdf",
@@ -351,7 +351,7 @@
     },
     {
       "name": "runReasoning",
-      "description": "Run OWL reasoning over the loaded graph and infer new triples. Default backend is 'konclude' (full OWL 2 DL). Pass reasonerBackend='n3' to use N3 rule-based inference instead. Pass clearBefore=true to clear previous inferences first.",
+      "description": "Run OWL reasoning over the loaded graph and infer new triples. Default backend is 'konclude' (full OWL 2 DL). Pass reasonerBackend='n3' to use N3 rule-based inference instead. Pass clearBefore=true to clear previous inferences first. SHACL validation runs by default after reasoning if shapes are loaded; pass shaclValidation=false to skip.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -366,6 +366,11 @@
               "n3"
             ],
             "description": "Reasoning backend: 'konclude' (OWL 2 DL, default) or 'n3' (N3 rule-based)"
+          },
+          "shaclValidation": {
+            "type": "boolean",
+            "default": true,
+            "description": "Run SHACL validation after reasoning (default true). Pass false to skip."
           }
         }
       }
@@ -386,7 +391,7 @@
     },
     {
       "name": "getGraphState",
-      "description": "Return a summary of the current canvas: node count, link count, and per-node IRI/label/types. Use to verify canvas state before or after mutations.",
+      "description": "Return a summary of the current canvas: node count, link count, per-node IRI/label/types, and SHACL validation status (shapesLoaded, conforms, errorCount, warningCount). Use to verify canvas state and check SHACL compliance.",
       "inputSchema": {
         "type": "object"
       }
@@ -437,7 +442,7 @@
     },
     {
       "name": "getNodeDetails",
-      "description": "Fetch every triple for one entity — asserted (urn:vg:data) and inferred (urn:vg:inferred). Inferred triples are marked inferred:true. Use after runReasoning to inspect what was derived. Call getNodes first to find the IRI.",
+      "description": "Fetch every triple for one entity — asserted (urn:vg:data) and inferred (urn:vg:inferred). Inferred triples are marked inferred:true. Also returns shaclMessages[] with any SHACL validation errors/warnings for this node (severity, rule, message, sourceShape). Use after runReasoning to inspect inferences and SHACL compliance. Call getNodes first to find the IRI.",
       "inputSchema": {
         "type": "object",
         "required": [

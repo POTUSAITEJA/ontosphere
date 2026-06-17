@@ -1,18 +1,114 @@
 # Feature Demo: Canvas Authoring
 
 > Seed for the feat-authoring demo recording.
-> Shows adding a class, drawing an edge, editing annotations, undo/redo.
+> Shows TBox authoring from empty canvas: create classes via class tree UI,
+> draw edges via halo establish-link drag, demonstrate undo and save —
+> full user interaction path.
 >
 > Spec: `e2e/demo-feat-authoring.spec.ts`
-> Dataset: `public/reasoning-demo.ttl`
 
 ---
 
-**Assistant:** Loading the reasoning demo ontology as a starting canvas.
+**Assistant:** Switching to TBox mode on an empty canvas — OWL vocabulary is ready.
 
-`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"loadRdf","arguments":{"url":"http://localhost:8080/reasoning-demo.ttl"}}}`
+`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"setViewMode","arguments":{"mode":"tbox"}}}`
+
+```tool-result
+<!-- runner fills this in -->
+```
+
+```snapshot
+caption: Empty TBox canvas — ready to author an ontology
+slug: empty-tbox
+```
+
+---
+
+**Assistant:** Creating the first class — Employee — via the class tree.
+
+```action
+click: input[placeholder*="earch"]
+wait: 300
+fill: input[placeholder*="earch"] | Class
+wait: 800
+waitFor: a[href$="owl#Class"] ~ .reactodia-class-tree-item__create-button
+click: a[href$="owl#Class"] ~ .reactodia-class-tree-item__create-button
+waitFor: .reactodia-dialog
+wait: 400
+fill: input.font-mono | http://example.com/Employee
+wait: 300
+click: .reactodia-dialog button:has-text("Apply")
+wait: 1000
+```
+
+```snapshot
+caption: Employee class — created from the class tree
+slug: employee-added
+```
+
+---
+
+**Assistant:** Adding a second class — Person.
+
+```action
+click: a[href$="owl#Class"] ~ .reactodia-class-tree-item__create-button
+waitFor: .reactodia-dialog
+wait: 400
+fill: input.font-mono | http://example.com/Person
+wait: 300
+click: .reactodia-dialog button:has-text("Apply")
+wait: 1000
+```
+
+```snapshot
+caption: Person class added alongside Employee
+slug: person-added
+```
+
+---
+
+**Assistant:** Applying layout before drawing the connection.
+
 `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-tb","spacing":200}}}`
-`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"expandNode","arguments":{}}}`
+`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fitCanvas","arguments":{}}}`
+
+```tool-result
+<!-- runner fills this in -->
+```
+
+```snapshot
+caption: Layout applied — nodes positioned for connection
+slug: pre-edge-layout
+```
+
+---
+
+**Assistant:** Drawing a connection — drag from the establish-link halo button to the target node.
+
+```action
+click: [data-element-id]:has-text("Employee")
+wait: 800
+waitFor: .reactodia-selection-action__establish-link
+dragTo: .reactodia-selection-action__establish-link | [data-element-id]:has-text("Person")
+waitFor: .reactodia-dialog input[placeholder*="predicate"]
+wait: 300
+fill: .reactodia-dialog input[placeholder*="predicate"] | subClass
+wait: 500
+click: [role="option"]:has-text("subClassOf")
+wait: 300
+click: .reactodia-dialog button:has-text("Apply")
+wait: 1000
+```
+
+```snapshot
+caption: Employee ─subClassOf→ Person — relation drawn via halo drag
+slug: edge-drawn
+```
+
+---
+
+**Assistant:** Applying layout for a clean hierarchy.
+
 `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-tb","spacing":200}}}`
 `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"fitCanvas","arguments":{}}}`
 
@@ -21,74 +117,69 @@
 ```
 
 ```snapshot
-caption: Loaded ontology — ready to author new entities
-slug: loaded
+caption: Clean class hierarchy after layout
+slug: layout-done
 ```
 
 ---
 
-**Assistant:** Adding a new Intern class to the ontology.
-
-`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"addNode","arguments":{"iri":"http://example.com/reasoning-demo#Intern","typeIri":"http://www.w3.org/2002/07/owl#Class","label":"Intern"}}}`
-
-```tool-result
-<!-- runner fills this in -->
-```
-
-```snapshot
-caption: New class "Intern" added to the TBox
-slug: intern-added
-```
-
----
-
-**Assistant:** Drawing a subClassOf edge from Intern to Employee.
-
-`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"addTriple","arguments":{"subjectIri":"http://example.com/reasoning-demo#Intern","predicateIri":"http://www.w3.org/2000/01/rdf-schema#subClassOf","objectIri":"http://example.com/reasoning-demo#Employee"}}}`
-`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-tb","spacing":200}}}`
-`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"fitCanvas","arguments":{}}}`
-
-```tool-result
-<!-- runner fills this in -->
-```
-
-```snapshot
-caption: Intern ─subClassOf→ Employee — edge drawn on canvas
-slug: edge-drawn
-```
-
----
-
-**Assistant:** Editing an annotation on the Intern class.
-
-`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"updateNode","arguments":{"iri":"http://example.com/reasoning-demo#Intern","setProperties":[{"predicateIri":"http://www.w3.org/2000/01/rdf-schema#comment","value":"A temporary staff member under supervision."}]}}}`
-`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"expandNode","arguments":{"iri":"http://example.com/reasoning-demo#Intern","expand":true}}}`
-
-```tool-result
-<!-- runner fills this in -->
-```
-
-```snapshot
-caption: Annotation edited — rdfs:comment visible in property card
-slug: annotation-edited
-```
-
----
-
-**Assistant:** Demonstrating undo and redo.
+**Assistant:** Selecting Employee to show the authoring halo.
 
 ```action
-key: Control+z
-wait: 1200
-key: Control+z
-wait: 1200
-key: Control+Shift+z
-wait: 1200
-key: Control+Shift+z
-wait: 800
+click: [data-element-id]:has-text("Employee")
+wait: 1500
 ```
 
 ```snapshot
-caption: Undo / Redo — full edit history on the canvas
-slug: undo-redo
+caption: Authoring mode — uncommitted changes highlighted on the halo
+slug: authoring-state
+```
+
+---
+
+**Assistant:** Adding a third class — Department — to demonstrate undo.
+
+```action
+click: a[href$="owl#Class"] ~ .reactodia-class-tree-item__create-button
+waitFor: .reactodia-dialog
+wait: 400
+fill: input.font-mono | http://example.com/Department
+wait: 300
+click: .reactodia-dialog button:has-text("Apply")
+wait: 1000
+```
+
+```snapshot
+caption: Department added — three classes on the canvas
+slug: third-node
+```
+
+---
+
+**Assistant:** Clicking undo — Department disappears, edit history preserved.
+
+```action
+click: .reactodia-toolbar-action__undo
+wait: 500
+click: .reactodia-toolbar-action__undo
+wait: 1500
+```
+
+```snapshot
+caption: Undo — Department removed, edit history intact
+slug: after-undo
+```
+
+---
+
+**Assistant:** Saving all authoring changes to the N3 store.
+
+```action
+click: .reactodia-toolbar-action__save
+wait: 1500
+```
+
+```snapshot
+caption: Save — changes persisted to the N3 store
+slug: after-save
 ```
