@@ -13,8 +13,9 @@ export interface ToolCall {
 /** UI action parsed from an ```action block. */
 export interface SeedAction {
   kind: 'action';
-  type: 'click' | 'fill' | 'scroll' | 'drag' | 'hover' | 'key' | 'wait' | 'waitFor';
+  type: 'click' | 'fill' | 'scroll' | 'drag' | 'dragTo' | 'select' | 'hover' | 'key' | 'wait' | 'waitFor';
   selector?: string;
+  targetSelector?: string;
   value?: string;
   dx?: number;
   dy?: number;
@@ -27,17 +28,34 @@ export type SeedStep = ToolCall | SeedAction;
 /** Parsed turn from a seed markdown file. */
 export interface SeedTurn {
   caption: string;
+  slug?: string;
   toolCalls: Array<{ name: string; arguments: Record<string, unknown> }>;
   steps: SeedStep[];
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/** Metadata recorded for each keyframe screenshot. */
+export interface KeyframeMeta {
+  slug: string;
+  stepIndex: number;
+  caption: string;
+  file: string;
+  elementCount: number;
+  timestampMs: number;
+}
+
 export class DemoRunner {
   private chatFrame!: FrameLocator;
   private appFrame!: FrameLocator;
   private chatFrameHandle!: Frame;
   private appFrameHandle!: Frame;
+  private keyframes: KeyframeMeta[] = [];
+  private demoName = '';
+  private stepCounter = 0;
+  private startTime = Date.now();
+  private cursorPos = { x: 0, y: 0 };
+  private cursorReady = false;
 
   constructor(private page: Page, private baseURL: string) {}
 
@@ -165,6 +183,16 @@ export class DemoRunner {
         if (nums.length < 2 || nums.some(isNaN)) return null;
         return { kind: 'action', type: 'drag', selector: sel, dx: nums[0], dy: nums[1] };
       }
+      case 'dragto': {
+        const pipeIdx = rest.indexOf('|');
+        if (pipeIdx === -1) return null;
+        return { kind: 'action', type: 'dragTo', selector: rest.slice(0, pipeIdx).trim(), targetSelector: rest.slice(pipeIdx + 1).trim() };
+      }
+      case 'select': {
+        const pipeIdx = rest.indexOf('|');
+        if (pipeIdx === -1) return null;
+        return { kind: 'action', type: 'select', selector: rest.slice(0, pipeIdx).trim(), value: rest.slice(pipeIdx + 1).trim() };
+      }
       default:
         return null;
     }
@@ -184,6 +212,7 @@ export class DemoRunner {
     const TOOL_RE = /^`(\{"jsonrpc":"2\.0",.+\})`\s*$/;
     let inSnapshot = false;
     let snapshotCaption = '';
+    let snapshotSlug = '';
     let inAction = false;
 
     const flush = () => {
@@ -200,16 +229,22 @@ export class DemoRunner {
       if (line.startsWith('```snapshot')) {
         inSnapshot = true;
         snapshotCaption = '';
+        snapshotSlug = '';
         continue;
       }
       if (inSnapshot) {
         if (line.startsWith('```')) {
           inSnapshot = false;
-          if (current) current.caption = snapshotCaption || current.caption;
+          if (current) {
+            current.caption = snapshotCaption || current.caption;
+            if (snapshotSlug) current.slug = snapshotSlug;
+          }
           continue;
         }
         const m = line.match(/^caption:\s*(.+)/);
         if (m) snapshotCaption = m[1].trim();
+        const s = line.match(/^slug:\s*(.+)/);
+        if (s) snapshotSlug = s[1].trim();
         continue;
       }
 
@@ -255,17 +290,80 @@ export class DemoRunner {
     return turns;
   }
 
+  // ── Animated cursor ──────────────────────────────────────────────────────
+
+  private async initCursor(): Promise<void> {
+    if (this.cursorReady) return;
+    const vp = this.page.viewportSize() ?? { width: 1920, height: 1080 };
+    this.cursorPos = { x: vp.width / 2, y: vp.height / 2 };
+    await this.page.evaluate(([x, y]: [number, number]) => {
+      const el = document.createElement('div');
+      el.id = '__demo_cursor__';
+      el.innerHTML = `<svg width="36" height="44" viewBox="0 0 36 44" xmlns="http://www.w3.org/2000/svg">
+        <path d="M2,2 L2,36 L10,28 L18,44 L22,42 L14,26 L26,26 Z"
+              fill="#fff" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+      </svg>`;
+      Object.assign(el.style, {
+        position: 'fixed',
+        left: `${x}px`,
+        top: `${y}px`,
+        width: '36px',
+        height: '44px',
+        pointerEvents: 'none',
+        zIndex: '999998',
+        filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.35))',
+        transition: 'none',
+      });
+      document.body.appendChild(el);
+    }, [this.cursorPos.x, this.cursorPos.y] as [number, number]);
+    this.cursorReady = true;
+  }
+
+  /**
+   * Animate the visible cursor overlay + real Playwright mouse to (x, y).
+   * Uses CSS transition for smooth visual movement and mouse.move for event targets.
+   */
+  private async animateCursorTo(x: number, y: number, durationMs = 400): Promise<void> {
+    await this.initCursor();
+    const steps = Math.max(8, Math.round(durationMs / 16));
+    await this.page.evaluate(([tx, ty, dur]: [number, number, number]) => {
+      const el = document.getElementById('__demo_cursor__');
+      if (!el) return;
+      el.style.transition = `left ${dur}ms cubic-bezier(0.25,0.1,0.25,1), top ${dur}ms cubic-bezier(0.25,0.1,0.25,1)`;
+      el.style.left = `${tx}px`;
+      el.style.top = `${ty}px`;
+    }, [x, y, durationMs] as [number, number, number]);
+    await this.page.mouse.move(x, y, { steps });
+    await this.page.waitForTimeout(Math.max(50, durationMs - 100));
+    this.cursorPos = { x, y };
+  }
+
+  /** Get center coordinates of an element, or null if not found. */
+  private async getCenter(selector: string): Promise<{ x: number; y: number } | null> {
+    try {
+      const box = await this.page.locator(selector).first().boundingBox();
+      if (!box) return null;
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    } catch { return null; }
+  }
+
   // ── Step execution ───────────────────────────────────────────────────────
 
   /** Execute a single UI action on the page. */
   private async executeAction(action: SeedAction): Promise<void> {
     switch (action.type) {
-      case 'click':
+      case 'click': {
+        const c = await this.getCenter(action.selector!);
+        if (c) await this.animateCursorTo(c.x, c.y);
         await this.page.locator(action.selector!).click();
         break;
-      case 'hover':
+      }
+      case 'hover': {
+        const c = await this.getCenter(action.selector!);
+        if (c) await this.animateCursorTo(c.x, c.y);
         await this.page.locator(action.selector!).hover();
         break;
+      }
       case 'waitFor':
         await this.page.locator(action.selector!).waitFor({ state: 'visible', timeout: 10_000 });
         break;
@@ -275,9 +373,12 @@ export class DemoRunner {
       case 'wait':
         await this.page.waitForTimeout(action.ms!);
         break;
-      case 'fill':
+      case 'fill': {
+        const c = await this.getCenter(action.selector!);
+        if (c) await this.animateCursorTo(c.x, c.y);
         await this.page.locator(action.selector!).fill(action.value!);
         break;
+      }
       case 'scroll': {
         const vp = this.page.viewportSize() ?? { width: 1920, height: 1080 };
         await this.page.mouse.move(vp.width / 2, vp.height / 2);
@@ -289,9 +390,42 @@ export class DemoRunner {
         if (box) {
           const cx = box.x + box.width / 2;
           const cy = box.y + box.height / 2;
-          await this.page.mouse.move(cx, cy);
+          await this.animateCursorTo(cx, cy);
           await this.page.mouse.down();
-          await this.page.mouse.move(cx + action.dx!, cy + action.dy!, { steps: 10 });
+          const tx = cx + action.dx!;
+          const ty = cy + action.dy!;
+          await this.animateCursorTo(tx, ty, 600);
+          await this.page.mouse.up();
+        }
+        break;
+      }
+      case 'select': {
+        const c = await this.getCenter(action.selector!);
+        if (c) await this.animateCursorTo(c.x, c.y);
+        const selectEl = this.page.locator(action.selector!);
+        const matchValue = action.value!;
+        const optionValue = await selectEl.evaluate((sel: HTMLSelectElement, match: string) => {
+          for (const opt of Array.from(sel.options)) {
+            if (opt.text.includes(match)) return opt.value;
+          }
+          return null;
+        }, matchValue);
+        if (optionValue !== null) {
+          await selectEl.selectOption(optionValue);
+        }
+        break;
+      }
+      case 'dragTo': {
+        const srcBox = await this.page.locator(action.selector!).boundingBox();
+        const tgtBox = await this.page.locator(action.targetSelector!).boundingBox();
+        if (srcBox && tgtBox) {
+          const sx = srcBox.x + srcBox.width / 2;
+          const sy = srcBox.y + srcBox.height / 2;
+          const tx = tgtBox.x + tgtBox.width / 2;
+          const ty = tgtBox.y + tgtBox.height / 2;
+          await this.animateCursorTo(sx, sy);
+          await this.page.mouse.down();
+          await this.animateCursorTo(tx, ty, 600);
           await this.page.mouse.up();
         }
         break;
@@ -326,6 +460,32 @@ export class DemoRunner {
     }
 
     if (turn.caption && opts.captionAfter) await this.caption(turn.caption);
+
+    this.stepCounter++;
+    if (turn.slug && process.env.DEMO_KEYFRAMES) {
+      await this.page.waitForTimeout(500);
+      await this.captureKeyframe(turn.slug, { caption: turn.caption });
+    }
+  }
+
+  /**
+   * Poll until `check()` returns true or timeout expires.
+   * Logs a warning on timeout — does NOT hard-fail so demo recording continues.
+   */
+  async verifyState(
+    check: () => Promise<boolean>,
+    description: string,
+    timeout = 5000,
+  ): Promise<boolean> {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      try {
+        if (await check()) return true;
+      } catch { /* selector may not exist yet */ }
+      await this.page.waitForTimeout(200);
+    }
+    console.warn(`[verifyState] TIMEOUT: ${description}`);
+    return false;
   }
 
   /** Pause recording for a given number of milliseconds. */
@@ -436,5 +596,51 @@ export class DemoRunner {
     await this.caption(text);
     await this.pauseMs(ms);
     await this.clearCaption();
+  }
+
+  // ── Keyframe inspection ───────────────────────────────────────────────────
+
+  /** Set the demo name for keyframe output subdirectory. */
+  setDemoName(name: string): void {
+    this.demoName = name;
+    this.startTime = Date.now();
+  }
+
+  /** Capture a keyframe screenshot with metadata. Requires DEMO_KEYFRAMES=1. */
+  async captureKeyframe(slug: string, extra: { caption?: string } = {}): Promise<void> {
+    if (!process.env.DEMO_KEYFRAMES) return;
+    const dir = path.resolve('docs', 'demo-keyframes', this.demoName || 'unnamed');
+    fs.mkdirSync(dir, { recursive: true });
+    const idx = String(this.keyframes.length + 1).padStart(2, '0');
+    const file = path.join(dir, `${idx}-${slug}.png`);
+    await this.page.screenshot({ path: file, fullPage: true });
+    const elementCount = await this.page.locator('.reactodia-overlaid-element').count().catch(() => 0);
+    this.keyframes.push({
+      slug,
+      stepIndex: this.stepCounter,
+      caption: extra.caption ?? '',
+      file,
+      elementCount,
+      timestampMs: Date.now() - this.startTime,
+    });
+  }
+
+  /** Write keyframe summary (JSON + markdown) after all turns complete. */
+  writeKeyframeSummary(): void {
+    if (!this.keyframes.length) return;
+    const dir = path.resolve('docs', 'demo-keyframes', this.demoName || 'unnamed');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'summary.json'), JSON.stringify(this.keyframes, null, 2));
+    const lines = ['# Keyframe Summary', `Demo: ${this.demoName}`, `Keyframes: ${this.keyframes.length}`, ''];
+    for (const kf of this.keyframes) {
+      lines.push(`## ${kf.slug}`);
+      lines.push(`- Step: ${kf.stepIndex}`);
+      lines.push(`- Caption: ${kf.caption}`);
+      lines.push(`- Elements on canvas: ${kf.elementCount}`);
+      lines.push(`- Time: ${(kf.timestampMs / 1000).toFixed(1)}s`);
+      lines.push(`- File: ${kf.file}`);
+      lines.push('');
+    }
+    fs.writeFileSync(path.join(dir, 'summary.md'), lines.join('\n'));
   }
 }

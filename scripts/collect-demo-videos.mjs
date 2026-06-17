@@ -66,47 +66,63 @@ for (const name of specNames) {
     // no_cut_last=1 for the OWUI demo: its final freeze block is the model's
     // classification response — cutting it would remove the payoff of the demo.
     const mp4 = path.join(OUTPUT_DIR, `${name}.mp4`);
-    const noCutLast = name === 'openwebui-socratic' ? '1' : '0';
+
+    // Per-video options via docs/demo-videos/<name>.video.json:
+    //   { "idleTrim": false }        — skip idle-block compression
+    //   { "noCutLast": true }        — keep last freeze block at full length
+    //   { "extraVf": "..." }         — extra ffmpeg video filter
+    // Defaults: idleTrim=true, noCutLast=false, extraVf=''
+    const optsFile = path.join(OUTPUT_DIR, `${name}.video.json`);
+    const videoOpts = fs.existsSync(optsFile)
+      ? JSON.parse(fs.readFileSync(optsFile, 'utf8'))
+      : {};
+
+    const doIdleTrim = videoOpts.idleTrim !== false;
+    const noCutLast = (videoOpts.noCutLast || name === 'openwebui-socratic') ? '1' : '0';
     // Blur OWUI server URL in the left window's address bar (x=160,y=33,w=620,h=36 in 1920×1080)
-    const extraVf = name === 'openwebui-socratic'
+    const extraVf = videoOpts.extraVf || (name === 'openwebui-socratic'
       ? 'split[_bm][_bi];[_bi]crop=700:40:100:30,boxblur=8:2[_bl];[_bm][_bl]overlay=100:30'
-      : '';
+      : '');
+
     let mp4ok = false;
-    const mp4MtimeBefore = fs.existsSync(mp4) ? fs.statSync(mp4).mtimeMs : 0;
-    try {
-      execFileSync('python3', [
-        path.join(__dirname, 'shorten-idle.py'),
-        dest,          // input webm
-        mp4,           // output mp4 directly — libx264, no intermediate webm
-        '10.0',        // digest seconds (keep 10s of each idle block)
-        '20.0',        // min idle duration to shorten (raised from 8s — preserves CoT thinking)
-        '0.5',         // sample fps (1 frame / 2s — ignores sub-2s animations)
-        '-30',         // noise floor dB
-        noCutLast,     // 1 = keep last freeze block at full length
-        extraVf,       // per-demo post-concat vf (blur, crop, etc.)
-      ], { stdio: 'inherit' });
-      const mp4MtimeAfter = fs.existsSync(mp4) ? fs.statSync(mp4).mtimeMs : 0;
-      if (mp4MtimeAfter > mp4MtimeBefore) {
-        const mp4size = (fs.statSync(mp4).size / 1024).toFixed(0);
-        console.log(`✓ docs/demo-videos/${name}.mp4   (${mp4size} KB)`);
-        mp4ok = true;
+    if (doIdleTrim) {
+      const mp4MtimeBefore = fs.existsSync(mp4) ? fs.statSync(mp4).mtimeMs : 0;
+      try {
+        execFileSync('python3', [
+          path.join(__dirname, 'shorten-idle.py'),
+          dest,          // input webm
+          mp4,           // output mp4 directly — libx264, no intermediate webm
+          '10.0',        // digest seconds (keep 10s of each idle block)
+          '20.0',        // min idle duration to shorten (raised from 8s — preserves CoT thinking)
+          '0.5',         // sample fps (1 frame / 2s — ignores sub-2s animations)
+          '-30',         // noise floor dB
+          noCutLast,     // 1 = keep last freeze block at full length
+          extraVf,       // per-demo post-concat vf (blur, crop, etc.)
+        ], { stdio: 'inherit' });
+        const mp4MtimeAfter = fs.existsSync(mp4) ? fs.statSync(mp4).mtimeMs : 0;
+        if (mp4MtimeAfter > mp4MtimeBefore) {
+          const mp4size = (fs.statSync(mp4).size / 1024).toFixed(0);
+          console.log(`✓ docs/demo-videos/${name}.mp4   (${mp4size} KB)`);
+          mp4ok = true;
+        }
+      } catch {
+        console.warn(`  shorten-idle.py failed — falling back to plain mp4 conversion`);
       }
-    } catch {
-      console.warn(`  shorten-idle.py failed — falling back to plain mp4 conversion`);
     }
 
-    // Fallback: plain webm → mp4 if shorten-idle failed
+    // Plain webm → mp4: either idle-trim disabled or shorten-idle failed
     if (!mp4ok) {
       try {
         execFileSync('ffmpeg', [
           '-y', '-i', dest,
-          '-c:v', 'libx264', '-crf', '20', '-preset', 'slow',
-          '-profile:v', 'high', '-level:v', '4.2',
+          '-c:v', 'libx264', '-crf', '24', '-preset', 'slow',
+          '-profile:v', 'high', '-level:v', '4.0',
           '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
           mp4,
-        ], { stdio: 'pipe' });
+        ], { stdio: 'inherit' });
         const mp4size = (fs.statSync(mp4).size / 1024).toFixed(0);
         console.log(`✓ docs/demo-videos/${name}.mp4   (${mp4size} KB)  [no idle-trim]`);
+        mp4ok = true;
       } catch {
         console.warn(`  ffmpeg not found — skipping mp4 conversion for ${name}`);
       }

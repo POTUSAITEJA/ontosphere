@@ -13,6 +13,28 @@ Outputs `docs/demo-videos/<name>.webm` + `.mp4`. Commit both.
 > **Requires `ffmpeg`** for `.mp4` conversion. If missing, only `.webm` is written and a warning is printed.
 > Install: `sudo apt install ffmpeg` (Debian/Ubuntu) or `brew install ffmpeg` (macOS).
 
+## Per-video post-processing options
+
+The collect script runs idle-block compression by default (via `scripts/shorten-idle.py`): it detects long static sections and shortens them to keep the video tight. This works well for demos with long AI thinking pauses (e.g. OWUI Socratic) but can falsely cut active content in UI-action demos where short pauses between turns get merged into one big "idle" block.
+
+Override per video by placing a `docs/demo-videos/<name>.video.json` file:
+
+```json
+{
+  "idleTrim": false,
+  "noCutLast": true,
+  "extraVf": "split[_bm][_bi];[_bi]crop=700:40:100:30,boxblur=8:2[_bl];[_bm][_bl]overlay=100:30"
+}
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `idleTrim` | `true` | Run idle-block compression. Set `false` for UI-action demos. |
+| `noCutLast` | `false` | Keep last idle block at full length (useful when the final freeze is the demo payoff). |
+| `extraVf` | `""` | Extra ffmpeg video filter appended after concat (e.g. blur a URL bar). |
+
+All fields are optional — omit the file entirely to get defaults.
+
 ## Create a new demo video
 
 1. Write screenplay in `docs/demo-scripts/<name>.md` — plain English prose (see `advert-intro.md` as example)
@@ -47,6 +69,8 @@ click: [selector]               — click a Playwright locator
 fill: [selector] | [text]       — type text into an input (clears first)
 scroll: [deltaX] [deltaY]       — mouse wheel scroll at viewport center
 drag: [selector] | [dx] [dy]    — drag element by offset
+dragTo: [src-selector] | [tgt]  — drag from source element to target element
+select: [selector] | [text]     — select option containing text from <select>
 hover: [selector]               — hover over element
 key: [key]                      — press key (e.g. "Control+z", "Enter")
 wait: [ms]                      — pause for N milliseconds
@@ -57,6 +81,36 @@ waitFor: [selector]             — wait for element to be visible
 Actions and tool calls are interleaved in encounter order within each turn. Unknown action types are silently skipped. Seeds without action blocks work exactly as before.
 
 **When to use actions vs MCP tools:** Use action blocks when the UI interaction is more visually compelling than the MCP equivalent (clicking buttons, typing in search, undo/redo). Use MCP tool calls for bulk operations (loading data, running reasoning, adding many triples).
+
+## Animated cursor overlay
+
+All action-based demos get a large animated cursor overlay automatically. The cursor is a white arrow with black outline and drop shadow, injected into the page DOM at `z-index: 999998` with `pointer-events: none`.
+
+- Before each `click`, `fill`, `hover`, `select` action, the cursor animates from its current position to the target element center (~400ms ease-in-out)
+- For `drag`/`dragTo` actions, the cursor animates to the source, holds mouse down, then animates to the destination (~600ms)
+- Passive actions (`wait`, `waitFor`, `key`) skip cursor animation
+- The cursor starts at viewport center and is visible in keyframe screenshots
+
+No configuration needed — cursor is always active during action execution.
+
+## Keyframe inspection system
+
+Capture screenshots at every `snapshot` slug to verify demo correctness without watching the full video.
+
+```sh
+DEMO_KEYFRAMES=1 npx playwright test --config=playwright.demo.config.ts e2e/demo-feat-authoring.spec.ts
+```
+
+Output: `docs/demo-keyframes/<demoName>/01-slug.png`, `02-slug.png`, etc. plus `summary.json` and `summary.md`.
+
+To enable, the spec must call `runner.setDemoName('feat-authoring')` before running turns. The snapshot `slug:` field in the seed drives filenames.
+
+Clean up before re-recording:
+```sh
+rm -rf docs/demo-keyframes/   # also done by scripts/demo-video.sh
+```
+
+The `docs/demo-keyframes/` directory is git-ignored — keyframes are for local inspection only.
 
 ## Feature demos
 
@@ -234,3 +288,35 @@ tool-call completion at each turn.
 - `pizza-tutorial` — seed-driven, Manchester Pizza OWL tutorial
 - `pizza-tutorial-chat` — OWL pizza tutorial as AI tutor lesson, side-by-side chat
 - `openwebui-socratic` — live OWUI session (separate recording pipeline)
+
+---
+
+## Lessons learned — building demos efficiently
+
+### Prefer UI actions over MCP shortcuts for user-facing demos
+
+MCP tool calls (`addNode`, `addTriple`) are fast but invisible — viewers can't follow what happened. Use action blocks (`click`, `fill`, `dragTo`) for operations the user would do manually. Reserve MCP tools for setup (switching modes, loading data) and bulk operations.
+
+### Inspect custom components before writing selectors
+
+Ontosphere replaces several Reactodia default components (entity editor, relation editor) with shadcn-based custom forms. Standard Reactodia selectors like `input[name="reactodia-text-property-input"]` won't work. Always check the actual component source before writing selectors — look for unique classes (`input.font-mono`), placeholder text, or role attributes.
+
+### Use keyframes as your primary debug tool
+
+Running the full video takes ~2 minutes. Running with `DEMO_KEYFRAMES=1` takes the same time but produces inspectable PNGs — much faster feedback. Iterate on selectors and timing using keyframes before doing a final video recording.
+
+### Account for multi-step undo in authored entities
+
+Creating an entity via the class tree creates TWO history entries: one for the entity creation (`batch.store()`) and one for the entity edit when Apply is clicked (`editor.changeEntity()`). To fully undo, click the undo button twice with a small gap (`wait: 500` between clicks).
+
+### Unfold the class tree before clicking create buttons
+
+The class tree create (`+`) buttons are only visible on items that appear in the tree dropdown. Type a search term (e.g. `Class`) into `input[placeholder*="earch"]` to unfold the hierarchy first, then target the create button.
+
+### Use `waitFor` before interacting with dialogs
+
+Dialogs animate in — clicking immediately after triggering them often misses. Add `waitFor: .reactodia-dialog` (or a specific element inside it) before `fill` or `click` actions targeting dialog contents.
+
+### Relation type uses autocomplete, not a select dropdown
+
+The custom relation editor renders an `EntityAutoComplete` input (`input[placeholder*="predicate"]`), not a `<select>`. To pick a relation type: `fill` the input with a partial match, `wait` for the dropdown, then `click` the `[role="option"]` that matches.
