@@ -49,6 +49,7 @@ export interface AppConfig {
   workflowCatalogEnabled: boolean;
   workflowCatalogUrls: WorkflowCatalogUrls;
   loadWorkflowCatalogOnStartup: boolean;
+  shaclEnabled: boolean;
   relayEnabled: boolean;
 }
 
@@ -80,6 +81,7 @@ interface AppConfigStore {
   addRecentLayout: (layout: string) => void;
   addAdditionalOntology: (uri: string) => void;
   removeAdditionalOntology: (uri: string) => void;
+  setShaclEnabled: (enabled: boolean) => void;
   setRelayEnabled: (enabled: boolean) => void;
   setWorkflowCatalogEnabled: (enabled: boolean) => void;
   setWorkflowCatalogUrls: (urls: Partial<WorkflowCatalogUrls>) => void;
@@ -142,6 +144,7 @@ const defaultConfig: AppConfig = {
     "http://www.w3.org/XML/1998/namespace",
     "http://www.w3.org/2001/XMLSchema#",
   ],
+  shaclEnabled: true,
   workflowCatalogEnabled: true,
   workflowCatalogUrls: { ...DEFAULT_WORKFLOW_CATALOG_URLS },
   loadWorkflowCatalogOnStartup: true,
@@ -277,6 +280,11 @@ function normalizeAppConfigInput(value: unknown, context: string): AppConfig {
     blacklistedUris: normalizeStringSet(
       input.blacklistedUris ?? cfg.blacklistedUris,
       `${context}.blacklistedUris`,
+    ),
+    shaclEnabled: normalizeBooleanFlag(
+      input.shaclEnabled,
+      `${context}.shaclEnabled`,
+      cfg.shaclEnabled,
     ),
     workflowCatalogEnabled: normalizeBooleanFlag(
       input.workflowCatalogEnabled,
@@ -548,6 +556,13 @@ export const useAppConfigStore = create<AppConfigStore>()(
         }));
       },
 
+
+      setShaclEnabled: (enabled: boolean) => {
+        updateConfig(set, (config) => ({
+          ...config,
+          shaclEnabled: normalizeBoolean(enabled, "setShaclEnabled.enabled"),
+        }));
+      },
 
       setRelayEnabled: (enabled: boolean) => {
         updateConfig(set, (config) => ({

@@ -1204,13 +1204,22 @@ export default function ReactodiaCanvas() {
           const manifest = await loadShaclShapes(shaclUrl);
           if (manifest.loaded.length > 0) {
             console.log('[ReactodiaCanvas] SHACL shapes loaded:', manifest.loaded.map(s => s.name));
+            useShaclResultStore.getState().setShaclShapesLoaded(true);
+          } else {
+            useShaclResultStore.getState().setShaclShapesLoaded(false);
           }
           for (const err of manifest.errors) {
             console.warn('[ReactodiaCanvas] SHACL shape load error:', err.url, err.error);
           }
+          if (manifest.loaded.length === 0 && manifest.errors.length > 0) {
+            useShaclResultStore.getState().setShaclShapesLoaded(false);
+          }
         } catch (err) {
           console.warn('[ReactodiaCanvas] SHACL shapes load failed', err);
+          useShaclResultStore.getState().setShaclShapesLoaded(false);
         }
+      } else {
+        useShaclResultStore.getState().setShaclShapesLoaded(false);
       }
     })();
   }, [loadKnowledgeGraph, loadAdditionalOntologies, actions]);

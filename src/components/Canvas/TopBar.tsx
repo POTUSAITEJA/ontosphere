@@ -1,6 +1,8 @@
 import React from 'react';
 import type { ReasoningResult } from '../../utils/rdfManager';
 import { useAppConfigStore } from '../../stores/appConfigStore';
+import { useShaclResultStore } from '../../stores/shaclResultStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 
 interface TopBarProps {
   viewMode: 'abox' | 'tbox';
@@ -41,6 +43,11 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
   const clusteringAlgorithm = useAppConfigStore(s => s.config.clusteringAlgorithm);
   const setClusteringAlgorithm = useAppConfigStore(s => s.setClusteringAlgorithm);
+  const shaclEnabled = useAppConfigStore(s => s.config.shaclEnabled);
+  const setShaclEnabled = useAppConfigStore(s => s.setShaclEnabled);
+  const shaclShapesLoaded = useShaclResultStore(s => s.shaclShapesLoaded);
+  const shaclShapesUrl = useSettingsStore(s => s.settings.shaclShapesUrl);
+  const shaclAvailable = shaclShapesLoaded && shaclShapesUrl.trim().length > 0;
 
   return (
     <div className="reactodia-toolbar" role="toolbar" style={{
@@ -194,6 +201,23 @@ export const TopBar: React.FC<TopBarProps> = ({
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'inline', verticalAlign: 'middle' }}>
               <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
             </svg>
+          </button>
+          <button
+            type="button"
+            className={`reactodia-btn reactodia-btn-default glass-btn ${shaclAvailable && shaclEnabled ? 'glass-btn--active' : ''}`}
+            onClick={() => shaclAvailable && setShaclEnabled(!shaclEnabled)}
+            disabled={!shaclAvailable}
+            title={shaclAvailable ? 'Include SHACL validation in reasoning' : 'No SHACL shapes loaded'}
+          >
+            <input
+              type="checkbox"
+              checked={shaclAvailable && shaclEnabled}
+              readOnly
+              tabIndex={-1}
+              className="size-3 accent-primary pointer-events-none"
+              style={{ margin: 0 }}
+            />
+            SHACL
           </button>
           <button
             type="button"

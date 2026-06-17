@@ -124,6 +124,7 @@ export type RDFWorkerCommandPayloads = {
     baseUrl?: string;
     emitSubjects?: boolean;
     reasonerBackend?: 'konclude' | 'n3';
+    shaclEnabled?: boolean;
   };
   importSerialized: ImportSerializedPayload;
   exportGraph: ExportGraphPayload;
@@ -528,9 +529,12 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
     if (typeof emitSubjects !== "undefined") {
       assertBoolean(emitSubjects, "runReasoning.emitSubjects must be a boolean when provided");
     }
-    const { reasonerBackend } = payload as RDFWorkerCommandPayloads["runReasoning"];
+    const { reasonerBackend, shaclEnabled } = payload as RDFWorkerCommandPayloads["runReasoning"];
     if (typeof reasonerBackend !== "undefined") {
       assertString(reasonerBackend, "runReasoning.reasonerBackend must be a string when provided");
+    }
+    if (typeof shaclEnabled !== "undefined") {
+      assertBoolean(shaclEnabled, "runReasoning.shaclEnabled must be a boolean when provided");
     }
   },
   importSerialized(payload) {
@@ -702,6 +706,7 @@ export interface RDFWorkerRunReasoningMessage {
   baseUrl?: string;
   emitSubjects?: boolean;
   reasonerBackend?: 'konclude' | 'n3';
+  shaclEnabled?: boolean;
 }
 
 export type RDFWorkerInboundMessage =
@@ -900,6 +905,9 @@ export function assertRdfWorkerInbound(value: unknown): asserts value is RDFWork
       }
       if (typeof message.reasonerBackend !== "undefined") {
         assertString(message.reasonerBackend, "runReasoning.reasonerBackend must be a string when provided");
+      }
+      if (typeof message.shaclEnabled !== "undefined") {
+        assertBoolean(message.shaclEnabled, "runReasoning.shaclEnabled must be a boolean when provided");
       }
       return;
     default:

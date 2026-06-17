@@ -697,12 +697,14 @@ export class RDFManagerImpl {
       return "/";
     };
 
+    const shaclEnabled = appConfigState?.config?.shaclEnabled !== false;
     const payload = {
       reasoningId,
       rulesets,
       emitSubjects: true,
       baseUrl: resolveBaseUrl(),
       reasonerBackend,
+      shaclEnabled,
     };
     const response = await this.worker.call("runReasoning", payload);
     const safe = isPlainObject(response) ? response : {};

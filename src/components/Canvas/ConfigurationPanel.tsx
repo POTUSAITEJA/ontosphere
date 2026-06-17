@@ -604,13 +604,17 @@ export const ConfigurationPanel = ({
                           const manifest = await loadShaclShapes(url);
                           if (manifest.loaded.length > 0) {
                             toast.success(`Loaded ${manifest.loaded.length} shape file(s)`, { id: 'shacl-reload' });
+                            useShaclResultStore.getState().setShaclShapesLoaded(true);
                           } else if (manifest.errors.length > 0) {
                             toast.error('Failed to load shapes', { id: 'shacl-reload', description: manifest.errors[0].error });
+                            useShaclResultStore.getState().setShaclShapesLoaded(false);
                           } else {
                             toast.info('No shapes found at URL', { id: 'shacl-reload' });
+                            useShaclResultStore.getState().setShaclShapesLoaded(false);
                           }
                         } catch (err) {
                           toast.error('Shape loading failed', { id: 'shacl-reload', description: String(err) });
+                          useShaclResultStore.getState().setShaclShapesLoaded(false);
                         }
                       }}
                     >

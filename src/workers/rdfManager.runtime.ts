@@ -2551,6 +2551,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             baseUrl: payload.baseUrl,
             emitSubjects: payload.emitSubjects,
             reasonerBackend: payload.reasonerBackend,
+            shaclEnabled: payload.shaclEnabled,
           };
           const outcome = await handleRunReasoning(reasoningRequest, {
             mutateSharedStore: true,
@@ -2803,27 +2804,29 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       const { warnings: kWarnings, errors: kShaclErrors } = collectShaclResults(kAddedQuads);
 
       // Run SHACL validation against urn:vg:shapes if shapes are loaded
-      try {
-        const shaclResult = await runShaclValidation();
-        if (!shaclResult.conforms) {
-          for (const v of shaclResult.violations) {
-            const severity = v.severity;
-            const entry = {
-              nodeId: v.focusNode ?? undefined,
-              message: v.message || "SHACL validation issue",
-              rule: "shacl:" + (v.constraint?.split("#").pop() ?? "constraint"),
-              severity: severity === "sh:Violation" ? "error" as const : "warning" as const,
-              sourceShape: v.sourceShape ?? undefined,
-            };
-            if (severity === "sh:Violation") {
-              kShaclErrors.push({ ...entry, severity: "error" });
-            } else {
-              kWarnings.push(entry);
+      if (msg.shaclEnabled !== false) {
+        try {
+          const shaclResult = await runShaclValidation();
+          if (!shaclResult.conforms) {
+            for (const v of shaclResult.violations) {
+              const severity = v.severity;
+              const entry = {
+                nodeId: v.focusNode ?? undefined,
+                message: v.message || "SHACL validation issue",
+                rule: "shacl:" + (v.constraint?.split("#").pop() ?? "constraint"),
+                severity: severity === "sh:Violation" ? "error" as const : "warning" as const,
+                sourceShape: v.sourceShape ?? undefined,
+              };
+              if (severity === "sh:Violation") {
+                kShaclErrors.push({ ...entry, severity: "error" });
+              } else {
+                kWarnings.push(entry);
+              }
             }
           }
+        } catch (shaclErr) {
+          debugLog("[VG_REASONING_WORKER] SHACL validation failed (non-blocking)", shaclErr);
         }
-      } catch (shaclErr) {
-        debugLog("[VG_REASONING_WORKER] SHACL validation failed (non-blocking)", shaclErr);
       }
 
       const kErrors: ReasoningError[] = [...kMipsErrors, ...kShaclErrors];
@@ -3276,27 +3279,29 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     const { warnings, errors } = collectShaclResults(effectiveAdded);
 
     // Run SHACL validation against urn:vg:shapes if shapes are loaded
-    try {
-      const shaclResult = await runShaclValidation();
-      if (!shaclResult.conforms) {
-        for (const v of shaclResult.violations) {
-          const severity = v.severity;
-          const entry = {
-            nodeId: v.focusNode ?? undefined,
-            message: v.message || "SHACL validation issue",
-            rule: "shacl:" + (v.constraint?.split("#").pop() ?? "constraint"),
-            severity: severity === "sh:Violation" ? "error" as const : "warning" as const,
-            sourceShape: v.sourceShape ?? undefined,
-          };
-          if (severity === "sh:Violation") {
-            errors.push({ ...entry, severity: "error" });
-          } else {
-            warnings.push(entry);
+    if (msg.shaclEnabled !== false) {
+      try {
+        const shaclResult = await runShaclValidation();
+        if (!shaclResult.conforms) {
+          for (const v of shaclResult.violations) {
+            const severity = v.severity;
+            const entry = {
+              nodeId: v.focusNode ?? undefined,
+              message: v.message || "SHACL validation issue",
+              rule: "shacl:" + (v.constraint?.split("#").pop() ?? "constraint"),
+              severity: severity === "sh:Violation" ? "error" as const : "warning" as const,
+              sourceShape: v.sourceShape ?? undefined,
+            };
+            if (severity === "sh:Violation") {
+              errors.push({ ...entry, severity: "error" });
+            } else {
+              warnings.push(entry);
+            }
           }
         }
+      } catch (shaclErr) {
+        debugLog("[VG_REASONING_WORKER] SHACL validation failed (non-blocking)", shaclErr);
       }
-    } catch (shaclErr) {
-      debugLog("[VG_REASONING_WORKER] SHACL validation failed (non-blocking)", shaclErr);
     }
 
     const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
