@@ -507,6 +507,8 @@ interface OntologyStore {
   // Namespace registry (joined prefix -> namespace -> color) persisted after reconcile
   namespaceRegistry: NamespaceEntry[];
   setNamespaceRegistry: (registry: NamespaceEntry[]) => void;
+  dataFilename: string | null;
+  setDataFilename: (name: string | null) => void;
 }
 export const useOntologyStore = create<OntologyStore>((set, get) => ({
   loadedOntologies: [],
@@ -519,6 +521,8 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
   setNamespaceRegistry: (registry: NamespaceEntry[]) => {
     set({ namespaceRegistry: Array.isArray(registry) ? registry : [] });
   },
+  dataFilename: null,
+  setDataFilename: (name: string | null) => set({ dataFilename: name }),
 
   // Minimal currentGraph state kept for compatibility with tests and UI seeding.
   currentGraph: { nodes: [], edges: [] },
@@ -994,6 +998,14 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
     logCallGraph?.("loadKnowledgeGraph:start", source);
     const timeout = options?.timeout || 30000;
 
+    // Track the loaded filename for export downloads.
+    const basename = options?.filename
+      || (() => {
+        try {
+          return new URL(source).pathname.split("/").filter(Boolean).pop() || null;
+        } catch { return null; }
+      })();
+    if (basename) set({ dataFilename: basename.replace(/\.[^.]+$/, "") });
 
     try {
       // If source is a URL, delegate fetching/parsing to rdfManager and then run a single authoritative fat-map rebuild.

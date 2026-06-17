@@ -1,4 +1,5 @@
 import { exportViewportSvgMinimal, exportViewportPngMinimal } from "./exportHelpers";
+import { useOntologyStore } from "@/stores/ontologyStore";
 
 /**
  * Minimal download helpers.
@@ -30,7 +31,7 @@ function triggerDownloadUrl(url: string, filename: string) {
 
 export async function exportSvgFull(opts?: { filename?: string }): Promise<void> {
   // Use a stable default filename per request; allow override via opts.filename.
-  const filename = opts?.filename || `knowledgegraph.svg`;
+  const filename = opts?.filename || `${useOntologyStore.getState().dataFilename || 'knowledgegraph'}.svg`;
   // Get SVG string from minimal exporter
   const svgString = await exportViewportSvgMinimal();
   const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
@@ -40,7 +41,7 @@ export async function exportSvgFull(opts?: { filename?: string }): Promise<void>
 
 export async function exportPngFull(opts?: { filename?: string; scale?: number }): Promise<void> {
   // Use stable default filename per request; allow override via opts.filename.
-  const filename = opts?.filename || `knowledgegraph.png`;
+  const filename = opts?.filename || `${useOntologyStore.getState().dataFilename || 'knowledgegraph'}.png`;
   const scale = opts?.scale || 2;
   // Get data URL from minimal exporter
   const dataUrl = await exportViewportPngMinimal(scale);

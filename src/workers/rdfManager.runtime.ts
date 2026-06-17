@@ -1899,6 +1899,22 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               )
             : deskolemized;
 
+          // Filter prefixes to only those whose namespace URI appears in the quads.
+          const usedNamespaces = new Set<string>();
+          for (const q of toWrite) {
+            for (const term of [q.subject, q.predicate, q.object]) {
+              if (term.termType === "NamedNode") {
+                const v = term.value;
+                const cut = Math.max(v.lastIndexOf("#"), v.lastIndexOf("/"));
+                if (cut > 0) usedNamespaces.add(v.slice(0, cut + 1));
+              }
+            }
+          }
+          const usedPrefixes: Record<string, string> = {};
+          for (const [prefix, ns] of Object.entries(workerNamespaces)) {
+            if (usedNamespaces.has(ns)) usedPrefixes[prefix] = ns;
+          }
+
           let output: string;
 
           if (formatInfo.mediaType === "application/ld+json") {
@@ -1936,7 +1952,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             const xe = (s: string) =>
               s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
             // Build prefix → namespace map; auto-assign short prefixes for unknown namespaces.
-            const ns: Record<string, string> = { rdf: "http://www.w3.org/1999/02/22-rdf-syntax-ns#", ...workerNamespaces };
+            const ns: Record<string, string> = { rdf: "http://www.w3.org/1999/02/22-rdf-syntax-ns#", ...usedPrefixes };
             const nsReverse = new Map<string, string>(Object.entries(ns).map(([p, u]) => [u, p]));
             let autoIdx = 0;
             const qname = (iri: string): string => {
@@ -2002,7 +2018,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           } else {
             // Turtle (and any other N3.js-supported format)
             const writer = new (N3 as any).Writer({
-              prefixes: { ...workerNamespaces },
+              prefixes: { ...usedPrefixes },
               format: formatInfo.writerFormat,
             });
             writer.addQuads(toWrite);

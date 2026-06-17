@@ -1521,6 +1521,7 @@ export default function ReactodiaCanvas() {
     try {
       const text = await file.text();
       await rdfManager.loadRDFIntoGraph(text, undefined, undefined, file.name);
+      useOntologyStore.getState().setDataFilename(file.name.replace(/\.[^.]+$/, ''));
       actions.setLoading(false, 100, `Loaded ${file.name}`);
       // Fire-and-forget: discover and load owl:imports referenced in the uploaded file.
       if (typeof discoverReferencedOntologies === 'function') {
@@ -1547,15 +1548,16 @@ export default function ReactodiaCanvas() {
 
   const handleExportRdf = React.useCallback(async (format: 'turtle' | 'json-ld' | 'rdf-xml') => {
     try {
-      const { exportGraph } = useOntologyStore.getState();
+      const { exportGraph, dataFilename } = useOntologyStore.getState();
       const content = await exportGraph(format);
       const ext = format === 'turtle' ? 'ttl' : format === 'json-ld' ? 'jsonld' : 'rdf';
       const mime = format === 'turtle' ? 'text/turtle' : format === 'json-ld' ? 'application/ld+json' : 'application/rdf+xml';
+      const baseName = dataFilename || 'knowledgegraph';
       const blob = new Blob([content], { type: mime });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `knowledgegraph.${ext}`;
+      a.download = `${baseName}.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -1816,14 +1818,16 @@ export default function ReactodiaCanvas() {
                       <Reactodia.ToolbarAction title="Export PNG" onSelect={() => {
                         const canvas = getWorkspaceRefs().ctx.view.findAnyCanvas();
                         canvas?.exportRaster({ mimeType: 'image/png' }).then(dataUrl => {
-                          const a = document.createElement('a'); a.href = dataUrl; a.download = 'knowledgegraph.png'; a.click();
+                          const base = useOntologyStore.getState().dataFilename || 'knowledgegraph';
+                          const a = document.createElement('a'); a.href = dataUrl; a.download = `${base}.png`; a.click();
                         });
                       }}>Export PNG</Reactodia.ToolbarAction>
                       <Reactodia.ToolbarAction title="Export SVG" onSelect={() => {
                         const canvas = getWorkspaceRefs().ctx.view.findAnyCanvas();
                         canvas?.exportSvg({ addXmlHeader: true }).then(svg => {
+                          const base = useOntologyStore.getState().dataFilename || 'knowledgegraph';
                           const blob = new Blob([svg], { type: 'image/svg+xml' });
-                          const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'knowledgegraph.svg'; a.click();
+                          const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${base}.svg`; a.click();
                         });
                       }}>Export SVG</Reactodia.ToolbarAction>
                       <Reactodia.ToolbarActionExport kind="print" />
