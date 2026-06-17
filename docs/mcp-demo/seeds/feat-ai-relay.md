@@ -1,26 +1,50 @@
 # Feature Demo: MCP + AI Relay Bridge
 
 > Seed for the feat-ai-relay demo recording.
-> Shows MCP tool list, bookmarklet injection, AI tool calls via relay.
+> Shows sidebar relay widget, bookmarklet workflow, AI tool calls via relay.
 >
 > Spec: `e2e/demo-feat-ai-relay.spec.ts`
-> Note: This demo uses stage mode (openStage) — tool calls execute on the app iframe.
+> Note: Phase 1 (sidebar) uses openApp mode with action blocks.
+> Phase 2 (relay round-trip) uses openStage mode — orchestrated by the spec.
 
 ---
 
-**Assistant:** Loading the reasoning demo ontology on the app side.
+**Assistant:** Opening the AI Relay panel in the sidebar.
 
-`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"loadRdf","arguments":{"url":"http://localhost:8080/reasoning-demo.ttl"}}}`
-`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-tb","spacing":200}}}`
-`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"expandNode","arguments":{}}}`
-`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-tb","spacing":200}}}`
-`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"fitCanvas","arguments":{}}}`
-
-```tool-result
-<!-- runner fills this in -->
+```action
+click: button[aria-label="AI Relay"]
+wait: 1500
 ```
 
 ```snapshot
-caption: Ontosphere loaded — ready for AI relay connection
-slug: app-loaded
+caption: AI Relay panel — bookmarklet, starter prompt, call log
+slug: relay-panel
+```
+
+---
+
+**Assistant:** The bookmarklet bridges any AI chat to Ontosphere — install by dragging to your bookmark bar.
+
+```action
+hover: a[aria-label*="bookmark"]
+wait: 2000
+```
+
+```snapshot
+caption: Drag the Ontosphere Relay bookmarklet to your bookmark bar
+slug: bookmarklet
+```
+
+---
+
+**Assistant:** The starter prompt tells the AI how to format relay calls — copy it with one click.
+
+```action
+hover: button[title="Copy starter prompt"]
+wait: 1500
+```
+
+```snapshot
+caption: Copy the starter prompt — paste into any AI chat to connect
+slug: copy-prompt
 ```

@@ -37,7 +37,7 @@ All fields are optional — omit the file entirely to get defaults.
 
 ## Create a new demo video
 
-1. Write screenplay in `docs/demo-scripts/<name>.md` — plain English prose (see `advert-intro.md` as example)
+1. Write screenplay in `docs/demo-scripts/<name>.md` — plain English prose
 2. Ask Claude: *"Record a demo video from this screenplay: `docs/demo-scripts/<name>.md`"*
 3. Claude writes `e2e/demo-<name>.spec.ts` using `DemoRunner` from `e2e/demo-runner.ts`
 4. Run `npm run demo:video` — produces and commits video files
@@ -282,7 +282,6 @@ tool-call completion at each turn.
 ### Workflow demos
 
 - `iswc2026-comprehensive` — full 3-minute walkthrough of all features
-- `advert-intro` — relay demo, mock chat + app side by side
 - `foaf-social-network` — seed-driven, FOAF + employment + OWL-RL reasoning
 - `scene-ontology` — seed-driven, film ontology on BFO/RO
 - `pizza-tutorial` — seed-driven, Manchester Pizza OWL tutorial

@@ -583,7 +583,6 @@ iframe via `callToolOnStage()`. No relay popup needed. Example: `pizza-tutorial-
 | Video | Description |
 |-------|-------------|
 | [iswc2026-comprehensive.mp4](https://thhanke.github.io/ontosphere/demo-videos/iswc2026-comprehensive.mp4) | Full 3-minute walkthrough of all features |
-| [advert-intro.mp4](https://thhanke.github.io/ontosphere/demo-videos/advert-intro.mp4) | Relay bookmarklet — mock chat + Ontosphere side by side |
 | [foaf-social-network.mp4](https://thhanke.github.io/ontosphere/demo-videos/foaf-social-network.mp4) | AI builds a FOAF social graph with DL reasoning |
 | [scene-ontology.mp4](https://thhanke.github.io/ontosphere/demo-videos/scene-ontology.mp4) | AI builds a film scene ontology on BFO/RO upper ontology |
 | [pizza-tutorial.mp4](https://thhanke.github.io/ontosphere/demo-videos/pizza-tutorial.mp4) | Manchester Pizza Ontology — class hierarchy, disjointness, DL reasoning |

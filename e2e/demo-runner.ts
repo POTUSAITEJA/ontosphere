@@ -1,4 +1,4 @@
-import { Page, Frame, FrameLocator } from '@playwright/test';
+import { Page, Frame, FrameLocator, Locator } from '@playwright/test';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -72,6 +72,7 @@ export class DemoRunner {
   /** Open demo-stage.html and wait for both iframes to be ready. */
   async openStage(): Promise<void> {
     await this.page.goto(`${this.baseURL}/demo-stage.html`);
+    this.cursorReady = false;
 
     this.chatFrame = this.page.frameLocator('iframe >> nth=0');
     this.appFrame  = this.page.frameLocator('iframe >> nth=1');
@@ -130,9 +131,24 @@ export class DemoRunner {
     await this.chatFrame.locator('[data-scenario="clear"]').click();
   }
 
+  /** Get the chat frame locator (stage mode only). */
+  getChatFrame(): FrameLocator { return this.chatFrame; }
+
+  /** Get the app frame locator (stage mode only). */
+  getAppFrame(): FrameLocator { return this.appFrame; }
+
+  /** Animate the cursor overlay to a Locator's center. Works with frame-targeted locators. */
+  async cursorTo(locator: Locator, durationMs = 400): Promise<void> {
+    const box = await locator.boundingBox();
+    if (box) {
+      await this.animateCursorTo(box.x + box.width / 2, box.y + box.height / 2, durationMs);
+    }
+  }
+
   /** Open the app alone (full viewport) and wait for MCP tools to be ready. */
   async openApp(): Promise<void> {
     await this.page.goto(this.baseURL);
+    this.cursorReady = false;
     await this.page.waitForFunction(
       () => !!(window as any).__mcpTools && typeof (window as any).__mcpTools['addNode'] === 'function',
       { timeout: 20_000 },
