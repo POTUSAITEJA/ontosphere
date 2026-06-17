@@ -1,55 +1,115 @@
 # Feature Demo: Hierarchical Clustering
 
 > Seed for the feat-clustering demo recording.
-> Shows L2 structural fold, unfold, L3 Louvain community detection, expand.
+> Shows cluster pagination across ABox and TBox views, algorithm selection, and level restore.
+> Pure UI interaction — no MCP tool calls. Loads via URL parameter.
 >
 > Spec: `e2e/demo-feat-clustering.spec.ts`
 > Dataset: `public/reasoning-demo.ttl`
 
 ---
 
-**Assistant:** Loading the reasoning demo ontology for clustering demonstration.
-
-`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"loadRdf","arguments":{"url":"http://localhost:8080/reasoning-demo.ttl"}}}`
-`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-tb","spacing":200}}}`
-`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"expandNode","arguments":{}}}`
-`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-tb","spacing":200}}}`
-`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"fitCanvas","arguments":{}}}`
-
-```tool-result
-<!-- runner fills this in -->
-```
+**Assistant:** Ontology loaded via URL parameter — reasoning-demo dataset at default fold level L1.
 
 ```snapshot
-caption: Full ontology — 13 classes, ready for clustering
-slug: full-graph
+caption: Ontology loaded via URL parameter — default fold level L1
+slug: initial-load
 ```
 
 ---
 
-**Assistant:** Zooming in to see the graph detail before folding.
+**Assistant:** Level down in ABox — L0 expands all nodes, showing full details and annotations.
 
 ```action
-scroll: 0 -200
-wait: 800
+click: button:has-text("◄")
+wait: 2500
 ```
 
 ```snapshot
-caption: Detailed view before structural folding
-slug: before-fold
+caption: ABox L0 — fully expanded, all node details visible
+slug: abox-l0
 ```
 
 ---
 
-**Assistant:** Now the spec will demonstrate L2 fold, unfold, and L3 Louvain clustering via UI interactions. Fitting canvas after each operation.
+**Assistant:** Switching to TBox — cluster pagination is view-specific, TBox still at L1.
 
-`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"fitCanvas","arguments":{}}}`
-
-```tool-result
-<!-- runner fills this in -->
+```action
+click: button:has-text("T-Box")
+wait: 2500
 ```
 
 ```snapshot
-caption: Hierarchical fold levels — collapse and expand graph structure
-slug: clustering-overview
+caption: TBox still at L1 — pagination state is per-view
+slug: tbox-l1-preserved
+```
+
+---
+
+**Assistant:** Level up in TBox — L2 collapses subclass chains and OWL collections into structural groups.
+
+```action
+click: button:has-text("►")
+wait: 2500
+```
+
+```snapshot
+caption: TBox L2 — subclass chains and collections collapsed into groups
+slug: tbox-l2
+```
+
+---
+
+**Assistant:** The clustering algorithm dropdown — four options available: None, Label Propagation, Louvain, and K-Means.
+
+```action
+hover: select[title*="Clustering"]
+wait: 2000
+```
+
+```snapshot
+caption: Clustering algorithms — None, Label Propagation, Louvain, K-Means
+slug: algorithm-dropdown
+```
+
+---
+
+**Assistant:** Selecting Label Propagation as the clustering algorithm.
+
+```action
+select: select[title*="Clustering"] | Label Propagation
+wait: 1500
+```
+
+```snapshot
+caption: Label Propagation selected — applied at next level-up to L3
+slug: algorithm-selected
+```
+
+---
+
+**Assistant:** Level up to L3 — Label Propagation community-detection clustering applied.
+
+```action
+click: button:has-text("►")
+wait: 2500
+```
+
+```snapshot
+caption: TBox L3 — Label Propagation community-detection clusters
+slug: tbox-l3
+```
+
+---
+
+**Assistant:** Level down — L2 structural view restored, showing pagination preserves each level.
+
+```action
+click: button:has-text("◄")
+wait: 2500
+```
+
+```snapshot
+caption: TBox L2 restored — fold levels are navigable and preserved
+slug: tbox-l2-restored
 ```
