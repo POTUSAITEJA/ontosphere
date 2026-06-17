@@ -2,10 +2,11 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockClearInferred, mockClearInferredCallback, mockRunReasoning } = vi.hoisted(() => ({
+const { mockClearInferred, mockClearInferredCallback, mockRunReasoning, mockSetShaclEnabled } = vi.hoisted(() => ({
   mockClearInferred: vi.fn(),
   mockClearInferredCallback: vi.fn(),
   mockRunReasoning: vi.fn(),
+  mockSetShaclEnabled: vi.fn(),
 }));
 
 vi.mock('@/mcp/workspaceContext', () => {
@@ -19,6 +20,15 @@ vi.mock('@/mcp/workspaceContext', () => {
     })),
   };
 });
+
+vi.mock('@/stores/appConfigStore', () => ({
+  useAppConfigStore: {
+    getState: vi.fn(() => ({
+      config: { shaclEnabled: true },
+      setShaclEnabled: mockSetShaclEnabled,
+    })),
+  },
+}));
 
 import { reasoningTools } from '../tools/reasoning';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
@@ -86,6 +96,25 @@ describe('runReasoning', () => {
     mockRunReasoning.mockRejectedValueOnce(new Error('reasoning error'));
     const result = await tool('runReasoning').handler({});
     expect(result).toMatchObject({ success: false, error: expect.stringContaining('reasoning error') });
+  });
+
+  it('does not toggle shaclEnabled when shaclValidation=true (default matches store)', async () => {
+    mockRunReasoning.mockResolvedValueOnce({ meta: { addedCount: 0 } });
+    await tool('runReasoning').handler({});
+    expect(mockSetShaclEnabled).not.toHaveBeenCalled();
+  });
+
+  it('disables shaclEnabled when shaclValidation=false, then restores', async () => {
+    mockRunReasoning.mockResolvedValueOnce({ meta: { addedCount: 0 } });
+    await tool('runReasoning').handler({ shaclValidation: false });
+    expect(mockSetShaclEnabled).toHaveBeenCalledWith(false);
+    expect(mockSetShaclEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it('restores shaclEnabled even when reasoning throws', async () => {
+    mockRunReasoning.mockRejectedValueOnce(new Error('boom'));
+    await tool('runReasoning').handler({ shaclValidation: false });
+    expect(mockSetShaclEnabled).toHaveBeenCalledWith(true);
   });
 });
 

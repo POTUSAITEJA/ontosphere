@@ -63,6 +63,12 @@ vi.mock('@/mcp/tools/layout', () => ({
   focusElementOnCanvas: mockFocusElementOnCanvas,
 }));
 
+vi.mock('@/stores/shaclResultStore', () => ({
+  useShaclResultStore: {
+    getState: vi.fn(() => ({ errors: [], warnings: [], shaclShapesLoaded: false })),
+  },
+}));
+
 import { rdfManager } from '@/utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import { nodeTools } from '../tools/nodes';
@@ -239,6 +245,7 @@ describe('getNodeDetails', () => {
           { predicate: 'rdfs:label', object: 'Alice', objectType: 'literal' },
           { predicate: 'ex:age', object: '30', objectType: 'literal' },
         ],
+        shaclMessages: [],
       },
     });
   });
@@ -248,7 +255,7 @@ describe('getNodeDetails', () => {
     const result = await getNodeDetails.handler({ iri: 'http://example.org/Empty' });
     expect(result).toEqual({
       success: true,
-      data: { iri: 'ex:Empty', label: '', types: [], properties: [] },
+      data: { iri: 'ex:Empty', label: '', types: [], properties: [], shaclMessages: [] },
     });
   });
 

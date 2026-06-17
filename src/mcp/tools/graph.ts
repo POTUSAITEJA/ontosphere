@@ -9,6 +9,7 @@ import { resolveOntologyLoadUrl, searchWellKnownOntologies, searchOntologyPacks 
 import { useOntologyStore } from '@/stores/ontologyStore';
 import { LOAD_RDF_PROPAGATION_DELAY_MS } from '@/utils/canvasConstants';
 import { BUILTIN_PREFIXES } from '@/mcp/tools/iriUtils';
+import { useShaclResultStore } from '@/stores/shaclResultStore';
 
 /** Fix PREFIX declarations where the IRI is bare (no angle brackets): PREFIX rdf: http://... → PREFIX rdf: <http://...> */
 function normalizePrefixIris(sparql: string): string {
@@ -527,12 +528,23 @@ const getGraphState: McpTool = {
             types: data?.types ?? [],
           };
         });
+      const shaclState = useShaclResultStore.getState();
+      const shaclErrorCount = shaclState.errors.length;
+      const shaclWarningCount = shaclState.warnings.length;
+      const shaclConforms = shaclErrorCount === 0 && shaclWarningCount === 0;
+
       return {
         success: true,
         data: {
           nodeCount: nodes.length,
           linkCount: model.links.length,
           nodes,
+          shacl: {
+            shapesLoaded: shaclState.shaclShapesLoaded,
+            conforms: shaclConforms,
+            errorCount: shaclErrorCount,
+            warningCount: shaclWarningCount,
+          },
         },
       };
     } catch (e) {

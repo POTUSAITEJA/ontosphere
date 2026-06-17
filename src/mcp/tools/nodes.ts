@@ -7,6 +7,7 @@ import { focusElementOnCanvas } from './layout';
 import { expandIri } from './iriUtils';
 import { abbreviateIri } from './graph';
 import { ADD_NODE_PIPELINE_DELAY_MS } from '@/utils/canvasConstants';
+import { useShaclResultStore } from '@/stores/shaclResultStore';
 
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 const RDFS_LABEL = 'http://www.w3.org/2000/01/rdf-schema#label';
@@ -286,7 +287,14 @@ const getNodeDetails: McpTool = {
         predicate: abbreviateIri(p.predicate),
         object: p.objectType === 'iri' || p.objectType === 'bnode' ? abbreviateIri(p.object) : p.object,
       }));
-      return { success: true, data: { iri: abbreviateIri(iri), label, types: abbrevTypes, properties: abbrevProps } };
+
+      const shaclState = useShaclResultStore.getState();
+      const shaclMessages = [
+        ...shaclState.errors.filter(e => e.nodeId === iri).map(e => ({ severity: e.severity, rule: e.rule, message: e.message, sourceShape: e.sourceShape })),
+        ...shaclState.warnings.filter(w => w.nodeId === iri).map(w => ({ severity: w.severity ?? 'warning', rule: w.rule, message: w.message, sourceShape: w.sourceShape })),
+      ];
+
+      return { success: true, data: { iri: abbreviateIri(iri), label, types: abbrevTypes, properties: abbrevProps, shaclMessages } };
     } catch (e) {
       return { success: false, error: String(e) };
     }

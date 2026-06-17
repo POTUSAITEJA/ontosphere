@@ -23,7 +23,7 @@ export const mcpServerDescription =
   'loadOntology(query=…) → loadOntology(url="<prefix>") × N → setNamespace × N\n' +
   '→ setViewMode("tbox") → addNode × N (owl:Class) → addTriple × N → runLayout\n' +
   '→ setViewMode("abox") → loadRdf(turtle=...) OR addNode × N → addTriple × N → runLayout\n' +
-  '→ runReasoning → fitCanvas + exportImage(svg)  [last three safe to batch]\n\n' +
+  '→ runReasoning (includes SHACL validation by default) → getGraphState (check shacl.conforms) → fitCanvas + exportImage(svg)  [last three safe to batch]\n\n' +
   'Agent integration: (1) Claude Code / Playwright — window.__mcpTools[name](params) via browser_evaluate. ' +
   '(2) AI Relay Bridge — any AI chat controls Ontosphere via bookmarklet relay; see docs/relay-bridge.md and AGENTS.md.';
 
@@ -292,12 +292,13 @@ export const mcpManifest: McpToolManifestEntry[] = [
   },
   {
     name: 'runReasoning',
-    description: "Run OWL reasoning over the loaded graph and infer new triples. Default backend is 'konclude' (full OWL 2 DL). Pass reasonerBackend='n3' to use N3 rule-based inference instead. Pass clearBefore=true to clear previous inferences first.",
+    description: "Run OWL reasoning over the loaded graph and infer new triples. Default backend is 'konclude' (full OWL 2 DL). Pass reasonerBackend='n3' to use N3 rule-based inference instead. Pass clearBefore=true to clear previous inferences first. SHACL validation runs by default after reasoning if shapes are loaded; pass shaclValidation=false to skip.",
     inputSchema: {
       type: 'object',
       properties: {
         clearBefore: { type: 'boolean', default: false },
         reasonerBackend: { type: 'string', enum: ['konclude', 'n3'], description: "Reasoning backend: 'konclude' (OWL 2 DL, default) or 'n3' (N3 rule-based)" },
+        shaclValidation: { type: 'boolean', default: true, description: 'Run SHACL validation after reasoning (default true). Pass false to skip.' },
       },
     },
   },
@@ -313,7 +314,7 @@ export const mcpManifest: McpToolManifestEntry[] = [
   },
   {
     name: 'getGraphState',
-    description: 'Return a summary of the current canvas: node count, link count, and per-node IRI/label/types. Use to verify canvas state before or after mutations.',
+    description: 'Return a summary of the current canvas: node count, link count, per-node IRI/label/types, and SHACL validation status (shapesLoaded, conforms, errorCount, warningCount). Use to verify canvas state and check SHACL compliance.',
     inputSchema: { type: 'object' },
   },
   {
@@ -344,7 +345,7 @@ export const mcpManifest: McpToolManifestEntry[] = [
   },
   {
     name: 'getNodeDetails',
-    description: 'Fetch every triple for one entity — asserted (urn:vg:data) and inferred (urn:vg:inferred). Inferred triples are marked inferred:true. Use after runReasoning to inspect what was derived. Call getNodes first to find the IRI.',
+    description: 'Fetch every triple for one entity — asserted (urn:vg:data) and inferred (urn:vg:inferred). Inferred triples are marked inferred:true. Also returns shaclMessages[] with any SHACL validation errors/warnings for this node (severity, rule, message, sourceShape). Use after runReasoning to inspect inferences and SHACL compliance. Call getNodes first to find the IRI.',
     inputSchema: {
       type: 'object',
       required: ['iri'],
