@@ -1,59 +1,137 @@
 # Feature Demo: Zero-Install + RDF Loading
 
 > Seed for the feat-loading demo recording.
-> Shows loading ontology via URL parameter, exploring loaded graph, file upload mention.
+> Shows loading an external RDF file via URL parameter, explaining unresolved
+> labels, loading the matching ontology via autocomplete, and the ontology widget.
 >
 > Spec: `e2e/demo-feat-loading.spec.ts`
-> Dataset: `public/reasoning-demo.ttl`
 
 ---
 
-**Assistant:** Ontology loaded via URL parameter. Expanding all nodes and fitting to viewport.
-
-`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"expandNode","arguments":{}}}`
-`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-tb","spacing":200}}}`
-`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fitCanvas","arguments":{}}}`
-
-```tool-result
-<!-- runner fills this in -->
-```
+**Assistant:** Starting with an empty canvas — the URL parameter will load data automatically.
 
 ```snapshot
-caption: Loaded OWL 2 DL ontology — 13 classes, 11 properties, 8 individuals
-slug: ontology-loaded
+caption: Empty canvas — data loads via ?url= parameter
+slug: empty-canvas
 ```
 
 ---
 
-**Assistant:** Switching to ABox view to show loaded individuals.
+**Assistant:** Data loaded from the PMD shape-data file. Nodes and edges appear on the canvas.
 
-`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setViewMode","arguments":{"mode":"abox"}}}`
-`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-lr","spacing":200}}}`
-`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"expandNode","arguments":{}}}`
-`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"runLayout","arguments":{"algorithm":"dagre-lr","spacing":200}}}`
-`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"fitCanvas","arguments":{}}}`
-
-```tool-result
-<!-- runner fills this in -->
+```action
+wait: 3000
 ```
 
 ```snapshot
-caption: ABox — individuals loaded from the ontology file
-slug: abox-loaded
+caption: RDF data loaded via ?url= — nodes and edges on canvas
+slug: data-loaded
 ```
 
 ---
 
-**Assistant:** Back to TBox for the full schema overview.
+**Assistant:** The Load File button can also load RDF data from local storage.
 
-`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"setViewMode","arguments":{"mode":"tbox"}}}`
-`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"fitCanvas","arguments":{}}}`
-
-```tool-result
-<!-- runner fills this in -->
+```action
+hover: [aria-label="Load File"]
+wait: 2500
 ```
 
 ```snapshot
-caption: One URL, zero install — ontology loaded directly in the browser
-slug: tbox-final
+caption: Load File button — also accepts local .ttl / .rdf / .jsonld files
+slug: load-file-hover
+```
+
+---
+
+**Assistant:** Notice the PMD namespace prefixes on edge labels and node types — the PMDCO ontology is not loaded yet, so Ontosphere cannot resolve human-readable labels.
+
+```action
+wait: 2500
+```
+
+```snapshot
+caption: Unresolved labels — pmd: prefixes shown because PMDCO ontology is not loaded
+slug: unresolved-labels
+```
+
+---
+
+**Assistant:** If the graph contained an owl:imports statement pointing to a resolvable URI, Ontosphere would auto-load that ontology. This graph has no such import — so we load it manually.
+
+```action
+wait: 500
+```
+
+```snapshot
+caption: owl:imports auto-discovery — if present, referenced ontologies load automatically. Here none found.
+slug: owl-imports-explain
+```
+
+---
+
+**Assistant:** Opening the Load Ontology dialog — a well-known catalog is available, or enter any URL directly.
+
+```action
+click: [aria-label="Load Ontology"]
+waitFor: input[role="combobox"]
+wait: 800
+```
+
+```snapshot
+caption: Load Ontology — search known ontologies or enter a URL directly
+slug: load-ontology-dialog
+```
+
+---
+
+**Assistant:** Typing "pmdco" — it appears in the well-known ontology catalog.
+
+```action
+fill: input[role="combobox"] | pmdco
+wait: 1500
+```
+
+```snapshot
+caption: Autocomplete — PMDCO found in the well-known ontology catalog
+slug: pmdco-autocomplete
+```
+
+---
+
+**Assistant:** Selecting PMDCO from the suggestions and loading it.
+
+```action
+click: [role="option"]:has-text("pmdco — PMD Core")
+wait: 500
+click: .space-y-4 button:has-text("Load Ontology")
+wait: 8000
+```
+
+```snapshot
+caption: PMDCO loaded — edge labels and node types now show human-readable names
+slug: pmdco-loaded
+```
+
+---
+
+**Assistant:** Opening the ontology widget to show loaded sources and management options.
+
+```action
+click: button[title="Loaded ontologies"]
+wait: 2500
+```
+
+```snapshot
+caption: Ontology widget — Remove from autoload prevents loading on next visit, Unload removes it now
+slug: ontology-widget
+```
+
+---
+
+**Assistant:** Pointing at the management buttons — Remove from autoload and Unload.
+
+```snapshot
+caption: Remove from autoload — skip next session. Unload — remove right now.
+slug: ontology-management
 ```
