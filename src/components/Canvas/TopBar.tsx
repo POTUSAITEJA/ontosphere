@@ -129,11 +129,11 @@ export const TopBar: React.FC<TopBarProps> = ({
       {/* Ontology count — trigger only, panel renders in workspace container */}
       <button
         type="button"
-        className="reactodia-btn reactodia-btn-default glass-btn"
+        className="glass-btn text-xs"
         title="Loaded ontologies"
         onClick={onToggleOntologyList}
       >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+        <svg className="shrink-0" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="16"/>
           <circle cx="5" cy="19" r="3"/><line x1="12" y1="16" x2="5" y2="16"/>
           <circle cx="19" cy="19" r="3"/><line x1="12" y1="16" x2="19" y2="16"/>

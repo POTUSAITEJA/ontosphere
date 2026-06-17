@@ -7,11 +7,11 @@ interface LayoutPopoverProps {
 
 export const LayoutPopover: React.FC<LayoutPopoverProps> = ({ onToggle }) => (
   <button
-    className="reactodia-btn reactodia-btn-default glass-btn"
+    className="glass-btn text-xs"
     title="Layout settings"
     onClick={onToggle}
   >
-    <Layout style={{ width: 14, height: 14 }} />
+    <Layout className="h-3 w-3 shrink-0" />
     <span>Layout</span>
   </button>
 );
