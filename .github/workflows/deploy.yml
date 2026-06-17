@@ -37,7 +37,10 @@ jobs:
 
     - name: Build application
       run: npm run build
-      
+
+    - name: Copy demo videos into dist
+      run: cp -r docs/demo-videos dist/demo-videos
+
     - name: Setup Pages
       uses: actions/configure-pages@v4
       

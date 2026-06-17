@@ -11,6 +11,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Clean up keyframes and stale artifacts
+rm -rf docs/demo-keyframes/
+rm -rf test-results/
+
 # Start dev server in background
 npm run dev > /tmp/vite-demo.log 2>&1 &
 DEV_PID=$!

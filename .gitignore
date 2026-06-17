@@ -49,6 +49,7 @@ public/coi-serviceworker.js
 docs/demo-videos/.last-run.json
 docs/demo-videos/e2e-*/
 docs/demo-videos/*.webm
+docs/demo-keyframes/
 
 # OpenWebUI demo auth state — contains session tokens, never commit
 .playwright/owui-auth.json

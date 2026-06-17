@@ -570,24 +570,24 @@ iframe via `callToolOnStage()`. No relay popup needed. Example: `pizza-tutorial-
 
 | Video | Paper Section | Description |
 |-------|---------------|-------------|
-| [feat-loading.mp4](docs/demo-videos/feat-loading.mp4) | §3.1 Zero-Install + RDF Loading | URL param load, file upload, SPARQL endpoint |
-| [feat-exploration.mp4](docs/demo-videos/feat-exploration.mp4) | §3.2 Visual Exploration | TBox/ABox toggle, search, zoom/pan, minimap |
-| [feat-authoring.mp4](docs/demo-videos/feat-authoring.mp4) | §3.3 Canvas Authoring | Add class, draw edge, edit annotation, undo/redo |
-| [feat-clustering.mp4](docs/demo-videos/feat-clustering.mp4) | §3.4 Hierarchical Clustering | L2 fold/unfold, L3 Louvain community detection |
-| [feat-reasoning.mp4](docs/demo-videos/feat-reasoning.mp4) | §3.5 OWL 2 DL Reasoning | Konclude WASM, inferred triples, ABox inspection |
-| [feat-shacl.mp4](docs/demo-videos/feat-shacl.mp4) | §3.6 SHACL Validation | Load shapes, validate, reasoning interplay |
-| [feat-ai-relay.mp4](docs/demo-videos/feat-ai-relay.mp4) | §3.7 MCP + AI Relay | Bookmarklet injection, AI tool calls, relay round trip |
+| [feat-loading.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-loading.mp4) | §3.1 Zero-Install + RDF Loading | URL param load, file upload, SPARQL endpoint |
+| [feat-exploration.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-exploration.mp4) | §3.2 Visual Exploration | TBox/ABox toggle, search, zoom/pan, minimap |
+| [feat-authoring.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-authoring.mp4) | §3.3 Canvas Authoring | Add class, draw edge, edit annotation, undo/redo |
+| [feat-clustering.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-clustering.mp4) | §3.4 Hierarchical Clustering | L2 fold/unfold, L3 Louvain community detection |
+| [feat-reasoning.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-reasoning.mp4) | §3.5 OWL 2 DL Reasoning | Konclude WASM, inferred triples, ABox inspection |
+| [feat-shacl.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-shacl.mp4) | §3.6 SHACL Validation | Load shapes, validate, reasoning interplay |
+| [feat-ai-relay.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-ai-relay.mp4) | §3.7 MCP + AI Relay | Bookmarklet injection, AI tool calls, relay round trip |
 
 ### Workflow demos
 
 | Video | Description |
 |-------|-------------|
-| [iswc2026-comprehensive.mp4](docs/demo-videos/iswc2026-comprehensive.mp4) | Full 3-minute walkthrough of all features |
-| [advert-intro.mp4](docs/demo-videos/advert-intro.mp4) | Relay bookmarklet — mock chat + Ontosphere side by side |
-| [foaf-social-network.mp4](docs/demo-videos/foaf-social-network.mp4) | AI builds a FOAF social graph with DL reasoning |
-| [scene-ontology.mp4](docs/demo-videos/scene-ontology.mp4) | AI builds a film scene ontology on BFO/RO upper ontology |
-| [pizza-tutorial.mp4](docs/demo-videos/pizza-tutorial.mp4) | Manchester Pizza Ontology — class hierarchy, disjointness, DL reasoning |
-| [pizza-tutorial-chat.mp4](docs/demo-videos/pizza-tutorial-chat.mp4) | OWL pizza tutorial as AI tutor lesson, side-by-side chat |
+| [iswc2026-comprehensive.mp4](https://thhanke.github.io/ontosphere/demo-videos/iswc2026-comprehensive.mp4) | Full 3-minute walkthrough of all features |
+| [advert-intro.mp4](https://thhanke.github.io/ontosphere/demo-videos/advert-intro.mp4) | Relay bookmarklet — mock chat + Ontosphere side by side |
+| [foaf-social-network.mp4](https://thhanke.github.io/ontosphere/demo-videos/foaf-social-network.mp4) | AI builds a FOAF social graph with DL reasoning |
+| [scene-ontology.mp4](https://thhanke.github.io/ontosphere/demo-videos/scene-ontology.mp4) | AI builds a film scene ontology on BFO/RO upper ontology |
+| [pizza-tutorial.mp4](https://thhanke.github.io/ontosphere/demo-videos/pizza-tutorial.mp4) | Manchester Pizza Ontology — class hierarchy, disjointness, DL reasoning |
+| [pizza-tutorial-chat.mp4](https://thhanke.github.io/ontosphere/demo-videos/pizza-tutorial-chat.mp4) | OWL pizza tutorial as AI tutor lesson, side-by-side chat |
 
 To re-record all videos:
 ```sh
