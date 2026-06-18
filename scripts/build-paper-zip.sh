@@ -43,8 +43,9 @@ fi
 TMPDIR=$(mktemp -d)
 cp -r "$PAPER_DIR/." "$TMPDIR/"
 
-# Remove .gitkeep files (not needed in submission)
+# Remove files not needed in submission
 find "$TMPDIR" -name '.gitkeep' -delete
+rm -f "$TMPDIR/lncs-splnproc.zip"
 
 # Create ZIP from temp directory (use Python zipfile since zip may not be installed)
 rm -f "$ZIP_NAME"
