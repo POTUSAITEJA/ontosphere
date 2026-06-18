@@ -2,205 +2,42 @@
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ontosphere: A Zero-Install Semantic Web Workbench with In-Browser OWL 2 DL Reasoning</title>
   <link rel="canonical" href="https://thhanke.github.io/ontosphere/paper/" />
+  <link href="media/css/lncs.css" media="all" rel="stylesheet" title="LNCS" />
+  <link href="media/css/acm.css" media="all" rel="stylesheet alternate" title="ACM" disabled="" />
+  <link href="media/css/dokieli.css" rel="stylesheet" media="all" />
+  <script src="scripts/dokieli.js"></script>
   <style>
-/* ===================================================================
-   LNCS-style CSS for dokieli scholarly HTML
-   Based on the dokieli LNCS template (lncs-splnproc)
-   =================================================================== */
+/* Paper-specific overrides for lncs.css */
 
-/* --- Reset & Base -------------------------------------------------- */
-*, *::before, *::after { box-sizing: border-box; }
+/* Suppress section numbering for acknowledgements and GenAI declaration
+   (lncs.css handles acknowledgements h2:before but not generative-ai-declaration) */
+#generative-ai-declaration h2:before { content:""; }
 
-body {
-  color: #000;
-  background: #fff;
-  font-family: "CMU Serif", "Computer Modern", Georgia, "Times New Roman", "Nimbus Roman No9 L", serif;
-  font-size: 125%;
-  line-height: 1.231;
-  margin: 0 auto;
-  padding: 2.5em 0;
-  width: 35.475em;
-  hyphens: auto;
-  -webkit-hyphens: auto;
-}
+/* Screen link styling (not in lncs.css) */
+a { color:#000; text-decoration:underline; }
+section a.ref { text-decoration:none; }
 
-/* --- Headings ------------------------------------------------------ */
-h1, h2, h3, h4, strong, dt, figcaption::before, caption::before {
-  font-weight: bold;
-}
-h5, h6, em, cite, dfn, address {
-  font-style: italic;
-}
+/* Video in figures: wider than lncs.css default 60% */
+figure video { max-width:100%; width:100%; }
 
-h1 { font-size: 1.4615em; margin-bottom: 1.5em; text-align: center; line-height: 1.3; }
-h2 { font-size: 1.231em; margin-top: 1.25em; margin-bottom: 0.75em; }
-h3 { font-size: 1em; margin-top: 1.5em; margin-bottom: 0.5em; font-weight: bold; }
-h4 { font-size: 1em; font-weight: bold; }
-h5 { font-size: 1em; }
-h6 { font-size: 0.923em; }
+/* Author ORCID (not in standard lncs.css) */
+#author-orcid { font-size:0.846em; }
 
-/* --- Paragraphs ---------------------------------------------------- */
-p { text-indent: 1em; margin: 0 0 0.5em 0; }
-h1 + p, h2 + p, h3 + p, h4 + p, h5 + p,
-div > p:first-child, dl + p, ul + p, ol + p,
-figure + p, blockquote p { text-indent: 0; }
+/* Footer metadata */
+article footer { text-align:center; margin-top:2em; }
+article footer p { font-size:0.846em; color:#555; text-indent:0; }
 
-/* --- Article & Section Counters ------------------------------------ */
-article { counter-reset: section; }
-
-article > div#content > section:not(#abstract):not(#keywords):not(#acknowledgements):not(#references):not(#appendix) {
-  counter-increment: section;
-  counter-reset: sub-section;
-}
-article > div#content > section:not(#abstract):not(#keywords):not(#acknowledgements):not(#references):not(#appendix) > section {
-  counter-increment: sub-section;
-  counter-reset: sub-sub-section;
-}
-article > div#content > section:not(#abstract):not(#keywords):not(#acknowledgements):not(#references):not(#appendix) > section > section {
-  counter-increment: sub-sub-section;
-}
-
-article > div#content > section:not(#abstract):not(#keywords):not(#acknowledgements):not(#references):not(#appendix) > h2::before {
-  content: counter(section) "\00a0\00a0\00a0\00a0";
-}
-section > h3::before {
-  content: counter(section) "." counter(sub-section) "\00a0\00a0\00a0";
-}
-section > section > h4::before {
-  content: counter(section) "." counter(sub-section) "." counter(sub-sub-section) "\00a0\00a0";
-}
-
-/* --- Authors ------------------------------------------------------- */
-#authors { margin: 0 auto 2.5em; text-align: center; }
-#authors dl { line-height: 1; margin-bottom: 1em; }
-#authors dt { display: none; }
-#authors dd { display: inline; margin: 0; }
-#author-name { font-size: 1em; }
-
-#author-org { list-style: none; padding: 0; margin: 0.5em 0; font-size: 0.923em; }
-#author-org li { display: block; margin-bottom: 0.25em; }
-#author-orcid { list-style: none; padding: 0; margin: 0.25em 0; font-size: 0.846em; }
-#author-orcid li { display: block; }
-#author-email { list-style: none; padding: 0; margin: 0.25em 0; font-size: 0.923em; }
-#author-email li { display: block; }
-
-/* --- Abstract & Keywords ------------------------------------------- */
-#abstract, #keywords { padding: 0 2.5em; margin: 0 0 1em 0; }
-#abstract, ol, ul, p, dd { text-align: justify; }
-
-#keywords ul { list-style: none; padding: 0; margin: 0; }
-#keywords li { display: inline; }
-#keywords li + li::before { content: " \00b7\0020"; }
-
-/* --- Links --------------------------------------------------------- */
-a { color: #000; text-decoration: underline; }
-a:hover { color: #333; }
-section a.ref { text-decoration: none; }
-
-/* --- Figures ------------------------------------------------------- */
-figure {
-  margin: 1.5em 0;
-  text-align: center;
-  counter-increment: figure;
-}
-figure img { max-width: 100%; height: auto; }
-figcaption {
-  font-size: 0.923em;
-  margin-top: 0.5em;
-  text-align: justify;
-}
-figcaption::before {
-  content: "Fig.\00a0" counter(figure) ".\00a0";
-  font-weight: bold;
-}
-article { counter-reset: section figure table; }
-
-/* --- Tables -------------------------------------------------------- */
-table {
-  border-collapse: collapse;
-  margin: 1.5em auto;
-  counter-increment: table;
-}
-caption {
-  font-size: 0.923em;
-  margin-bottom: 0.5em;
-  text-align: justify;
-}
-caption::before {
-  content: "Table\00a0" counter(table) ".\00a0";
-  font-weight: bold;
-}
-th, td { padding: 0.25em 0.75em; border-bottom: 1px solid #000; text-align: left; }
-thead th { border-bottom: 2px solid #000; }
-
-/* --- References ---------------------------------------------------- */
-#references { clear: both; margin-top: 2em; }
-#references ol { counter-reset: list-order; text-align: left; padding-left: 0; }
-#references ol li {
-  counter-increment: list-order;
-  list-style-type: none;
-  margin-left: 1.5em;
-  text-indent: -1.5em;
-  font-size: 0.923em;
-  margin-bottom: 0.35em;
-}
-#references ol li::before {
-  content: counter(list-order) ".\00a0";
-}
-
-/* --- Footnotes ----------------------------------------------------- */
-aside.note {
-  font-size: 0.846em;
-  border-top: 1px solid #000;
-  margin-top: 1em;
-  padding-top: 0.5em;
-}
-
-/* --- Code ---------------------------------------------------------- */
-code, pre {
-  font-family: "CMU Typewriter Text", "Courier New", Courier, monospace;
-  font-size: 0.9em;
-}
-pre {
-  background: #f8f8f8;
-  padding: 0.75em 1em;
-  overflow-x: auto;
-  border: 1px solid #ddd;
-}
-
-/* --- Misc ---------------------------------------------------------- */
-blockquote {
-  margin: 1em 2em;
-  font-style: italic;
-}
-hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
-
-/* --- Print --------------------------------------------------------- */
+/* Print: suppress link decoration and hide video player */
 @media print {
-  @page { margin: 20mm 15mm; }
-  body {
-    font-size: 10pt !important;
-    margin: 0 auto !important;
-    padding: 0 !important;
-    width: 122mm !important;
-  }
-  h1 { font-size: 14pt !important; }
-  h2 { font-size: 12pt !important; }
-  h3, h4, h5 { font-size: 10pt !important; }
-  h6 { font-size: 9pt !important; }
-  a { color: #000 !important; text-decoration: none !important; }
-  a[href]::after { content: none !important; }
-  #references ol li { font-size: 9pt !important; }
-  section { page-break-inside: avoid; }
-  figure { page-break-inside: avoid; }
+  a[href]::after { content:none !important; }
+  video { display:none !important; }
 }
   </style>
 </head>
 
-<body about="" typeof="schema:CreativeWork sioc:Post prov:Entity"
+<body about="" typeof="schema:CreativeWork prov:Entity"
   prefix="
     rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
     rdfs: http://www.w3.org/2000/01/rdf-schema#
@@ -256,12 +93,16 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
 
         <ul id="author-orcid">
           <li>
-            <img src="https://info.orcid.org/wp-content/uploads/2019/11/orcid_16x16.png"
+            <img src="media/orcid_16x16.png"
                  alt="ORCID" width="16" height="16" style="vertical-align: text-bottom;" />
             <a about="#thomas-hanke" rel="owl:sameAs"
                href="https://orcid.org/0000-0003-1649-6832">https://orcid.org/0000-0003-1649-6832</a>
           </li>
         </ul>
+
+        <p id="identifier">
+          Identifier: <a href="https://thhanke.github.io/ontosphere/paper/">https://thhanke.github.io/ontosphere/paper/</a>
+        </p>
       </div>
 
       <!-- =========================================================
@@ -302,7 +143,7 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
             <p>The contributions of this work are threefold:</p>
             <ol>
               <li><strong>In-browser OWL&nbsp;2&nbsp;DL reasoning.</strong> We compile the Konclude tableau reasoner&nbsp;<a class="ref" href="#ref-1">[1]</a> to WebAssembly and execute it in a SharedArrayBuffer-backed Web Worker, providing full SROIQ(D) expressivity within the browser &mdash; a capability not previously available in any browser-based ontology tool.</li>
-              <li><strong>A 31-tool MCP surface for AI integration.</strong> Ontosphere exposes a comprehensive Model Context Protocol&nbsp;<a class="ref" href="#ref-4">[4]</a> server that allows any MCP-compatible AI agent to build, query, reason over, and export knowledge graphs programmatically.</li>
+              <li><strong>A 34-tool MCP surface for AI integration.</strong> Ontosphere exposes a comprehensive Model Context Protocol&nbsp;<a class="ref" href="#ref-4">[4]</a> server that allows any MCP-compatible AI agent to build, query, reason over, and validate knowledge graphs programmatically.</li>
               <li><strong>Zero-install architecture.</strong> The entire system &mdash; triple store, reasoner, layout engines, graph editor, and MCP server &mdash; is packaged as a static single-page application served from a CDN, requiring only a modern browser with SharedArrayBuffer support.</li>
             </ol>
           </div>
@@ -312,16 +153,17 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
         <section id="system-overview" rel="schema:hasPart" resource="#system-overview">
           <h2 property="schema:name">System Overview</h2>
           <div datatype="rdf:HTML" property="schema:description">
-            <p>Ontosphere is implemented as a Vite-bundled React single-page application (v1.5.0) in which all data processing occurs client-side. The architecture comprises six principal components, each running in the browser without server dependencies (see <a class="ref" href="#fig-architecture">Fig.&nbsp;1</a>).</p>
+            <p>Ontosphere is implemented as a Vite-bundled React single-page application (v1.5.0) in which all data processing occurs client-side. The architecture comprises seven principal components, each running in the browser without server dependencies (see <a class="ref" href="#fig-architecture">Fig.&nbsp;1</a>).</p>
 
             <figure id="fig-architecture">
-              <img src="media/architecture.svg" alt="Ontosphere system architecture" style="width: 100%;" />
+              <img src="media/architecture.svg" alt="Ontosphere system architecture" />
               <figcaption>Ontosphere system architecture. All components run client-side in the browser; only the AI chat interface is external.</figcaption>
             </figure>
 
             <p><strong>RDF Triple Store.</strong> An in-memory quad store powered by N3.js&nbsp;<a class="ref" href="#ref-3">[3]</a> serves as the single source of truth. The store manages three named graphs: <code>urn:vg:data</code> for asserted triples, <code>urn:vg:inferred</code> for reasoner-derived triples, and <code>urn:vg:shapes</code> for SHACL constraint shapes&nbsp;<a class="ref" href="#ref-11">[11]</a>. The store supports loading from Turtle, JSON-LD, RDF/XML, N-Triples, and N3 serialisations, as well as from SPARQL endpoints and Apache Fuseki datasets. A Comunica-based SPARQL engine provides SELECT, CONSTRUCT, and UPDATE query capabilities over the store.</p>
             <p><strong>Visual Graph Editor.</strong> The Reactodia&nbsp;<a class="ref" href="#ref-2">[2]</a> canvas provides an interactive workspace with pan, zoom, minimap navigation, and entity-group support. Ontosphere extends Reactodia with an always-on authoring mode: users add nodes via search, draw edges by dragging a halo handle between nodes, and edit annotation properties inline. The canvas maintains two views &mdash; TBox (classes and properties) and ABox (individuals) &mdash; each with independent fold state.</p>
             <p><strong>OWL&nbsp;2&nbsp;DL Reasoner.</strong> The Konclude reasoner&nbsp;<a class="ref" href="#ref-1">[1]</a>, a complete tableau reasoner for the description logic SROIQ(D), is compiled to WebAssembly and executed in a dedicated Web Worker with SharedArrayBuffer-backed pthreads. Reasoning completes in 250&thinsp;ms&ndash;2.5&thinsp;s for typical benchmark ontologies (LUBM, GALEN, Pizza). Inferred triples are visually distinguished with amber dashed edges and italic type annotations. Automatic OWL&nbsp;DL consistency checking runs alongside inference, reporting per-entity clash details when contradictions are detected.</p>
+            <p><strong>SHACL Validation.</strong> The shacl-engine library&nbsp;<a class="ref" href="#ref-11">[11]</a> provides SHACL Core validation with SPARQL-based constraints and targets, executing in the reasoning Web Worker after OWL inference completes (&sect;3.4).</p>
             <p><strong>Layout Engines.</strong> Multiple graph layout algorithms &mdash; Dagre&nbsp;<a class="ref" href="#ref-8">[8]</a> (horizontal/vertical) and ELK&nbsp;<a class="ref" href="#ref-8">[8]</a> (layered, force, stress, radial) &mdash; run as Web Workers to maintain UI responsiveness. Spacing is adjustable and re-layout triggers automatically on graph changes when auto-layout is enabled.</p>
             <p><strong>Hierarchical Clustering.</strong> A three-level fold hierarchy manages visual complexity for large graphs. Level&nbsp;L1 controls per-node annotation property visibility. Level&nbsp;L2 collapses subclass chains and OWL collection axioms into representative group nodes. Level&nbsp;L3 applies community-detection algorithms &mdash; Louvain&nbsp;<a class="ref" href="#ref-10">[10]</a>, Label Propagation, or K-Means &mdash; and activates automatically above a configurable node threshold.</p>
             <p><strong>MCP Server and AI Relay Bridge.</strong> Ontosphere registers 34 tools with the browser&rsquo;s <code>navigator.modelContext</code> API&nbsp;<a class="ref" href="#ref-4">[4]</a>, organised into seven categories: graph management, node operations, link operations, layout and navigation, reasoning, namespace management, and SHACL validation. The AI Relay Bridge extends this to arbitrary AI chat interfaces via a bookmarklet that watches for JSON-RPC&nbsp;2.0 tool calls, routes them to Ontosphere through a BroadcastChannel, and injects results back &mdash; requiring no server, extension, or API keys.</p>
@@ -414,6 +256,14 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
           </div>
         </section>
 
+        <!-- Declaration on Generative AI -->
+        <section id="generative-ai-declaration">
+          <h2>Declaration on Generative AI</h2>
+          <div datatype="rdf:HTML" property="schema:description">
+            <p>During the preparation of this work, the author used Claude (Anthropic) in order to: grammar and spelling checks, style improvements, and verifying factual consistency of feature descriptions against the codebase. After using this tool, the author reviewed and edited the content as needed and takes full responsibility for the publication&rsquo;s content.</p>
+          </div>
+        </section>
+
         <!-- References -->
         <section id="references">
           <h2>References</h2>
@@ -440,7 +290,7 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
            Footer / Metadata
            ========================================================= -->
       <footer>
-        <p style="font-size: 0.846em; text-align: center; margin-top: 3em; color: #555;">
+        <p>
           Live demo:
           <a about="" rel="schema:url" href="https://thhanke.github.io/ontosphere/">https://thhanke.github.io/ontosphere/</a>
           <br />
@@ -450,8 +300,12 @@ hr { border: none; border-top: 1px solid #000; margin: 2em 0; }
           Source:
           <a about="" rel="schema:codeRepository" href="https://github.com/ThHanke/ontosphere">https://github.com/ThHanke/ontosphere</a>
         </p>
-        <p style="font-size: 0.77em; text-align: center; color: #777;">
-          Submitted to the Posters &amp; Demos Track, ISWC 2026.
+        <p>
+          Submitted to the Posters &amp; Demos Track, ISWC 2026, October 25&ndash;29, 2026, Bari, Italy.
+        </p>
+        <p>
+          &copy; 2026 Copyright for this paper by its author. Use permitted under Creative Commons License Attribution 4.0 International
+          (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).
         </p>
       </footer>
 

@@ -46,19 +46,62 @@ cp -r "$PAPER_DIR/." "$TMPDIR/"
 # Remove .gitkeep files (not needed in submission)
 find "$TMPDIR" -name '.gitkeep' -delete
 
-# Create ZIP from temp directory
+# Create ZIP from temp directory (use Python zipfile since zip may not be installed)
 rm -f "$ZIP_NAME"
-(cd "$TMPDIR" && zip -r - .) > "$ZIP_NAME"
+python3 -c "
+import zipfile, os, sys
+src = sys.argv[1]
+dst = sys.argv[2]
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zf:
+    for root, dirs, files in os.walk(src):
+        for f in sorted(files):
+            full = os.path.join(root, f)
+            arcname = os.path.relpath(full, src)
+            zf.write(full, arcname)
+    print('Contents:')
+    for info in zf.infolist():
+        print(f'  {info.compress_size:>8}  {info.filename}')
+" "$TMPDIR" "$ZIP_NAME"
+
+# --- Generate PDF via Playwright + dokieli print styles ---------------
+PDF_NAME="ontosphere-iswc2026-paper.pdf"
+echo ""
+echo "Generating PDF via Playwright (dokieli @media print styles)..."
+
+PAPER_PORT=8766
+python3 -m http.server $PAPER_PORT --directory "$PAPER_DIR" --bind 127.0.0.1 &>/dev/null &
+HTTP_PID=$!
+sleep 1
+
+node -e "
+const { chromium } = require('playwright');
+(async () => {
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  await page.goto('http://127.0.0.1:${PAPER_PORT}/', { waitUntil: 'networkidle' });
+  await page.pdf({
+    path: '${PDF_NAME}',
+    format: 'A4',
+    printBackground: true,
+    preferCSSPageSize: true,
+  });
+  await browser.close();
+  const fs = require('fs');
+  const stat = fs.statSync('${PDF_NAME}');
+  console.log('PDF generated: ${PDF_NAME} (' + Math.round(stat.size / 1024) + 'K)');
+})().catch(e => { console.error(e); process.exit(1); });
+"
+
+kill $HTTP_PID 2>/dev/null || true
 
 # --- Report ----------------------------------------------------------
-SIZE=$(du -h "$ZIP_NAME" | cut -f1)
+ZIP_SIZE=$(du -h "$ZIP_NAME" | cut -f1)
+PDF_SIZE=$(du -h "$PDF_NAME" 2>/dev/null | cut -f1 || echo "N/A")
 echo ""
-echo "Created $ZIP_NAME ($SIZE)"
-echo ""
-echo "Contents:"
-unzip -l "$ZIP_NAME"
+echo "Created $ZIP_NAME ($ZIP_SIZE)"
+echo "Created $PDF_NAME ($PDF_SIZE)"
 echo ""
 echo "Before submitting:"
 echo "  1. Unzip and open index.html in a browser from the filesystem"
 echo "  2. Verify it renders correctly (fonts, layout, links)"
-echo "  3. Print to PDF and check page breaks"
+echo "  3. Open PDF and check page breaks + LNCS look-and-feel"
