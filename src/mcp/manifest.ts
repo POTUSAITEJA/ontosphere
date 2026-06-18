@@ -291,6 +291,48 @@ export const mcpManifest: McpToolManifestEntry[] = [
     inputSchema: { type: 'object' },
   },
   {
+    name: 'clusterNodes',
+    description: 'Group canvas nodes into clusters. Provide iris to group exactly those nodes directly, or provide algorithm to run community-detection on all canvas nodes. Fails if any target node is already in a cluster.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        iris: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional subset of node IRIs to group. When provided, groups exactly these nodes without running a community algorithm.',
+        },
+        algorithm: {
+          type: 'string',
+          description: 'Community-detection algorithm. Required when iris is not provided.',
+          enum: ['label-propagation', 'louvain', 'kmeans'],
+        },
+      },
+    },
+  },
+  {
+    name: 'layoutNodes',
+    description: 'Lay out a named subset of canvas nodes together in a free area, pan the viewport to them, and return the bounding box. Fails if any IRI is not on the canvas or is inside a cluster.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        iris: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'IRIs of the canvas nodes to lay out together.',
+        },
+        algorithm: {
+          type: 'string',
+          description: 'Layout algorithm to apply to the subset. Defaults to elk-layered.',
+          enum: ['dagre-lr', 'dagre-tb', 'elk-layered', 'elk-force', 'elk-stress', 'elk-radial'],
+        },
+        spacing: {
+          type: 'number',
+          description: 'Minimum distance between nodes in pixels. Defaults to 120.',
+        },
+      },
+    },
+  },
+  {
     name: 'runReasoning',
     description: "Run OWL reasoning over the loaded graph and infer new triples. Default backend is 'konclude' (full OWL 2 DL). Pass reasonerBackend='n3' to use N3 rule-based inference instead. Pass clearBefore=true to clear previous inferences first. SHACL validation runs by default after reasoning if shapes are loaded; pass shaclValidation=false to skip.",
     inputSchema: {
@@ -413,6 +455,17 @@ export const mcpManifest: McpToolManifestEntry[] = [
     inputSchema: {
       type: 'object',
       properties: {},
+    },
+  },
+  {
+    name: 'loadShaclFromUrl',
+    description: 'Load SHACL shapes from a URL into urn:vg:shapes. Supports direct .ttl file URLs, GitHub folder tree URLs (auto-discovers .ttl/.shacl files), and comma-separated mixes.',
+    inputSchema: {
+      type: 'object',
+      required: ['url'],
+      properties: {
+        url: { type: 'string', description: 'URL to load shapes from. Can be a direct .ttl URL, a GitHub tree URL (https://github.com/owner/repo/tree/branch/path), or comma-separated mix of both.' },
+      },
     },
   },
   {
