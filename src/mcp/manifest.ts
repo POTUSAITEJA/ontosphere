@@ -350,6 +350,21 @@ export const mcpManifest: McpToolManifestEntry[] = [
     inputSchema: { type: 'object' },
   },
   {
+    name: 'explainDiagnostics',
+    description:
+      'Run the full symbolic verifier (OWL 2 DL reasoning + SHACL) and return ONE structured diagnosis of everything wrong with the current graph: ' +
+      '{ isConsistent, justifications, unsatisfiableClasses, profile, shaclViolations, repairBrief }. ' +
+      'When isConsistent=false, justifications lists each minimal contradictory axiom set (MIPS) — remove or revise one axiom per set. ' +
+      'profile reports OWL 2 DL profile violations (e.g. a literal on an object property); shaclViolations are data-shape failures; ' +
+      'repairBrief is a ranked plain-language summary to act on. Use after authoring to decide what to fix. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        maxJustifications: { type: 'number', default: 3, description: 'Max independent inconsistency justifications (MIPS) to return.' },
+      },
+    },
+  },
+  {
     name: 'getCapabilities',
     description: 'Return available layout algorithms, export formats, and loaded ontologies.',
     inputSchema: { type: 'object' },
