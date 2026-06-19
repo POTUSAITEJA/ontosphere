@@ -270,6 +270,9 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
   const isShaclRule = (rule: string) => rule.startsWith('shacl:') || rule === 'sh:ValidationResult';
   const shaclErrors = errors.filter(e => isShaclRule(e.rule));
   const shaclWarnings = warnings.filter(w => isShaclRule(w.rule));
+  // F7: first OWL (non-SHACL) clash, used to preview the cause in the inconsistency summary.
+  const clashError = errors.find(e => !isShaclRule(e.rule));
+  const clashLocalName = clashError?.nodeId ? (clashError.nodeId.split(/[#/]/).pop() ?? clashError.nodeId) : null;
   const shaclTotal = shaclErrors.length + shaclWarnings.length;
   const shaclHasErrors = shaclErrors.length > 0;
 
@@ -412,7 +415,15 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
                     The ontology contains a logical contradiction.
-                    Inferred triples were not generated. See the Errors tab for the
+                    {clashError && (
+                      <>
+                        {' '}First clash:{' '}
+                        <span className="font-medium text-foreground">
+                          {clashLocalName ? `${clashLocalName} — ` : ''}{clashError.rule}
+                        </span>.
+                      </>
+                    )}
+                    {' '}Inferred triples were not generated. See the Errors tab for the
                     specific axioms involved.
                   </p>
                 </CardContent>
