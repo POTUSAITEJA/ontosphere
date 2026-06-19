@@ -23,6 +23,7 @@ import { WELL_KNOWN } from "../utils/wellKnownOntologies.ts";
 import { ensureDefaultNamespaceMap } from "../constants/namespaces.ts";
 import { RDF_TYPE, RDFS_LABEL, SHACL } from "../constants/vocabularies.ts";
 import { OWL_SCHEMA_AXIOMS } from "../constants/owlSchemaData.ts";
+import { mipsToReasoningError } from "./reasoningDiagnostics.ts";
 import { QueryEngine } from "@comunica/query-sparql-rdfjs";
 const KONCLUDE_INFERRED_GRAPH_IRI = "urn:vg:inferred";
 
@@ -506,6 +507,8 @@ type ReasoningError = {
   message: string;
   rule: string;
   severity: "critical" | "error";
+  sourceShape?: string;
+  justification?: { subject: string; predicate: string; object: string }[];
 };
 
 type ReasoningInference = {
@@ -2612,85 +2615,9 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     }
   }
 
-  function mipsToReasoningError(mips: N3.Quad[]): ReasoningError {
-    const RDF_TYPE_P = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const OWL_NAMED_INDIVIDUAL = "http://www.w3.org/2002/07/owl#NamedIndividual";
-    const CLASH_PREDICATES = new Set([
-      "http://www.w3.org/2002/07/owl#disjointWith",
-      "http://www.w3.org/2002/07/owl#maxCardinality",
-      "http://www.w3.org/2002/07/owl#maxQualifiedCardinality",
-      "http://www.w3.org/2002/07/owl#complementOf",
-      "http://www.w3.org/2002/07/owl#AsymmetricProperty",
-    ]);
-
-    // Find nodeId: subject of rdf:type quad where object is a user-defined class
-    // (not an OWL/RDF/RDFS vocabulary term). This picks individuals, not class declarations.
-    let nodeId: string | undefined;
-    for (const q of mips) {
-      if (
-        q.predicate.value === RDF_TYPE_P &&
-        q.object.termType === "NamedNode" &&
-        !q.object.value.startsWith("http://www.w3.org/") &&
-        q.subject.termType === "NamedNode"
-      ) {
-        nodeId = q.subject.value;
-        break;
-      }
-    }
-    if (!nodeId) {
-      for (const q of mips) {
-        if (
-          q.predicate.value === RDF_TYPE_P &&
-          q.subject.termType === "NamedNode" &&
-          !q.subject.value.startsWith("http://www.w3.org/")
-        ) {
-          nodeId = q.subject.value;
-          break;
-        }
-      }
-    }
-    if (!nodeId) {
-      for (const q of mips) {
-        if (
-          q.subject.termType === "NamedNode" &&
-          !q.subject.value.startsWith("http://www.w3.org/")
-        ) {
-          nodeId = q.subject.value;
-          break;
-        }
-      }
-    }
-
-    let rule = "owl:inconsistency";
-    for (const q of mips) {
-      if (CLASH_PREDICATES.has(q.predicate.value)) {
-        const local = q.predicate.value.split(/[#/]/).pop() ?? q.predicate.value;
-        rule = `owl:${local}`;
-        break;
-      }
-    }
-
-    const abbrev = (iri: string): string => {
-      const known: Record<string, string> = {
-        "http://www.w3.org/1999/02/22-rdf-syntax-ns#": "rdf:",
-        "http://www.w3.org/2000/01/rdf-schema#": "rdfs:",
-        "http://www.w3.org/2002/07/owl#": "owl:",
-      };
-      for (const [ns, prefix] of Object.entries(known)) {
-        if (iri.startsWith(ns)) return prefix + iri.slice(ns.length);
-      }
-      return iri.split(/[#/]/).pop() ?? iri;
-    };
-
-    const nodeLocalName = nodeId ? abbrev(nodeId) : "unknown";
-    const axiomList = mips
-      .slice(0, 3)
-      .map(q => `${abbrev(q.subject.value)} ${abbrev(q.predicate.value)} ${abbrev(q.object.value)}`)
-      .join("; ");
-    const message = `Clash: ${nodeLocalName} — ${rule}. Involved axioms: ${axiomList}${mips.length > 3 ? ` (+${mips.length - 3} more)` : ""}`;
-
-    return { nodeId, rule, severity: "critical", message };
-  }
+  // mipsToReasoningError is imported from ./reasoningDiagnostics — it now attaches
+  // the full justification axiom set (see reasoningDiagnostics.ts) rather than
+  // truncating to three axioms.
 
   async function handleRunReasoning(
     msg: RDFWorkerRunReasoningMessage,
