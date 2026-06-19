@@ -362,6 +362,38 @@ class KoncludeReasoner {
     return result;
   }
 
+  /**
+   * Return the IRIs of classes that are unsatisfiable (entailed equivalent to
+   * owl:Nothing) over the base graphs. Mirrors checkConsistency's graph filtering
+   * and blank-node de-skolemisation, then asks the Konclude worker for the
+   * unsatisfiable-class buffer (a newline-separated IRI list).
+   */
+  getUnsatisfiableClasses(store: N3.Store): Promise<string[]> {
+    const result = this._queue.then(async () => {
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes"]);
+      const candidates: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
+        const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
+        return !EXCLUDED_GRAPHS.has(g);
+      });
+      const BNODE_PREFIX = "urn:vg:bnode:";
+      const deskolemized = candidates.map((q) => {
+        const subj = q.subject.termType === "NamedNode" && q.subject.value.startsWith(BNODE_PREFIX)
+          ? N3.DataFactory.blankNode(q.subject.value.slice(BNODE_PREFIX.length)) : q.subject;
+        const obj = q.object.termType === "NamedNode" && q.object.value.startsWith(BNODE_PREFIX)
+          ? N3.DataFactory.blankNode(q.object.value.slice(BNODE_PREFIX.length)) : q.object;
+        if (subj === q.subject && obj === q.object) return q;
+        return N3.DataFactory.quad(subj, q.predicate, obj, q.graph);
+      });
+      const { tripleBuffer, strTableBuffer } = _encodeToBuffers(deskolemized);
+      await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer, false], [tripleBuffer, strTableBuffer]);
+      await this._call("classification", []);
+      const raw = (await this._call("getUnsatisfiableClassBuffer", [])) as string;
+      return typeof raw === "string" ? raw.split("\n").map((s) => s.trim()).filter(Boolean) : [];
+    });
+    this._queue = result.then(() => {}, () => {});
+    return result;
+  }
+
   explainInconsistency(store: N3.Store, maxJustifications = 1): Promise<N3.Quad[][]> {
     const result = this._queue.then(async () => {
       const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes"]);
@@ -2612,6 +2644,14 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               m.map((q) => ({ subject: q.subject.value, predicate: q.predicate.value, object: q.object.value })),
             ),
           };
+          break;
+        }
+        case "getUnsatisfiableClasses": {
+          const konclude = getKoncludeReasoner();
+          await konclude.ready;
+          // The wrapper filters base graphs (excludes inferred/shapes/workflows) internally.
+          const unsatisfiable = await konclude.getUnsatisfiableClasses(getSharedStore());
+          result = { unsatisfiable: Array.isArray(unsatisfiable) ? unsatisfiable : [] };
           break;
         }
         default:

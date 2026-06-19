@@ -23,3 +23,13 @@ describe("explainInconsistency worker command", () => {
     expect(() => validateRdfWorkerCommandInput("explainInconsistency", { maxJustifications: "x" })).toThrow();
   });
 });
+
+describe("getUnsatisfiableClasses worker command", () => {
+  it("is a registered command", () => {
+    expect(RDF_WORKER_COMMANDS).toContain("getUnsatisfiableClasses");
+  });
+  it("accepts undefined payload, rejects a payload", () => {
+    expect(() => validateRdfWorkerCommandInput("getUnsatisfiableClasses", undefined)).not.toThrow();
+    expect(() => validateRdfWorkerCommandInput("getUnsatisfiableClasses", {})).toThrow();
+  });
+});

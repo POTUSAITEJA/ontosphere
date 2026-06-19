@@ -6,13 +6,13 @@ const {
   mockRunReasoning,
   mockExplainInconsistency,
   mockRunShacl,
-  mockSparql,
+  mockGetUnsat,
   mockFetchQuadsPage,
 } = vi.hoisted(() => ({
   mockRunReasoning: vi.fn(),
   mockExplainInconsistency: vi.fn(),
   mockRunShacl: vi.fn(),
-  mockSparql: vi.fn(),
+  mockGetUnsat: vi.fn(),
   mockFetchQuadsPage: vi.fn(),
 }));
 
@@ -21,7 +21,7 @@ vi.mock('@/utils/rdfManager', () => ({
     runReasoning: mockRunReasoning,
     explainInconsistency: mockExplainInconsistency,
     runShaclValidation: mockRunShacl,
-    sparqlQuery: mockSparql,
+    getUnsatisfiableClasses: mockGetUnsat,
     fetchQuadsPage: mockFetchQuadsPage,
   },
 }));
@@ -42,7 +42,7 @@ beforeEach(() => {
   mockRunReasoning.mockResolvedValue({ isConsistent: true, errors: [] });
   mockExplainInconsistency.mockResolvedValue([]);
   mockRunShacl.mockResolvedValue({ conforms: true, violations: [], shapeCount: 0 });
-  mockSparql.mockResolvedValue([]);
+  mockGetUnsat.mockResolvedValue([]);
   mockFetchQuadsPage.mockResolvedValue({ items: [] });
 });
 
@@ -78,8 +78,8 @@ describe('explainDiagnostics', () => {
     expect(res.data.repairBrief.toLowerCase()).toContain('disjointwith');
   });
 
-  it('unsatisfiable class from SPARQL is reported', async () => {
-    mockSparql.mockResolvedValue([{ c: { value: 'http://ex/EmptyClass' } }]);
+  it('unsatisfiable class from Konclude is reported', async () => {
+    mockGetUnsat.mockResolvedValue(['http://ex/EmptyClass']);
     const res = await explainDiagnostics.handler({});
     expect(res.data.unsatisfiableClasses).toContain('http://ex/EmptyClass');
     expect(res.data.repairBrief).toContain('EmptyClass');

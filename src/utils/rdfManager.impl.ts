@@ -750,6 +750,13 @@ export class RDFManagerImpl {
     return Array.isArray(safe.mips) ? (safe.mips as { subject: string; predicate: string; object: string }[][]) : [];
   }
 
+  /** IRIs of classes entailed to be unsatisfiable (equivalent to owl:Nothing). */
+  async getUnsatisfiableClasses(): Promise<string[]> {
+    const response = await this.worker.call("getUnsatisfiableClasses", undefined);
+    const safe = isPlainObject(response) ? response : {};
+    return Array.isArray(safe.unsatisfiable) ? (safe.unsatisfiable as string[]) : [];
+  }
+
   onReasoningStage(handler: (payload: { id: string; stage: string; meta?: Record<string, unknown> }) => void): () => void {
     return this.worker.on('reasoningStage', handler);
   }

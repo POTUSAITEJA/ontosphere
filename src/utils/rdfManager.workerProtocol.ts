@@ -139,6 +139,7 @@ export type RDFWorkerCommandPayloads = {
   setDebug: { enabled: boolean };
   runShaclValidation: undefined;
   explainInconsistency: { maxJustifications?: number };
+  getUnsatisfiableClasses: undefined;
 };
 
 export const RDF_WORKER_COMMANDS = [
@@ -169,6 +170,7 @@ export const RDF_WORKER_COMMANDS = [
   "setDebug",
   "runShaclValidation",
   "explainInconsistency",
+  "getUnsatisfiableClasses",
 ] as const;
 
 export type RDFWorkerCommandName = (typeof RDF_WORKER_COMMANDS)[number];
@@ -616,6 +618,9 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
       (payload as { maxJustifications?: unknown }).maxJustifications,
       "explainInconsistency.maxJustifications must be a number when provided",
     );
+  },
+  getUnsatisfiableClasses(payload) {
+    invariant(typeof payload === "undefined", "getUnsatisfiableClasses payload must be undefined");
   },
 };
 

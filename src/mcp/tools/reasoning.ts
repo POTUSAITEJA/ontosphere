@@ -8,32 +8,7 @@ import { checkOwl2Profile, type ProfileTriple } from '@/utils/owlProfile';
 import { buildRepairBrief, type DiagnosticsData } from './diagnosticsBrief';
 const EXPORT_FORMATS = ['turtle', 'jsonld', 'rdfxml', 'svg', 'png'];
 
-const OWL_NOTHING = 'http://www.w3.org/2002/07/owl#Nothing';
 const DATA_GRAPH = 'urn:vg:data';
-
-/**
- * Best-effort detection of unsatisfiable classes from the post-classification
- * store: classes entailed to be subclasses of (or equivalent to) owl:Nothing.
- * Returns [] if the query fails or the reasoner does not materialise such edges.
- */
-async function detectUnsatisfiableClasses(): Promise<string[]> {
-  const sparql = `PREFIX owl: <http://www.w3.org/2002/07/owl#>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-SELECT DISTINCT ?c WHERE {
-  { ?c rdfs:subClassOf owl:Nothing } UNION { ?c owl:equivalentClass owl:Nothing }
-}`;
-  try {
-    const rows = await rdfManager.sparqlQuery(sparql);
-    const list: string[] = [];
-    for (const r of Array.isArray(rows) ? rows : []) {
-      const c = r?.c?.value ?? r?.c ?? r?.['?c'];
-      if (typeof c === 'string' && c !== OWL_NOTHING && !list.includes(c)) list.push(c);
-    }
-    return list;
-  } catch {
-    return [];
-  }
-}
 
 /** Read the asserted data graph and project it to ProfileTriple[] (literal-aware). */
 async function loadDataProfileTriples(): Promise<ProfileTriple[]> {
@@ -193,8 +168,9 @@ const explainDiagnostics: McpTool = {
         justifications = await rdfManager.explainInconsistency(maxJustifications);
       }
 
-      // 3. Unsatisfiable classes (best-effort, from classified taxonomy).
-      const unsatisfiableClasses = await detectUnsatisfiableClasses();
+      // 3. Unsatisfiable classes (Konclude classification — classes equivalent to owl:Nothing).
+      let unsatisfiableClasses: string[] = [];
+      try { unsatisfiableClasses = await rdfManager.getUnsatisfiableClasses(); } catch { unsatisfiableClasses = []; }
 
       // 4. OWL 2 DL profile check over the asserted data graph.
       const profileTriples = await loadDataProfileTriples();
