@@ -23,7 +23,7 @@ import { WELL_KNOWN } from "../utils/wellKnownOntologies.ts";
 import { ensureDefaultNamespaceMap } from "../constants/namespaces.ts";
 import { RDF_TYPE, RDFS_LABEL, SHACL } from "../constants/vocabularies.ts";
 import { OWL_SCHEMA_AXIOMS } from "../constants/owlSchemaData.ts";
-import { mipsToReasoningError } from "./reasoningDiagnostics.ts";
+import { mipsToReasoningError, shaclViolationToEntry } from "./reasoningDiagnostics.ts";
 import { QueryEngine } from "@comunica/query-sparql-rdfjs";
 const KONCLUDE_INFERRED_GRAPH_IRI = "urn:vg:inferred";
 
@@ -254,9 +254,10 @@ class KoncludeReasoner {
         this.pending.delete(id);
         this._handleTimeout(method);
         reject(new Error(
-          `Konclude WASM timed out after ${KoncludeReasoner.CALL_TIMEOUT_MS / 1000}s during "${method}". ` +
-          `This usually means the input data contains OWL DL violations (e.g. literal values on ObjectProperties) ` +
-          `that cause non-termination. The reasoner worker has been recycled.`
+          `Konclude OWL DL reasoning timed out after ${KoncludeReasoner.CALL_TIMEOUT_MS / 1000}s during "${method}". ` +
+          `A likely cause is an OWL 2 DL profile violation (for example a datatype/literal value used where an ` +
+          `object property is expected) that prevents the reasoner from terminating; run explainDiagnostics or ` +
+          `check recently added axioms. The reasoner worker has been recycled.`
         ));
       }, KoncludeReasoner.CALL_TIMEOUT_MS);
 
@@ -2709,6 +2710,13 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         const errMsg = String((err as Error).message || err);
         console.error("[VG_REASONING_WORKER] Konclude failed:", errMsg);
         reasoningStage({ type: "reasoningStage", id: msg.id, stage: "reasoner-error", meta: { error: errMsg } });
+        // F1: surface the failure as a result error instead of swallowing it, so the
+        // report no longer shows a silent "0 errors" success when reasoning actually failed.
+        kMipsErrors.push({
+          rule: "reasoner-error",
+          severity: "error",
+          message: `OWL DL reasoning could not complete: ${errMsg}`,
+        });
       }
 
       const kAddedQuads: Quad[] = [];
@@ -2752,23 +2760,23 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           const shaclResult = await runShaclValidation();
           if (!shaclResult.conforms) {
             for (const v of shaclResult.violations) {
-              const severity = v.severity;
-              const entry = {
-                nodeId: v.focusNode ?? undefined,
-                message: v.message || "SHACL validation issue",
-                rule: "shacl:" + (v.constraint?.split("#").pop() ?? "constraint"),
-                severity: severity === "sh:Violation" ? "error" as const : "warning" as const,
-                sourceShape: v.sourceShape ?? undefined,
-              };
-              if (severity === "sh:Violation") {
-                kShaclErrors.push({ ...entry, severity: "error" });
+              const entry = shaclViolationToEntry(v);
+              if (entry.severity === "error") {
+                kShaclErrors.push(entry);
               } else {
                 kWarnings.push(entry);
               }
             }
           }
         } catch (shaclErr) {
-          debugLog("[VG_REASONING_WORKER] SHACL validation failed (non-blocking)", shaclErr);
+          // F4: do not silently swallow — a failed validation must not look like "data conforms".
+          const m = String((shaclErr as Error)?.message ?? shaclErr);
+          debugLog("[VG_REASONING_WORKER] SHACL validation failed", m);
+          kWarnings.push({
+            rule: "shacl:engine-error",
+            severity: "warning",
+            message: `SHACL validation could not run (data conformance unknown): ${m}`,
+          });
         }
       }
 
@@ -3227,23 +3235,23 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         const shaclResult = await runShaclValidation();
         if (!shaclResult.conforms) {
           for (const v of shaclResult.violations) {
-            const severity = v.severity;
-            const entry = {
-              nodeId: v.focusNode ?? undefined,
-              message: v.message || "SHACL validation issue",
-              rule: "shacl:" + (v.constraint?.split("#").pop() ?? "constraint"),
-              severity: severity === "sh:Violation" ? "error" as const : "warning" as const,
-              sourceShape: v.sourceShape ?? undefined,
-            };
-            if (severity === "sh:Violation") {
-              errors.push({ ...entry, severity: "error" });
+            const entry = shaclViolationToEntry(v);
+            if (entry.severity === "error") {
+              errors.push(entry);
             } else {
               warnings.push(entry);
             }
           }
         }
       } catch (shaclErr) {
-        debugLog("[VG_REASONING_WORKER] SHACL validation failed (non-blocking)", shaclErr);
+        // F4: surface rather than swallow — see konclude path above.
+        const m = String((shaclErr as Error)?.message ?? shaclErr);
+        debugLog("[VG_REASONING_WORKER] SHACL validation failed", m);
+        warnings.push({
+          rule: "shacl:engine-error",
+          severity: "warning",
+          message: `SHACL validation could not run (data conformance unknown): ${m}`,
+        });
       }
     }
 

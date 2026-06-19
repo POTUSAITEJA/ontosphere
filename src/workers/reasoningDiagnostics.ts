@@ -103,3 +103,53 @@ export function mipsToReasoningError(mips: N3.Quad[]): ReasoningError {
 
   return { nodeId, rule, severity: "critical", message, justification };
 }
+
+// ---------------------------------------------------------------------------
+// SHACL violation → reasoning entry
+// ---------------------------------------------------------------------------
+
+export interface ShaclViolationInput {
+  focusNode?: string | null;
+  path?: string | null;
+  /** SHACL severity, e.g. "sh:Violation", "sh:Warning". */
+  severity?: string | null;
+  message?: string | null;
+  sourceShape?: string | null;
+  /** Constraint component IRI, e.g. .../shacl#MinCountConstraintComponent. */
+  constraint?: string | null;
+}
+
+export interface ShaclEntry {
+  nodeId?: string;
+  message: string;
+  rule: string;
+  severity: "error" | "warning";
+  sourceShape?: string;
+}
+
+/** Single source of truth for SHACL severity → reasoning severity (was duplicated and inconsistent). */
+export function mapShaclSeverity(severity: string | null | undefined): "error" | "warning" {
+  return severity === "sh:Violation" ? "error" : "warning";
+}
+
+/**
+ * Convert a SHACL violation into a reasoning entry with an explainable message.
+ * When the shape provides no `sh:message`, synthesise one that names the focus
+ * node and the violated constraint instead of the opaque "SHACL validation issue".
+ */
+export function shaclViolationToEntry(v: ShaclViolationInput): ShaclEntry {
+  const constraintLocal = v.constraint ? v.constraint.split(/[#/]/).pop() ?? "constraint" : "constraint";
+  const focusLocal = v.focusNode ? abbreviateIri(v.focusNode) : "node";
+  const message =
+    v.message && v.message.trim().length > 0
+      ? v.message
+      : `SHACL constraint ${constraintLocal} violated on ${focusLocal}` +
+        (v.path ? ` (path ${abbreviateIri(v.path)})` : "");
+  return {
+    nodeId: v.focusNode ?? undefined,
+    message,
+    rule: `shacl:${constraintLocal}`,
+    severity: mapShaclSeverity(v.severity),
+    sourceShape: v.sourceShape ?? undefined,
+  };
+}

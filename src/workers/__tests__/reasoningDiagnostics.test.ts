@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
 import * as N3 from "n3";
-import { mipsToReasoningError } from "../reasoningDiagnostics";
+import { mipsToReasoningError, shaclViolationToEntry } from "../reasoningDiagnostics";
 
 const { namedNode, quad } = N3.DataFactory;
 
@@ -56,5 +56,41 @@ describe("mipsToReasoningError", () => {
     const err = mipsToReasoningError(mips);
     expect(err.message).toContain("Clash");
     expect(err.message.toLowerCase()).toContain("frank");
+  });
+});
+
+describe("shaclViolationToEntry", () => {
+  it("maps sh:Violation to error severity, others to warning", () => {
+    expect(shaclViolationToEntry({ severity: "sh:Violation" }).severity).toBe("error");
+    expect(shaclViolationToEntry({ severity: "sh:Warning" }).severity).toBe("warning");
+    expect(shaclViolationToEntry({ severity: null }).severity).toBe("warning");
+  });
+
+  it("builds an informative fallback message naming focus node and constraint", () => {
+    const entry = shaclViolationToEntry({
+      focusNode: "http://ex/projectAlpha",
+      message: null,
+      constraint: "http://www.w3.org/ns/shacl#MinCountConstraintComponent",
+    });
+    // Not the bare generic string
+    expect(entry.message).not.toBe("SHACL validation issue");
+    expect(entry.message).toContain("projectAlpha");
+    expect(entry.message).toContain("MinCountConstraintComponent");
+  });
+
+  it("preserves an explicit message when present", () => {
+    const entry = shaclViolationToEntry({ focusNode: "http://ex/a", message: "Missing rdfs:comment" });
+    expect(entry.message).toBe("Missing rdfs:comment");
+  });
+
+  it("derives rule from the constraint local name and carries node/sourceShape", () => {
+    const entry = shaclViolationToEntry({
+      focusNode: "http://ex/a",
+      constraint: "http://www.w3.org/ns/shacl#MinCountConstraintComponent",
+      sourceShape: "http://ex/AShape",
+    });
+    expect(entry.rule).toBe("shacl:MinCountConstraintComponent");
+    expect(entry.nodeId).toBe("http://ex/a");
+    expect(entry.sourceShape).toBe("http://ex/AShape");
   });
 });
