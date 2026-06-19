@@ -2599,6 +2599,21 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           result = await runShaclValidation();
           break;
         }
+        case "explainInconsistency": {
+          const p = (msg.payload ?? {}) as { maxJustifications?: number };
+          const n = typeof p.maxJustifications === "number" ? p.maxJustifications : 1;
+          const konclude = getKoncludeReasoner();
+          await konclude.ready;
+          const store = getSharedStore();
+          const mips = await konclude.explainInconsistency(store, n);
+          result = {
+            count: mips.length,
+            mips: mips.map((m) =>
+              m.map((q) => ({ subject: q.subject.value, predicate: q.predicate.value, object: q.object.value })),
+            ),
+          };
+          break;
+        }
         default:
           throw new Error(`Unsupported command: ${String(msg.command)}`);
       }

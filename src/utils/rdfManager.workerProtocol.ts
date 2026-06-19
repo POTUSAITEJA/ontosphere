@@ -138,6 +138,7 @@ export type RDFWorkerCommandPayloads = {
   };
   setDebug: { enabled: boolean };
   runShaclValidation: undefined;
+  explainInconsistency: { maxJustifications?: number };
 };
 
 export const RDF_WORKER_COMMANDS = [
@@ -167,6 +168,7 @@ export const RDF_WORKER_COMMANDS = [
   "sparqlQuery",
   "setDebug",
   "runShaclValidation",
+  "explainInconsistency",
 ] as const;
 
 export type RDFWorkerCommandName = (typeof RDF_WORKER_COMMANDS)[number];
@@ -606,6 +608,14 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
   },
   runShaclValidation() {
     // No payload needed
+  },
+  explainInconsistency(payload) {
+    if (typeof payload === "undefined") return;
+    assertPlainObject(payload, "explainInconsistency payload must be an object when provided");
+    assertOptionalFiniteNumber(
+      (payload as { maxJustifications?: unknown }).maxJustifications,
+      "explainInconsistency.maxJustifications must be a number when provided",
+    );
   },
 };
 
