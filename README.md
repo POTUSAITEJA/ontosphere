@@ -336,9 +336,6 @@ Workarounds for development:
 Using the UI
 ------------
 
-<details>
-<summary>Expand annotated UI reference (human operators)</summary>
-
 The annotated diagram below identifies the numbered UI elements described in this section.
 
 ![Ontosphere UI overview](public/ui-overview.svg)
@@ -431,10 +428,12 @@ Hover over any node to reveal the authoring halo with these controls:
 - Namespace legend panel: enable via **1** View menu → Show Legend. Click a namespace entry's pencil icon to rename its URI; renames propagate across all stored triples.
 - Use the fit-view button (**19** Zoom controls) to reset the viewport.
 
-</details>
-
 Developer utilities (window globals)
 ------------------------------------
+
+<details>
+<summary>Debug flags and window globals</summary>
+
 The following debug flags can be set in the browser console to enable diagnostic output. All are gated — they only activate when `window.__VG_DEBUG__` is truthy (or `config.debugAll` is enabled in Settings):
 
 - `window.__VG_DEBUG__` — master debug gate. Set to `true` to enable all `[VG_*]` diagnostic console output.
@@ -444,8 +443,14 @@ The following debug flags can be set in the browser console to enable diagnostic
 
 All flags are also persisted from `config.debugAll` (toggleable in Settings → Debug). Setting `config.debugAll = true` via Settings is the recommended way to enable diagnostics without console access.
 
+</details>
+
 Troubleshooting
 ---------------
+
+<details>
+<summary>Common issues and fixes</summary>
+
 - **rdfUrl doesn't load on open:**
   - Confirm the URL is percent-encoded in the address bar.
   - Open DevTools → Network and check the fetch request and response headers.
@@ -456,6 +461,8 @@ Troubleshooting
 - **Graph is very large / slow:**
   - Increase the large-graph threshold in Settings or reduce the number of loaded triples.
   - Clustering activates automatically above the threshold; use Expand All sparingly on huge graphs.
+
+</details>
 
 AI / MCP Integration
 --------------------
@@ -472,6 +479,9 @@ The app has two coupled layers:
 DL reasoning (Konclude) writes inferred triples back to the store and refreshes the canvas.
 
 ### Setup (Playwright / headless)
+
+<details>
+<summary>Playwright polyfill and headless setup</summary>
 
 `navigator.modelContext` does not exist in headless Chromium. Inject the polyfill **before** the page loads using `page.addInitScript`:
 
@@ -497,6 +507,8 @@ await page.evaluate(async ([name, params]) => window.__mcpTools[name](params),
 ```
 
 In a browser with native `navigator.modelContext`, tools register automatically on app load.
+
+</details>
 
 ### Example output
 
@@ -589,6 +601,10 @@ The relay handles execution and result feedback automatically — no manual copy
 
 Recording demo videos
 ---------------------
+
+<details>
+<summary>Demo video recording guide</summary>
+
 See [docs/demo-scripts/HOWTO.md](docs/demo-scripts/HOWTO.md) for the full guide. All videos are listed in [Video tutorials](#video-tutorials) above.
 
 Three styles of demo video are supported:
@@ -608,6 +624,8 @@ To re-record all videos:
 ```sh
 npm run demo:video   # starts dev server, records, encodes, kills server
 ```
+
+</details>
 
 Contributing / Development notes
 ---------------------------------
