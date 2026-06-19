@@ -8,9 +8,10 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
 |------------|------------|
 | Try the live demo | [Open Ontosphere ↗](https://thhanke.github.io/ontosphere) |
 | Watch feature tutorials | [Video tutorials](#video-tutorials) |
+| Learn the interface | [Using the UI](#using-the-ui) |
 | Connect an AI agent | [AI / MCP Integration](#ai--mcp-integration) |
-| Run it locally | [Quick start (development)](#quick-start-development) |
 | Load my own data | [Startup / URL parameters](#startup--url-parameters) |
+| Run it locally | [Quick start (development)](#quick-start-development) |
 | Contribute code | [Contributing](#contributing--development-notes) |
 | Read the paper | [ISWC 2026 Demo Paper ↗](https://thhanke.github.io/ontosphere/paper/) |
 
@@ -19,24 +20,24 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
 - [Overview](#overview)
 - [Key capabilities](#key-capabilities)
 - [Video tutorials](#video-tutorials)
-- [Quick start (development)](#quick-start-development)
-- [Startup / URL parameters](#startup--url-parameters)
-- [Reasoning](#reasoning)
-- [Reasoning demo](#reasoning-demo)
-- [SHACL validation](#shacl-validation)
-- [CORS and proxies](#cors-and-proxies)
 - [Using the UI](#using-the-ui)
-- [Developer utilities](#developer-utilities-window-globals)
-- [Troubleshooting](#troubleshooting)
+- [Reasoning](#reasoning)
+- [SHACL validation](#shacl-validation)
+- [Startup / URL parameters](#startup--url-parameters)
 - [AI / MCP Integration](#ai--mcp-integration)
   - [How it works](#how-it-works)
-  - [Setup (Playwright / headless)](#setup-playwright--headless)
   - [Recommended workflow](#recommended-workflow)
   - [Using Ontosphere with any AI](#using-ontosphere-with-any-ai)
     - [Claude Code / Playwright](#claude-code--playwright-full-automation)
     - [AI Relay Bridge (ChatGPT, Gemini, Claude.ai)](#chatgpt-gemini-claudeai--ai-relay-bridge)
-- [Recording demo videos](#recording-demo-videos)
-- [Contributing](#contributing--development-notes)
+- **Developer**
+  - [Quick start (development)](#quick-start-development)
+  - [Reasoning demo (OWL 2 DL patterns)](#reasoning-demo-owl-2-dl-patterns)
+  - [CORS and proxies](#cors-and-proxies)
+  - [Developer utilities](#developer-utilities-window-globals)
+  - [Troubleshooting](#troubleshooting)
+  - [Recording demo videos](#recording-demo-videos)
+  - [Contributing](#contributing--development-notes)
 - [Acknowledgements](#acknowledgements)
 - [License & authors](#license--authors)
 
@@ -91,20 +92,158 @@ Longer end-to-end sessions showing AI-driven ontology building.
 | **Pizza tutorial** | [▶ pizza-tutorial.mp4](https://thhanke.github.io/ontosphere/demo-videos/pizza-tutorial.mp4) | Manchester Pizza — class hierarchy, disjointness, DL reasoning |
 | **Pizza tutorial (chat)** | [▶ pizza-tutorial-chat.mp4](https://thhanke.github.io/ontosphere/demo-videos/pizza-tutorial-chat.mp4) | OWL pizza tutorial as AI tutor lesson, side-by-side chat |
 
-Quick start (development)
--------------------------
-1. Install dependencies:
-   ```sh
-   npm install
-   ```
-2. Start the Vite dev server:
-   ```sh
-   npm run dev
-   ```
-3. Open in your browser:
-   ```text
-   http://localhost:8080/
-   ```
+Using the UI
+------------
+
+The annotated diagram below identifies the numbered UI elements described in this section.
+
+![Ontosphere UI overview](public/ui-overview.svg)
+
+### Top bar — left group
+
+**1** **☰ View menu** — dropdown: Export canvas as PNG, Export as SVG, Print, Show/Hide Legend (toggles the namespace colour key panel).
+
+**2** **Search** — type to find entities by label or IRI. ↑↓ arrows or **Enter** cycle through matches on the canvas. The badge shows current match / total count.
+
+### Top bar — right group (action toolbar)
+
+**3** **Layout** — opens the layout popover: choose algorithm (Dagre horizontal/vertical, ELK layered/force/stress/radial, Reactodia-default), adjust spacing via a slider, toggle auto-layout (re-runs after every graph update).
+
+**4** **Clustering algorithm selector** — choose between None, Label Propagation, Louvain, or K-Means. The large-graph threshold (default 100 nodes, configurable in Settings) controls when auto-clustering runs on load.
+
+**5** **Cluster level navigation** (◄ 1/3 ►) — step through fold levels. The badge shows the current level and total count: `L3` (community-detection clusters), `L2` (structural fold — subclass chains and OWL collections), `L1` (annotation properties hidden), `∅` (fully expanded). The ◄/► arrows fold or unfold one level at a time.
+
+**6** **A-Box** — switch to instance-level individuals (A-Box, highlighted when active).
+
+**7** **T-Box** — switch to ontology-level classes/properties (T-Box).
+
+**8** **Ontologies** — shows the count of loaded ontologies. Click to open a popover listing each ontology with options to add/remove from autoload.
+
+**9** **Reasoning status** — shows the current DL reasoning state: Ready / ✓ Valid / ⚠ Warnings / Errors / spinner while running. Click to open the reasoning report (inferred triples grouped by rule).
+
+**10** **Clear inferred** (🗑) — removes all inferred triples without touching asserted data.
+
+**11** **SHACL toggle** (☑) — enable or disable SHACL validation as part of the reasoning pipeline. When checked, running reasoning also validates data against loaded SHACL shapes.
+
+**12** **Run reasoning** (▶) — triggers DL reasoning (Konclude) and optionally SHACL validation. Inferred triples appear as amber dashed edges. Idempotent.
+
+### Left sidebar
+
+**13** **Onto** — open the ontology loader. Enter any HTTP(S) URL or pick from pre-configured sources in Settings.
+
+**14** **File** — open a file picker for local RDF files. Supported: Turtle (.ttl), JSON-LD (.jsonld), RDF/XML (.rdf/.owl), N-Triples (.nt).
+
+**15** **Clear** — remove all loaded graphs and reset the canvas.
+
+**16** **Export** — export as Turtle, JSON-LD, or RDF/XML (dropdown). Generated entirely in the browser.
+
+**17** **SHACL** — open the SHACL shapes panel to load, inspect, and manage SHACL shapes for data validation.
+
+**18** **AI Relay** — open the AI Relay Bridge panel. Drag the bookmarklet to your browser bar to connect any AI chat (ChatGPT, Gemini, Claude.ai) to Ontosphere.
+
+**19** **Zoom controls** — zoom in/out, fit view (reset the viewport to show all nodes), and screenshot (export the current canvas view).
+
+**20** **Docs** — open the built-in documentation and help panel.
+
+**21** **Settings** — open the settings panel for default layout, clustering algorithm, large-graph threshold, ontology autoload URLs, workflow catalog, reasoner backend, and other preferences.
+
+### Sidebar content (expanded)
+
+When the sidebar is expanded (click the **›** toggle), the file operation buttons are shown in a compact grid. A **Workflows** accordion appears below when the workflow catalog is enabled in Settings. Drag a template card onto the canvas to instantiate it as a connected subgraph.
+
+### Authoring toolbar (bottom left)
+
+**22** **Undo** — undo last authoring change.
+
+**23** **Redo** — redo last undone change.
+
+**24** **Save** — commit all pending authoring edits to the RDF store in a single batch.
+
+**25** **Re-layout** — re-apply the current layout algorithm in-place.
+
+### Node authoring halo (visible on selected node)
+
+Hover over any node to reveal the authoring halo with these controls:
+
+- **Edit / Delete** — buttons that appear above a selected node. **Edit** opens the property editor (IRI, annotation properties, custom fields). **Delete** permanently removes the entity from the RDF store.
+- **Remove** (✕) — removes the node from the canvas view without deleting it from the RDF store.
+- **Establish Link** (plug icon, right side) — drag to another node to create a new edge. A dialog confirms the predicate with scored autocomplete from loaded ontologies.
+- **Expand neighbours** (∧, bottom) — load and show all RDF neighbours of the node on the canvas.
+
+### Canvas elements
+
+**26** **Individual node** — represents an RDF subject. The header shows the local name, a coloured namespace badge, and the OWL class. Properties (IRI, annotations, custom fields) are shown in an editable table on selection.
+
+**27** **Edge / predicate** — labelled arrow between two nodes. Amber dashed edges are inferred triples. Double-click to open the link property editor (scored autocomplete from ontologies).
+
+**28** **Minimap** — overview panel at bottom-right. Click to jump to a region, drag to pan.
+
+### Canvas interactions
+- **Add a node**: type in **2** Search and press Enter to search the ontology; select a match to place it on the canvas.
+- **Authoring mode** is always active: hover a node to reveal the halo.
+- Drag the **Establish Link** handle to another node to create a new edge.
+- Double-click an edge to open the link property editor.
+- Scroll to zoom; drag the background to pan.
+- Namespace legend panel: enable via **1** View menu → Show Legend. Click a namespace entry's pencil icon to rename its URI; renames propagate across all stored triples.
+- Use the fit-view button (**19** Zoom controls) to reset the viewport.
+
+Reasoning
+---------
+
+Ontosphere runs OWL reasoning entirely in the browser via a pluggable backend. The default is **Konclude** (full OWL 2 DL). Inferred triples appear as amber dashed edges; inferred types and annotations appear in amber italic. A reasoning report lists all inferred triples. Reasoning is idempotent — running it again produces no additional triples. Use **Clear inferred** to remove all inferred triples without affecting asserted data. See the [feat-reasoning demo video](https://thhanke.github.io/ontosphere/demo-videos/feat-reasoning.mp4) for a walkthrough of all 15 supported OWL 2 DL construct patterns.
+
+**OWL DL consistency checking** runs automatically alongside inference (Konclude only). If the ontology is logically contradictory, reasoning is skipped and the report's **Errors** tab shows per-entity clash details (affected individual, violated axiom, description). An "OWL DL inconsistency detected" banner appears in the report. Common inconsistencies: an individual in two `owl:disjointWith` classes, an `owl:allValuesFrom` restriction violated by an asserted type, or an `owl:AsymmetricProperty` / `owl:IrreflexiveProperty` cycle. The N3 backend does not perform consistency checking (`isConsistent` is always `null`).
+
+### Konclude (default — OWL 2 DL)
+
+[Konclude](https://www.derivo.de/products/konclude/) is a complete tableau reasoner for the description logic **SROIQ(D)** (OWL 2 DL), compiled to WebAssembly. It runs classification over the loaded ontology and writes `rdfs:subClassOf` and `owl:equivalentClass` inferences.
+
+**Supported OWL constructs (complete):** `rdfs:subClassOf`, `owl:equivalentClass`, `owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:inverseOf`, `owl:SymmetricProperty`, `owl:TransitiveProperty`, `owl:subPropertyOf`, `rdfs:domain`/`rdfs:range`, `owl:intersectionOf`, `owl:unionOf`, `owl:oneOf`, `owl:propertyChainAxiom`, number restrictions, nominals, and more.
+
+### N3 Rules (legacy / advanced)
+
+The N3 backend uses the **N3.js BGP-only Reasoner** with configurable rulesets loaded from `public/reasoning-rules/`. Select it in *Settings → Reasoner Backend → N3 Rules*.
+
+N3.js is BGP-only: rules using EYE/SWAP built-ins (`e:findall`, `list:in`, `log:notEqualTo`) are silently ignored. The `[REQUIRES EYE]` comments in the rule files mark those rules. Use this backend when you need custom N3 rule files or are working with demos that depend on specific rule-file behavior.
+
+SHACL validation
+-----------------
+Ontosphere validates RDF data against [SHACL](https://www.w3.org/TR/shacl/) (Shapes Constraint Language) shapes. SHACL shapes define constraints on your data — required properties, value ranges, cardinality — and the validation engine reports which nodes violate them. See the [feat-shacl demo video](https://thhanke.github.io/ontosphere/demo-videos/feat-shacl.mp4) for a walkthrough.
+
+SHACL validation runs automatically as part of the reasoning pipeline. After reasoning completes, the reasoning report shows SHACL violations alongside OWL inferences, with **SHACL** / **OWL** source badges on each finding. Only SHACL errors (severity `sh:Violation`) mark the data as invalid; warnings (`sh:Warning`) and info-level findings do not.
+
+Affected nodes display validation badges directly on the canvas — red for errors, amber for warnings. Clicking a finding in the reasoning report navigates to the affected node.
+
+### Loading shapes
+
+| Method | Description |
+|--------|-------------|
+| `?shaclShapes=` URL parameter | Direct `.ttl` URL, GitHub folder URL, or comma-separated list |
+| Settings → SHACL tab | Persistent shapes URL with bundled presets |
+| MCP tool `loadShaclFromUrl` | AI-agent-driven shape loading |
+
+Shapes are loaded into the `urn:vg:shapes` named graph, which is excluded from OWL reasoning. The sidebar **SHACL Shapes** panel shows loaded shapes with their target classes, constraint messages, and severity levels.
+
+### Bundled shape presets
+
+| Preset | Target | Checks |
+|--------|--------|--------|
+| Ontology Quality | `owl:Class`, `owl:ObjectProperty`, `owl:DatatypeProperty` | `rdfs:label`, `rdfs:comment`, `rdfs:domain`, `rdfs:range` |
+| SKOS Quality | `skos:Concept`, `skos:ConceptScheme` | `skos:prefLabel`, `skos:inScheme`, `rdfs:label` |
+| Reasoning Demo | `ex:Project`, `ex:Contractor`, `ex:Employee`, `owl:NamedIndividual` | Missing descriptions, supervisors, job titles |
+
+### SHACL demo
+
+The SHACL demo loads the reasoning-demo ontology with purpose-built shapes that produce both errors and warnings:
+
+[Open SHACL demo ↗](https://thhanke.github.io/ontosphere/?rdfUrl=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/reasoning-demo.ttl&shaclShapes=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/shacl-shapes/reasoning-demo.shacl.ttl)
+
+After loading, click **▶** (Run Reasoning) in the toolbar. The report will show:
+
+- **2 errors** (sh:Violation): `projectAlpha` missing `rdfs:comment`; `frank` (Contractor) missing `ex:hasSupervisor`
+- **12 warnings** (sh:Warning): employees missing `ex:jobTitle`; all individuals missing `rdfs:comment`
+
+Each finding links to the affected node — click to close the dialog and navigate to it on the canvas. Error and warning badges appear directly on affected nodes.
 
 Startup / URL parameters
 ------------------------
@@ -216,255 +355,6 @@ All startup mechanisms are additive and run in this order:
 3. Ontologies from `?ontology=` URL parameter
 4. `owl:imports` discovery (runs after each load unless `?loadImports=false`)
 
-### Other startup mechanisms
-
-- `window.__VG_STARTUP_TTL` — inline Turtle string loaded before any URL parameter.
-- `window.__VG_STARTUP_URL` — programmatic URL override (takes precedence over `rdfUrl`).
-- `VITE_STARTUP_URL` environment variable — build-time default startup URL.
-
-Reasoning
----------
-
-Ontosphere runs OWL reasoning entirely in the browser via a pluggable backend. The default is **Konclude** (full OWL 2 DL). Inferred triples appear as amber dashed edges; inferred types and annotations appear in amber italic. A reasoning report lists all inferred triples. Reasoning is idempotent — running it again produces no additional triples. Use **Clear inferred** to remove all inferred triples without affecting asserted data. See the [feat-reasoning demo video](https://thhanke.github.io/ontosphere/demo-videos/feat-reasoning.mp4) for a walkthrough of all 15 supported OWL 2 DL construct patterns.
-
-**OWL DL consistency checking** runs automatically alongside inference (Konclude only). If the ontology is logically contradictory, reasoning is skipped and the report's **Errors** tab shows per-entity clash details (affected individual, violated axiom, description). An "OWL DL inconsistency detected" banner appears in the report. Common inconsistencies: an individual in two `owl:disjointWith` classes, an `owl:allValuesFrom` restriction violated by an asserted type, or an `owl:AsymmetricProperty` / `owl:IrreflexiveProperty` cycle. The N3 backend does not perform consistency checking (`isConsistent` is always `null`).
-
-### Konclude (default — OWL 2 DL)
-
-[Konclude](https://www.derivo.de/products/konclude/) is a complete tableau reasoner for the description logic **SROIQ(D)** (OWL 2 DL), compiled to WebAssembly. It runs classification over the loaded ontology and writes `rdfs:subClassOf` and `owl:equivalentClass` inferences.
-
-**Supported OWL constructs (complete):** `rdfs:subClassOf`, `owl:equivalentClass`, `owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:inverseOf`, `owl:SymmetricProperty`, `owl:TransitiveProperty`, `owl:subPropertyOf`, `rdfs:domain`/`rdfs:range`, `owl:intersectionOf`, `owl:unionOf`, `owl:oneOf`, `owl:propertyChainAxiom`, number restrictions, nominals, and more.
-
-**Deployment requirement:** Konclude's WASM binary uses `SharedArrayBuffer` (pthreads). The server must send `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: credentialless` headers. Localhost deployments have `SharedArrayBuffer` available without headers. Ontosphere's `server.js` sets these headers automatically.
-
-**Performance:** 250 ms – 2.5 s for typical benchmark ontologies (LUBM, GALEN, Pizza).
-
-### N3 Rules (legacy / advanced)
-
-The N3 backend uses the **N3.js BGP-only Reasoner** with configurable rulesets loaded from `public/reasoning-rules/`. Select it in *Settings → Reasoner Backend → N3 Rules*.
-
-N3.js is BGP-only: rules using EYE/SWAP built-ins (`e:findall`, `list:in`, `log:notEqualTo`) are silently ignored. The `[REQUIRES EYE]` comments in the rule files mark those rules. Use this backend when you need custom N3 rule files or are working with demos that depend on specific rule-file behavior.
-
-**Performance:** Under 2 seconds for typical ontologies (hundreds to a few thousand triples). There is currently no way to abort a running reasoning job; a page reload is required if reasoning hangs.
-
-Reasoning demo
---------------
-The reasoning demo showcases OWL 2 DL / SROIQ(D) inference on a small employee ontology:
-[Open demo ↗](https://thhanke.github.io/ontosphere/?rdfUrl=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/reasoning-demo.ttl)
-
-The demo (`public/reasoning-demo.ttl`) defines a Person → Employee → Manager → Executive hierarchy with ABox assertions that drive inference patterns across all OWL 2 DL construct groups:
-
-**OWL 1 RL patterns:**
-1. **rdfs:subPropertyOf** — `ex:hasFriend` sub-property of `ex:knows`: `alice hasFriend bob` → `alice knows bob`.
-2. **owl:inverseOf** — `ex:isManagedBy` inverse of `ex:manages`: `alice manages carol` → `carol isManagedBy alice`.
-3. **owl:SymmetricProperty** — `ex:isColleagueOf` is symmetric: `bob isColleagueOf carol` → reverse direction.
-4. **owl:TransitiveProperty** — `ex:hasSupervisor` is transitive: `bob→alice`, `alice→dave` → `bob→dave`.
-5. **rdfs:domain** — `ex:dave` has no type; because he is subject of `ex:manages` (domain `ex:Manager`), the reasoner infers `dave rdf:type ex:Manager`.
-
-**OWL 2 DL extensions:**
-6. **owl:someValuesFrom** — `alice` and `carol` each `worksOn projectAlpha` (a `Project`) → inferred `ProjectContributor`.
-7. **owl:hasValue** — `carol isManagedBy alice` (via inverseOf) → `carol` inferred `DirectReport` (hasValue restriction on alice).
-8. **owl:intersectionOf** — `dave` manages `bob` (inferred Manager) and `eve` (Employee) → `dave` inferred `TeamLead`.
-9. **owl:disjointWith** — `Contractor disjointWith Employee`; `frank` is a `Contractor` (structural TBox constraint).
-10. **owl:complementOf** — `NonEmployee ≡ ¬Employee` (structural TBox only).
-11. **owl:propertyChainAxiom** — `hasGrandManager ← hasSupervisor ∘ hasSupervisor`: `carol→bob→alice` → `carol hasGrandManager alice`.
-12. **owl:unionOf** — `LeadershipTeam ≡ Executive ∪ Manager`: `alice` (Executive) and `dave` (inferred Manager) → inferred `LeadershipTeam`.
-13. **owl:sameAs** — `aliceCEO sameAs alice`: `aliceCEO` inherits all of `alice`'s inferred types including `Executive`.
-14. **owl:allValuesFrom** — `DirectorRole ≡ ∀manages.Executive`: structural TBox axiom demonstrating universal restrictions.
-15. **rdfs:domain / rdfs:range** — `ex:manages` has domain `ex:Manager` and range `ex:Employee`: `dave manages bob` → `dave rdf:type ex:Manager` (domain inference) and `bob rdf:type ex:Employee` (range inference).
-
-A separate **inconsistency demo** (`public/reasoning-demo-inconsistent.ttl`) shows the consistency checker in action:
-[Open inconsistency demo ↗](https://thhanke.github.io/ontosphere/?rdfUrl=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/reasoning-demo-inconsistent.ttl)
-
-`inc:frank` is asserted as both `inc:Employee` and `inc:Contractor`, which are declared `owl:disjointWith`. Running reasoning produces `isConsistent: false`, reasoning is skipped, and the report's Errors tab shows the disjointness clash on `frank`.
-
-SHACL validation
------------------
-Ontosphere validates RDF data against [SHACL](https://www.w3.org/TR/shacl/) (Shapes Constraint Language) shapes. SHACL shapes define constraints on your data — required properties, value ranges, cardinality — and the validation engine reports which nodes violate them. See the [feat-shacl demo video](https://thhanke.github.io/ontosphere/demo-videos/feat-shacl.mp4) for a walkthrough.
-
-SHACL validation runs automatically as part of the reasoning pipeline. After reasoning completes, the reasoning report shows SHACL violations alongside OWL inferences, with **SHACL** / **OWL** source badges on each finding. Only SHACL errors (severity `sh:Violation`) mark the data as invalid; warnings (`sh:Warning`) and info-level findings do not.
-
-Affected nodes display validation badges directly on the canvas — red for errors, amber for warnings. Clicking a finding in the reasoning report navigates to the affected node.
-
-### Loading shapes
-
-| Method | Description |
-|--------|-------------|
-| `?shaclShapes=` URL parameter | Direct `.ttl` URL, GitHub folder URL, or comma-separated list |
-| Settings → SHACL tab | Persistent shapes URL with bundled presets |
-| MCP tool `loadShaclFromUrl` | AI-agent-driven shape loading |
-
-Shapes are loaded into the `urn:vg:shapes` named graph, which is excluded from OWL reasoning. The sidebar **SHACL Shapes** panel shows loaded shapes with their target classes, constraint messages, and severity levels.
-
-### Bundled shape presets
-
-| Preset | Target | Checks |
-|--------|--------|--------|
-| Ontology Quality | `owl:Class`, `owl:ObjectProperty`, `owl:DatatypeProperty` | `rdfs:label`, `rdfs:comment`, `rdfs:domain`, `rdfs:range` |
-| SKOS Quality | `skos:Concept`, `skos:ConceptScheme` | `skos:prefLabel`, `skos:inScheme`, `rdfs:label` |
-| Reasoning Demo | `ex:Project`, `ex:Contractor`, `ex:Employee`, `owl:NamedIndividual` | Missing descriptions, supervisors, job titles |
-
-### SHACL demo
-
-The SHACL demo loads the reasoning-demo ontology with purpose-built shapes that produce both errors and warnings:
-
-[Open SHACL demo ↗](https://thhanke.github.io/ontosphere/?rdfUrl=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/reasoning-demo.ttl&shaclShapes=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/shacl-shapes/reasoning-demo.shacl.ttl)
-
-After loading, click **▶** (Run Reasoning) in the toolbar. The report will show:
-
-- **2 errors** (sh:Violation): `projectAlpha` missing `rdfs:comment`; `frank` (Contractor) missing `ex:hasSupervisor`
-- **12 warnings** (sh:Warning): employees missing `ex:jobTitle`; all individuals missing `rdfs:comment`
-
-Each finding links to the affected node — click to close the dialog and navigate to it on the canvas. Error and warning badges appear directly on affected nodes.
-
-CORS and proxies
-----------------
-Ontosphere fetches remote RDF directly from the browser. If the remote host does not allow cross-origin requests, the fetch will be blocked.
-
-**Well-known ontologies** (FOAF, SKOS, PROV-O, Dublin Core, QUDT, etc.) are pre-configured with CORS-friendly fetch URLs (W3C, dublincore.org, LOV, qudt.org) and load without any proxy.
-
-**Custom ontology URLs** that lack CORS headers require a proxy. Configure one in Settings → Advanced → CORS Proxy URL. The proxy must:
-- Accept a URL-encoded target as a query parameter: `https://your-proxy/?url=<encoded>`
-- Forward the `Accept` header to the target server
-- Not restrict RDF MIME types (`text/turtle`, `application/rdf+xml`, etc.)
-
-> **Note:** `corsproxy.io` free tier blocks RDF content types and will not work. Self-hosted options that do work: a [Cloudflare Worker](https://developers.cloudflare.com/workers/) using the cors-anywhere pattern, or a local Vite dev-server proxy.
-
-Workarounds for development:
-- Use CORS-enabled hosting for the RDF file.
-- Configure a local dev proxy in your Vite config to forward the request.
-
-Using the UI
-------------
-
-The annotated diagram below identifies the numbered UI elements described in this section.
-
-![Ontosphere UI overview](public/ui-overview.svg)
-
-### Top bar — left group
-
-**1** **☰ View menu** — dropdown: Export canvas as PNG, Export as SVG, Print, Show/Hide Legend (toggles the namespace colour key panel).
-
-**2** **Search** — type to find entities by label or IRI. ↑↓ arrows or **Enter** cycle through matches on the canvas. The badge shows current match / total count.
-
-### Top bar — right group (action toolbar)
-
-**3** **Layout** — opens the layout popover: choose algorithm (Dagre horizontal/vertical, ELK layered/force/stress/radial, Reactodia-default), adjust spacing via a slider, toggle auto-layout (re-runs after every graph update).
-
-**4** **Clustering algorithm selector** — choose between None, Label Propagation, Louvain, or K-Means. The large-graph threshold (default 100 nodes, configurable in Settings) controls when auto-clustering runs on load.
-
-**5** **Cluster level navigation** (◄ 1/3 ►) — step through fold levels. The badge shows the current level and total count: `L3` (community-detection clusters), `L2` (structural fold — subclass chains and OWL collections), `L1` (annotation properties hidden), `∅` (fully expanded). The ◄/► arrows fold or unfold one level at a time.
-
-**6** **A-Box** — switch to instance-level individuals (A-Box, highlighted when active).
-
-**7** **T-Box** — switch to ontology-level classes/properties (T-Box).
-
-**8** **Ontologies** — shows the count of loaded ontologies. Click to open a popover listing each ontology with options to add/remove from autoload.
-
-**9** **Reasoning status** — shows the current DL reasoning state: Ready / ✓ Valid / ⚠ Warnings / Errors / spinner while running. Click to open the reasoning report (inferred triples grouped by rule).
-
-**10** **Clear inferred** (🗑) — removes all inferred triples without touching asserted data.
-
-**11** **SHACL toggle** (☑) — enable or disable SHACL validation as part of the reasoning pipeline. When checked, running reasoning also validates data against loaded SHACL shapes.
-
-**12** **Run reasoning** (▶) — triggers DL reasoning (Konclude) and optionally SHACL validation. Inferred triples appear as amber dashed edges. Idempotent.
-
-### Left sidebar
-
-**13** **Onto** — open the ontology loader. Enter any HTTP(S) URL or pick from pre-configured sources in Settings.
-
-**14** **File** — open a file picker for local RDF files. Supported: Turtle (.ttl), JSON-LD (.jsonld), RDF/XML (.rdf/.owl), N-Triples (.nt).
-
-**15** **Clear** — remove all loaded graphs and reset the canvas.
-
-**16** **Export** — export as Turtle, JSON-LD, or RDF/XML (dropdown). Generated entirely in the browser.
-
-**17** **SHACL** — open the SHACL shapes panel to load, inspect, and manage SHACL shapes for data validation.
-
-**18** **AI Relay** — open the AI Relay Bridge panel. Drag the bookmarklet to your browser bar to connect any AI chat (ChatGPT, Gemini, Claude.ai) to Ontosphere.
-
-**19** **Zoom controls** — zoom in/out, fit view (reset the viewport to show all nodes), and screenshot (export the current canvas view).
-
-**20** **Docs** — open the built-in documentation and help panel.
-
-**21** **Settings** — open the settings panel for default layout, clustering algorithm, large-graph threshold, ontology autoload URLs, workflow catalog, reasoner backend, and other preferences.
-
-### Sidebar content (expanded)
-
-When the sidebar is expanded (click the **›** toggle), the file operation buttons are shown in a compact grid. A **Workflows** accordion appears below when the workflow catalog is enabled in Settings. Drag a template card onto the canvas to instantiate it as a connected subgraph.
-
-### Authoring toolbar (bottom left)
-
-**22** **Undo** — undo last authoring change.
-
-**23** **Redo** — redo last undone change.
-
-**24** **Save** — commit all pending authoring edits to the RDF store in a single batch.
-
-**25** **Re-layout** — re-apply the current layout algorithm in-place.
-
-### Node authoring halo (visible on selected node)
-
-Hover over any node to reveal the authoring halo with these controls:
-
-- **Edit / Delete** — buttons that appear above a selected node. **Edit** opens the property editor (IRI, annotation properties, custom fields). **Delete** permanently removes the entity from the RDF store.
-- **Remove** (✕) — removes the node from the canvas view without deleting it from the RDF store.
-- **Establish Link** (plug icon, right side) — drag to another node to create a new edge. A dialog confirms the predicate with scored autocomplete from loaded ontologies.
-- **Expand neighbours** (∧, bottom) — load and show all RDF neighbours of the node on the canvas.
-
-### Canvas elements
-
-**26** **Individual node** — represents an RDF subject. The header shows the local name, a coloured namespace badge, and the OWL class. Properties (IRI, annotations, custom fields) are shown in an editable table on selection.
-
-**27** **Edge / predicate** — labelled arrow between two nodes. Amber dashed edges are inferred triples. Double-click to open the link property editor (scored autocomplete from ontologies).
-
-**28** **Minimap** — overview panel at bottom-right. Click to jump to a region, drag to pan.
-
-### Canvas interactions
-- **Add a node**: type in **2** Search and press Enter to search the ontology; select a match to place it on the canvas.
-- **Authoring mode** is always active: hover a node to reveal the halo.
-- Drag the **Establish Link** handle to another node to create a new edge.
-- Double-click an edge to open the link property editor.
-- Scroll to zoom; drag the background to pan.
-- Namespace legend panel: enable via **1** View menu → Show Legend. Click a namespace entry's pencil icon to rename its URI; renames propagate across all stored triples.
-- Use the fit-view button (**19** Zoom controls) to reset the viewport.
-
-Developer utilities (window globals)
-------------------------------------
-
-<details>
-<summary>Debug flags and window globals</summary>
-
-The following debug flags can be set in the browser console to enable diagnostic output. All are gated — they only activate when `window.__VG_DEBUG__` is truthy (or `config.debugAll` is enabled in Settings):
-
-- `window.__VG_DEBUG__` — master debug gate. Set to `true` to enable all `[VG_*]` diagnostic console output.
-- `window.__VG_LOG_RDF_WRITES` — log RDF triple writes to the console.
-- `window.__VG_DEBUG_STACKS__` — capture stack traces in debug messages.
-- `window.__VG_DEBUG_SUMMARY__` — read-only object populated by the startup debug harness with fallback and timing data.
-
-All flags are also persisted from `config.debugAll` (toggleable in Settings → Debug). Setting `config.debugAll = true` via Settings is the recommended way to enable diagnostics without console access.
-
-</details>
-
-Troubleshooting
----------------
-
-<details>
-<summary>Common issues and fixes</summary>
-
-- **rdfUrl doesn't load on open:**
-  - Confirm the URL is percent-encoded in the address bar.
-  - Open DevTools → Network and check the fetch request and response headers.
-  - Look for CORS errors (`Access-Control-Allow-Origin`).
-  - Check the console for RDF parser errors or application diagnostics.
-- **403 when using certain query parameter names:**
-  - Some servers intercept reserved query names. Use `?rdfUrl=...` to avoid conflicts.
-- **Graph is very large / slow:**
-  - Increase the large-graph threshold in Settings or reduce the number of loaded triples.
-  - Clustering activates automatically above the threshold; use Expand All sparingly on huge graphs.
-
-</details>
-
 AI / MCP Integration
 --------------------
 
@@ -478,38 +368,6 @@ The app has two coupled layers:
 - **Reactodia canvas** — visual mirror. Nodes are *not* created automatically from triples; you must call `addNode` to place a subject on canvas. After adding triples, canvas links refresh automatically. Nodes start collapsed — call `expandNode` (with an IRI to expand one node, or no args to expand all) to reveal annotation property cards.
 
 DL reasoning (Konclude) writes inferred triples back to the store and refreshes the canvas.
-
-### Setup (Playwright / headless)
-
-<details>
-<summary>Playwright polyfill and headless setup</summary>
-
-`navigator.modelContext` does not exist in headless Chromium. Inject the polyfill **before** the page loads using `page.addInitScript`:
-
-```js
-await page.addInitScript(() => {
-  const tools = {};
-  Object.defineProperty(navigator, 'modelContext', {
-    value: { registerTool: async (n, _d, _s, h) => { tools[n] = h; } },
-    configurable: true,
-  });
-  window.__mcpTools = tools;
-});
-
-// After page load:
-await page.evaluate(async () => {
-  const mod = await import('/src/mcp/ontosphereMcpServer.ts');
-  await mod.registerMcpTools();
-});
-
-// Call a tool:
-await page.evaluate(async ([name, params]) => window.__mcpTools[name](params),
-  ['addNode', { iri: 'ex:alice', typeIri: 'foaf:Person', label: 'Alice' }]);
-```
-
-In a browser with native `navigator.modelContext`, tools register automatically on app load.
-
-</details>
 
 ### Example output
 
@@ -530,14 +388,6 @@ loadOntology (TBox)
   → exportGraph(turtle)       (final deliverable)
 ```
 
-### URL parameters
-
-| Parameter | Effect |
-|-----------|--------|
-| `?url=<encoded-url>` | Load RDF from URL on startup |
-| `?ontology=foaf` | Pre-load FOAF ontology |
-| `?loadImports=false` | Skip owl:imports auto-loading |
-
 ### Demo
 
 | Demo | Final state |
@@ -546,19 +396,6 @@ loadOntology (TBox)
 | **[DL reasoning (Konclude)](docs/mcp-demo/reasoning-demo.md)**<br>Build TBox + ABox, infer types via domain/range and transitivity | [![DL reasoning final state](docs/mcp-demo/reasoning-demo/04-dave-focus.svg)](docs/mcp-demo/reasoning-demo.md) |
 | **[Scene ontology](docs/mcp-demo/scene-ontology.md)**<br>Load an external ontology, author individuals, export Turtle | [![Scene ontology final state](docs/mcp-demo/scene-ontology/04-jake-focus.svg)](docs/mcp-demo/scene-ontology.md) |
 | **[Manchester Pizza Tutorial](docs/mcp-demo/pizza-tutorial.md)**<br>Full OWL pizza ontology — classes, disjointness, properties, DL reasoning | [![Manchester Pizza Tutorial final state](docs/mcp-demo/pizza-tutorial/20-owa-vegetarian-lesson.svg)](docs/mcp-demo/pizza-tutorial.md) |
-
-Regenerate:
-
-```sh
-npm run demo:all
-# or individually:
-node scripts/run-demo.mjs docs/mcp-demo/seeds/foaf-social-network.md
-node scripts/run-demo.mjs docs/mcp-demo/seeds/reasoning-demo.md
-node scripts/run-demo.mjs docs/mcp-demo/seeds/scene-ontology.md
-node scripts/run-demo.mjs docs/mcp-demo/seeds/pizza-tutorial.md
-```
-
-Full tool declarations with input schemas: [public/.well-known/mcp.json](public/.well-known/mcp.json)
 
 ### Using Ontosphere with any AI
 
@@ -600,11 +437,173 @@ Call help first to get full instructions and the tool list:
 
 The relay handles execution and result feedback automatically — no manual copy-paste needed.
 
-Recording demo videos
----------------------
+Full tool declarations with input schemas: [public/.well-known/mcp.json](public/.well-known/mcp.json)
+
+---
+
+Developer
+=========
 
 <details>
-<summary>Demo video recording guide</summary>
+<summary><strong>Quick start (development)</strong></summary>
+
+1. Install dependencies:
+   ```sh
+   npm install
+   ```
+2. Start the Vite dev server:
+   ```sh
+   npm run dev
+   ```
+3. Open in your browser:
+   ```text
+   http://localhost:8080/
+   ```
+
+**Deployment requirement:** Konclude's WASM binary uses `SharedArrayBuffer` (pthreads). The server must send `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: credentialless` headers. Localhost deployments have `SharedArrayBuffer` available without headers. Ontosphere's `server.js` sets these headers automatically.
+
+**Performance:** Konclude: 250 ms – 2.5 s for typical benchmark ontologies (LUBM, GALEN, Pizza). N3: under 2 seconds for typical ontologies (hundreds to a few thousand triples).
+
+### Other startup mechanisms
+
+- `window.__VG_STARTUP_TTL` — inline Turtle string loaded before any URL parameter.
+- `window.__VG_STARTUP_URL` — programmatic URL override (takes precedence over `rdfUrl`).
+- `VITE_STARTUP_URL` environment variable — build-time default startup URL.
+
+### Setup (Playwright / headless)
+
+`navigator.modelContext` does not exist in headless Chromium. Inject the polyfill **before** the page loads using `page.addInitScript`:
+
+```js
+await page.addInitScript(() => {
+  const tools = {};
+  Object.defineProperty(navigator, 'modelContext', {
+    value: { registerTool: async (n, _d, _s, h) => { tools[n] = h; } },
+    configurable: true,
+  });
+  window.__mcpTools = tools;
+});
+
+// After page load:
+await page.evaluate(async () => {
+  const mod = await import('/src/mcp/ontosphereMcpServer.ts');
+  await mod.registerMcpTools();
+});
+
+// Call a tool:
+await page.evaluate(async ([name, params]) => window.__mcpTools[name](params),
+  ['addNode', { iri: 'ex:alice', typeIri: 'foaf:Person', label: 'Alice' }]);
+```
+
+In a browser with native `navigator.modelContext`, tools register automatically on app load.
+
+### URL parameters (MCP)
+
+| Parameter | Effect |
+|-----------|--------|
+| `?url=<encoded-url>` | Load RDF from URL on startup |
+| `?ontology=foaf` | Pre-load FOAF ontology |
+| `?loadImports=false` | Skip owl:imports auto-loading |
+
+### Regenerate demos
+
+```sh
+npm run demo:all
+# or individually:
+node scripts/run-demo.mjs docs/mcp-demo/seeds/foaf-social-network.md
+node scripts/run-demo.mjs docs/mcp-demo/seeds/reasoning-demo.md
+node scripts/run-demo.mjs docs/mcp-demo/seeds/scene-ontology.md
+node scripts/run-demo.mjs docs/mcp-demo/seeds/pizza-tutorial.md
+```
+
+</details>
+
+<details>
+<summary><strong>Reasoning demo (OWL 2 DL patterns)</strong></summary>
+
+The reasoning demo showcases OWL 2 DL / SROIQ(D) inference on a small employee ontology:
+[Open demo ↗](https://thhanke.github.io/ontosphere/?rdfUrl=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/reasoning-demo.ttl)
+
+The demo (`public/reasoning-demo.ttl`) defines a Person → Employee → Manager → Executive hierarchy with ABox assertions that drive inference patterns across all OWL 2 DL construct groups:
+
+**OWL 1 RL patterns:**
+1. **rdfs:subPropertyOf** — `ex:hasFriend` sub-property of `ex:knows`: `alice hasFriend bob` → `alice knows bob`.
+2. **owl:inverseOf** — `ex:isManagedBy` inverse of `ex:manages`: `alice manages carol` → `carol isManagedBy alice`.
+3. **owl:SymmetricProperty** — `ex:isColleagueOf` is symmetric: `bob isColleagueOf carol` → reverse direction.
+4. **owl:TransitiveProperty** — `ex:hasSupervisor` is transitive: `bob→alice`, `alice→dave` → `bob→dave`.
+5. **rdfs:domain** — `ex:dave` has no type; because he is subject of `ex:manages` (domain `ex:Manager`), the reasoner infers `dave rdf:type ex:Manager`.
+
+**OWL 2 DL extensions:**
+6. **owl:someValuesFrom** — `alice` and `carol` each `worksOn projectAlpha` (a `Project`) → inferred `ProjectContributor`.
+7. **owl:hasValue** — `carol isManagedBy alice` (via inverseOf) → `carol` inferred `DirectReport` (hasValue restriction on alice).
+8. **owl:intersectionOf** — `dave` manages `bob` (inferred Manager) and `eve` (Employee) → `dave` inferred `TeamLead`.
+9. **owl:disjointWith** — `Contractor disjointWith Employee`; `frank` is a `Contractor` (structural TBox constraint).
+10. **owl:complementOf** — `NonEmployee ≡ ¬Employee` (structural TBox only).
+11. **owl:propertyChainAxiom** — `hasGrandManager ← hasSupervisor ∘ hasSupervisor`: `carol→bob→alice` → `carol hasGrandManager alice`.
+12. **owl:unionOf** — `LeadershipTeam ≡ Executive ∪ Manager`: `alice` (Executive) and `dave` (inferred Manager) → inferred `LeadershipTeam`.
+13. **owl:sameAs** — `aliceCEO sameAs alice`: `aliceCEO` inherits all of `alice`'s inferred types including `Executive`.
+14. **owl:allValuesFrom** — `DirectorRole ≡ ∀manages.Executive`: structural TBox axiom demonstrating universal restrictions.
+15. **rdfs:domain / rdfs:range** — `ex:manages` has domain `ex:Manager` and range `ex:Employee`: `dave manages bob` → `dave rdf:type ex:Manager` (domain inference) and `bob rdf:type ex:Employee` (range inference).
+
+A separate **inconsistency demo** (`public/reasoning-demo-inconsistent.ttl`) shows the consistency checker in action:
+[Open inconsistency demo ↗](https://thhanke.github.io/ontosphere/?rdfUrl=https://raw.githubusercontent.com/ThHanke/ontosphere/refs/heads/main/public/reasoning-demo-inconsistent.ttl)
+
+`inc:frank` is asserted as both `inc:Employee` and `inc:Contractor`, which are declared `owl:disjointWith`. Running reasoning produces `isConsistent: false`, reasoning is skipped, and the report's Errors tab shows the disjointness clash on `frank`.
+
+</details>
+
+<details>
+<summary><strong>CORS and proxies</strong></summary>
+
+Ontosphere fetches remote RDF directly from the browser. If the remote host does not allow cross-origin requests, the fetch will be blocked.
+
+**Well-known ontologies** (FOAF, SKOS, PROV-O, Dublin Core, QUDT, etc.) are pre-configured with CORS-friendly fetch URLs (W3C, dublincore.org, LOV, qudt.org) and load without any proxy.
+
+**Custom ontology URLs** that lack CORS headers require a proxy. Configure one in Settings → Advanced → CORS Proxy URL. The proxy must:
+- Accept a URL-encoded target as a query parameter: `https://your-proxy/?url=<encoded>`
+- Forward the `Accept` header to the target server
+- Not restrict RDF MIME types (`text/turtle`, `application/rdf+xml`, etc.)
+
+> **Note:** `corsproxy.io` free tier blocks RDF content types and will not work. Self-hosted options that do work: a [Cloudflare Worker](https://developers.cloudflare.com/workers/) using the cors-anywhere pattern, or a local Vite dev-server proxy.
+
+Workarounds for development:
+- Use CORS-enabled hosting for the RDF file.
+- Configure a local dev proxy in your Vite config to forward the request.
+
+</details>
+
+<details>
+<summary><strong>Developer utilities (window globals)</strong></summary>
+
+The following debug flags can be set in the browser console to enable diagnostic output. All are gated — they only activate when `window.__VG_DEBUG__` is truthy (or `config.debugAll` is enabled in Settings):
+
+- `window.__VG_DEBUG__` — master debug gate. Set to `true` to enable all `[VG_*]` diagnostic console output.
+- `window.__VG_LOG_RDF_WRITES` — log RDF triple writes to the console.
+- `window.__VG_DEBUG_STACKS__` — capture stack traces in debug messages.
+- `window.__VG_DEBUG_SUMMARY__` — read-only object populated by the startup debug harness with fallback and timing data.
+
+All flags are also persisted from `config.debugAll` (toggleable in Settings → Debug). Setting `config.debugAll = true` via Settings is the recommended way to enable diagnostics without console access.
+
+</details>
+
+<details>
+<summary><strong>Troubleshooting</strong></summary>
+
+- **rdfUrl doesn't load on open:**
+  - Confirm the URL is percent-encoded in the address bar.
+  - Open DevTools → Network and check the fetch request and response headers.
+  - Look for CORS errors (`Access-Control-Allow-Origin`).
+  - Check the console for RDF parser errors or application diagnostics.
+- **403 when using certain query parameter names:**
+  - Some servers intercept reserved query names. Use `?rdfUrl=...` to avoid conflicts.
+- **Graph is very large / slow:**
+  - Increase the large-graph threshold in Settings or reduce the number of loaded triples.
+  - Clustering activates automatically above the threshold; use Expand All sparingly on huge graphs.
+
+</details>
+
+<details>
+<summary><strong>Recording demo videos</strong></summary>
 
 See [docs/demo-scripts/HOWTO.md](docs/demo-scripts/HOWTO.md) for the full guide. All videos are listed in [Video tutorials](#video-tutorials) above.
 
