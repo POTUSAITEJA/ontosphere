@@ -737,6 +737,19 @@ export class RDFManagerImpl {
     };
   }
 
+  /**
+   * Return minimal inconsistency justifications (MIPS) for the current store.
+   * Each justification is the minimal set of axioms whose conjunction is
+   * contradictory. Returns an empty array when the ontology is consistent.
+   */
+  async explainInconsistency(
+    maxJustifications = 1,
+  ): Promise<{ subject: string; predicate: string; object: string }[][]> {
+    const response = await this.worker.call("explainInconsistency", { maxJustifications });
+    const safe = isPlainObject(response) ? response : {};
+    return Array.isArray(safe.mips) ? (safe.mips as { subject: string; predicate: string; object: string }[][]) : [];
+  }
+
   onReasoningStage(handler: (payload: { id: string; stage: string; meta?: Record<string, unknown> }) => void): () => void {
     return this.worker.on('reasoningStage', handler);
   }

@@ -3,7 +3,53 @@ import type { McpTool, McpResult } from '@/mcp/types';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import { useAppConfigStore } from '@/stores/appConfigStore';
 import { VALID_ALGORITHMS } from './layout';
+import { rdfManager } from '@/utils/rdfManager';
+import { checkOwl2Profile, type ProfileTriple } from '@/utils/owlProfile';
+import { buildRepairBrief, type DiagnosticsData } from './diagnosticsBrief';
 const EXPORT_FORMATS = ['turtle', 'jsonld', 'rdfxml', 'svg', 'png'];
+
+const OWL_NOTHING = 'http://www.w3.org/2002/07/owl#Nothing';
+const DATA_GRAPH = 'urn:vg:data';
+
+/**
+ * Best-effort detection of unsatisfiable classes from the post-classification
+ * store: classes entailed to be subclasses of (or equivalent to) owl:Nothing.
+ * Returns [] if the query fails or the reasoner does not materialise such edges.
+ */
+async function detectUnsatisfiableClasses(): Promise<string[]> {
+  const sparql = `PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT DISTINCT ?c WHERE {
+  { ?c rdfs:subClassOf owl:Nothing } UNION { ?c owl:equivalentClass owl:Nothing }
+}`;
+  try {
+    const rows = await rdfManager.sparqlQuery(sparql);
+    const list: string[] = [];
+    for (const r of Array.isArray(rows) ? rows : []) {
+      const c = r?.c?.value ?? r?.c ?? r?.['?c'];
+      if (typeof c === 'string' && c !== OWL_NOTHING && !list.includes(c)) list.push(c);
+    }
+    return list;
+  } catch {
+    return [];
+  }
+}
+
+/** Read the asserted data graph and project it to ProfileTriple[] (literal-aware). */
+async function loadDataProfileTriples(): Promise<ProfileTriple[]> {
+  const page = await rdfManager.fetchQuadsPage({ graphName: DATA_GRAPH, limit: 0, serialize: true });
+  const items = (page?.items ?? []) as Array<{
+    subject: { value: string };
+    predicate: { value: string };
+    object: { value: string; termType: string };
+  }>;
+  return items.map((q) => ({
+    subject: q.subject.value,
+    predicate: q.predicate.value,
+    object: q.object.value,
+    objectIsLiteral: q.object.termType === 'Literal',
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // runReasoning
@@ -112,4 +158,66 @@ const getCapabilities: McpTool = {
   },
 };
 
-export const reasoningTools: McpTool[] = [runReasoning, clearInferred, getCapabilities];
+// ---------------------------------------------------------------------------
+// explainDiagnostics
+// ---------------------------------------------------------------------------
+const explainDiagnostics: McpTool = {
+  name: 'explainDiagnostics',
+  description:
+    "Run the full symbolic verifier (OWL 2 DL reasoning + SHACL) and return ONE structured, actionable diagnosis of everything wrong with the current graph. " +
+    "Use this to decide what to fix after authoring. Response: { isConsistent, justifications, unsatisfiableClasses, profile, shaclViolations, repairBrief }. " +
+    "isConsistent=false means a logical contradiction: `justifications` lists each minimal set of axioms (MIPS) causing it — remove or revise one axiom per set. " +
+    "`unsatisfiableClasses` are classes that can never have instances (best-effort). `profile` reports OWL 2 DL profile violations (e.g. a literal on an object property). " +
+    "`shaclViolations` are data-shape conformance failures. `repairBrief` is a ranked plain-language summary you can act on directly. Read-only: never mutates asserted data.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      maxJustifications: {
+        type: 'number',
+        default: 3,
+        description: 'Maximum number of independent inconsistency justifications (MIPS) to return when inconsistent.',
+      },
+    },
+  },
+  async handler(params): Promise<McpResult> {
+    try {
+      const { maxJustifications = 3 } = (params ?? {}) as { maxJustifications?: number };
+
+      // 1. Run reasoning to compute consistency, classify, and run SHACL.
+      const reasoning = await rdfManager.runReasoning();
+      const isConsistent = (reasoning as { isConsistent?: boolean | null })?.isConsistent ?? null;
+
+      // 2. Inconsistency justifications (only meaningful when inconsistent).
+      let justifications: DiagnosticsData['justifications'] = [];
+      if (isConsistent === false) {
+        justifications = await rdfManager.explainInconsistency(maxJustifications);
+      }
+
+      // 3. Unsatisfiable classes (best-effort, from classified taxonomy).
+      const unsatisfiableClasses = await detectUnsatisfiableClasses();
+
+      // 4. OWL 2 DL profile check over the asserted data graph.
+      const profileTriples = await loadDataProfileTriples();
+      const profile = checkOwl2Profile(profileTriples);
+
+      // 5. SHACL conformance.
+      const shacl = await rdfManager.runShaclValidation();
+      const shaclViolations = (shacl?.violations ?? []) as DiagnosticsData['shaclViolations'];
+
+      const data: DiagnosticsData = {
+        isConsistent,
+        justifications,
+        unsatisfiableClasses,
+        profile,
+        shaclViolations,
+      };
+      const repairBrief = buildRepairBrief(data);
+
+      return { success: true, data: { ...data, repairBrief } };
+    } catch (e) {
+      return { success: false, error: `explainDiagnostics: ${(e as Error)?.message ?? String(e)}` };
+    }
+  },
+};
+
+export const reasoningTools: McpTool[] = [runReasoning, clearInferred, getCapabilities, explainDiagnostics];
