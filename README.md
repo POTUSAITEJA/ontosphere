@@ -7,6 +7,7 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
 | I want to… | Start here |
 |------------|------------|
 | Try the live demo | [Open Ontosphere ↗](https://thhanke.github.io/ontosphere) |
+| Watch feature tutorials | [Video tutorials](#video-tutorials) |
 | Connect an AI agent | [AI / MCP Integration](#ai--mcp-integration) |
 | Run it locally | [Quick start (development)](#quick-start-development) |
 | Load my own data | [Startup / URL parameters](#startup--url-parameters) |
@@ -17,6 +18,7 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
 
 - [Overview](#overview)
 - [Key capabilities](#key-capabilities)
+- [Video tutorials](#video-tutorials)
 - [Quick start (development)](#quick-start-development)
 - [Startup / URL parameters](#startup--url-parameters)
 - [Reasoning](#reasoning)
@@ -56,6 +58,37 @@ Key capabilities
 - Export the current graph as Turtle, RDF/XML, or JSON-LD.
 - **Workflow catalog**: drag reusable workflow template cards from the sidebar onto the canvas to instantiate connected subgraphs.
 - **MCP support**: exposes a Model Context Protocol server (via the browser's `navigator.modelContext` API) for AI-agent integration with 34 tools across seven categories: graph management (`loadRdf`, `loadOntology`, `suggestOntologiesForTask`, `queryGraph`, `exportGraph`, `exportImage`, `setViewMode`, `getCapabilities`, `getGraphState`, `help`), node operations (`addNode`, `removeNode`, `expandNode`, `getNodes`, `getNodeDetails`, `updateNode`), link operations (`addTriple`, `removeLink`, `getLinks`), layout and navigation (`runLayout`, `clusterNodes`, `layoutNodes`, `focusNode`, `fitCanvas`, `getNeighbors`, `findPath`), reasoning (`runReasoning`, `clearInferred`), namespace management (`setNamespace`, `removeNamespace`, `listNamespaces`), and SHACL validation (`loadShacl`, `validateGraph`, `loadShaclFromUrl`). MCP manifest at `/.well-known/mcp.json`.
+
+Video tutorials
+---------------
+
+Short video walkthroughs for each core feature — click to play directly from the live deployment.
+
+### Feature tutorials
+
+Each video is a focused 60–90 second walkthrough using the bundled reasoning-demo ontology.
+
+| Feature | Video | What you'll see |
+|---------|-------|-----------------|
+| **RDF Loading** | [▶ feat-loading.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-loading.mp4) | URL parameter load, file upload, SPARQL endpoint fetch |
+| **Visual Exploration** | [▶ feat-exploration.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-exploration.mp4) | TBox/ABox toggle, search, zoom/pan, minimap |
+| **Canvas Authoring** | [▶ feat-authoring.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-authoring.mp4) | Add class, draw edge, edit annotations, undo/redo |
+| **Hierarchical Clustering** | [▶ feat-clustering.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-clustering.mp4) | L2 structural fold/unfold, L3 Louvain community detection |
+| **OWL 2 DL Reasoning** | [▶ feat-reasoning.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-reasoning.mp4) | Konclude WASM inference, inferred triples, ABox inspection |
+| **SHACL Validation** | [▶ feat-shacl.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-shacl.mp4) | Load shapes, validate data, reasoning interplay |
+| **MCP + AI Relay** | [▶ feat-ai-relay.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-ai-relay.mp4) | Bookmarklet injection, AI tool calls, relay round trip |
+
+### Workflow demos
+
+Longer end-to-end sessions showing AI-driven ontology building.
+
+| Demo | Video | Description |
+|------|-------|-------------|
+| **Full walkthrough** | [▶ iswc2026-comprehensive.mp4](https://thhanke.github.io/ontosphere/demo-videos/iswc2026-comprehensive.mp4) | 3-minute tour of all features |
+| **FOAF social network** | [▶ foaf-social-network.mp4](https://thhanke.github.io/ontosphere/demo-videos/foaf-social-network.mp4) | AI builds a social graph with DL reasoning |
+| **Scene ontology** | [▶ scene-ontology.mp4](https://thhanke.github.io/ontosphere/demo-videos/scene-ontology.mp4) | Film scene ontology on BFO/RO upper ontology |
+| **Pizza tutorial** | [▶ pizza-tutorial.mp4](https://thhanke.github.io/ontosphere/demo-videos/pizza-tutorial.mp4) | Manchester Pizza — class hierarchy, disjointness, DL reasoning |
+| **Pizza tutorial (chat)** | [▶ pizza-tutorial-chat.mp4](https://thhanke.github.io/ontosphere/demo-videos/pizza-tutorial-chat.mp4) | OWL pizza tutorial as AI tutor lesson, side-by-side chat |
 
 Quick start (development)
 -------------------------
@@ -246,7 +279,7 @@ A separate **inconsistency demo** (`public/reasoning-demo-inconsistent.ttl`) sho
 
 SHACL validation
 -----------------
-Ontosphere validates RDF data against [SHACL](https://www.w3.org/TR/shacl/) (Shapes Constraint Language) shapes. SHACL shapes define constraints on your data — required properties, value ranges, cardinality — and the validation engine reports which nodes violate them.
+Ontosphere validates RDF data against [SHACL](https://www.w3.org/TR/shacl/) (Shapes Constraint Language) shapes. SHACL shapes define constraints on your data — required properties, value ranges, cardinality — and the validation engine reports which nodes violate them. See the [feat-shacl demo video](https://thhanke.github.io/ontosphere/demo-videos/feat-shacl.mp4) for a walkthrough.
 
 SHACL validation runs automatically as part of the reasoning pipeline. After reasoning completes, the reasoning report shows SHACL violations alongside OWL inferences, with **SHACL** / **OWL** source badges on each finding. Only SHACL errors (severity `sh:Violation`) mark the data as invalid; warnings (`sh:Warning`) and info-level findings do not.
 
@@ -320,80 +353,83 @@ The annotated diagram below identifies the numbered UI elements described in thi
 
 **3** **Layout** — opens the layout popover: choose algorithm (Dagre horizontal/vertical, ELK layered/force/stress/radial, Reactodia-default), adjust spacing via a slider, toggle auto-layout (re-runs after every graph update).
 
-**4** **Level badge** — shows current fold depth: `L3` (community-detection clusters active), `L2` (structural fold active — subclass chains and OWL collections), or `∅` (fully expanded).
+**4** **Clustering algorithm selector** — choose between None, Label Propagation, Louvain, or K-Means. The large-graph threshold (default 100 nodes, configurable in Settings) controls when auto-clustering runs on load.
 
-**5** **Clustering algorithm selector** — choose between None, Label Propagation, Louvain, or K-Means. The large-graph threshold (default 100 nodes, configurable in Settings) controls when auto-clustering runs on load.
+**5** **Cluster level navigation** (◄ 1/3 ►) — step through fold levels. The badge shows the current level and total count: `L3` (community-detection clusters), `L2` (structural fold — subclass chains and OWL collections), `L1` (annotation properties hidden), `∅` (fully expanded). The ◄/► arrows fold or unfold one level at a time.
 
-**6** **Cluster** — cluster visible nodes with the selected algorithm. Disabled when already clustered or algorithm is None.
+**6** **A-Box** — switch to instance-level individuals (A-Box, highlighted when active).
 
-**7** **Expand All** — expand all collapsed cluster groups at once.
+**7** **T-Box** — switch to ontology-level classes/properties (T-Box).
 
-**8** **Fold L2 / Unfold L2** — toggle structural fold: collapses subclass chains and OWL collection members (`owl:intersectionOf`, `owl:unionOf`, etc.) into representative group nodes. Applied by default on load.
+**8** **Ontologies** — shows the count of loaded ontologies. Click to open a popover listing each ontology with options to add/remove from autoload.
 
-**9** **Fold L1 / Unfold L1** — toggle per-node annotation property visibility across all nodes at once.
+**9** **Reasoning status** — shows the current DL reasoning state: Ready / ✓ Valid / ⚠ Warnings / Errors / spinner while running. Click to open the reasoning report (inferred triples grouped by rule).
 
-**10** **A-Box / T-Box** — switch between instance-level individuals (A-Box, highlighted when active) and ontology-level classes/properties (T-Box).
+**10** **Clear inferred** (🗑) — removes all inferred triples without touching asserted data.
 
-**11** **Ontologies** — shows the count of loaded ontologies. Click to open a popover listing each ontology with options to add/remove from autoload.
+**11** **SHACL toggle** (☑) — enable or disable SHACL validation as part of the reasoning pipeline. When checked, running reasoning also validates data against loaded SHACL shapes.
 
-**12** **Reasoning status** — shows the current DL reasoning state: Ready / ✓ Valid / ⚠ Warnings / Errors / spinner while running. Click to open the reasoning report (inferred triples grouped by rule).
-
-**13** **Clear inferred** (🗑) — removes all inferred triples without touching asserted data.
-
-**14** **Run reasoning** (▶) — triggers DL reasoning (Konclude). Inferred triples appear as amber dashed edges. Idempotent.
-
-### Authoring toolbar (bottom left)
-
-**15** **Undo** — undo last authoring change.
-
-**16** **Redo** — redo last undone change.
-
-**17** **Save** — commit all pending authoring edits to the RDF store in a single batch.
-
-**18** **Re-layout** — re-apply the current layout algorithm in-place.
+**12** **Run reasoning** (▶) — triggers DL reasoning (Konclude) and optionally SHACL validation. Inferred triples appear as amber dashed edges. Idempotent.
 
 ### Left sidebar
 
-**19** **Onto** — open the ontology loader. Enter any HTTP(S) URL or pick from pre-configured sources in Settings.
+**13** **Onto** — open the ontology loader. Enter any HTTP(S) URL or pick from pre-configured sources in Settings.
 
-**20** **File** — open a file picker for local RDF files. Supported: Turtle (.ttl), JSON-LD (.jsonld), RDF/XML (.rdf/.owl), N-Triples (.nt).
+**14** **File** — open a file picker for local RDF files. Supported: Turtle (.ttl), JSON-LD (.jsonld), RDF/XML (.rdf/.owl), N-Triples (.nt).
 
-**21** **Clear** — remove all loaded graphs and reset the canvas.
+**15** **Clear** — remove all loaded graphs and reset the canvas.
 
-**22** **Export** — export as Turtle, JSON-LD, or RDF/XML (dropdown). Generated entirely in the browser.
+**16** **Export** — export as Turtle, JSON-LD, or RDF/XML (dropdown). Generated entirely in the browser.
 
-**23** **Settings** — open the settings panel for default layout, clustering algorithm, large-graph threshold, ontology autoload URLs, workflow catalog, and other preferences.
+**17** **SHACL** — open the SHACL shapes panel to load, inspect, and manage SHACL shapes for data validation.
+
+**18** **AI Relay** — open the AI Relay Bridge panel. Drag the bookmarklet to your browser bar to connect any AI chat (ChatGPT, Gemini, Claude.ai) to Ontosphere.
+
+**19** **Zoom controls** — zoom in/out, fit view (reset the viewport to show all nodes), and screenshot (export the current canvas view).
+
+**20** **Docs** — open the built-in documentation and help panel.
+
+**21** **Settings** — open the settings panel for default layout, clustering algorithm, large-graph threshold, ontology autoload URLs, workflow catalog, reasoner backend, and other preferences.
 
 ### Sidebar content (expanded)
 
 When the sidebar is expanded (click the **›** toggle), the file operation buttons are shown in a compact grid. A **Workflows** accordion appears below when the workflow catalog is enabled in Settings. Drag a template card onto the canvas to instantiate it as a connected subgraph.
 
+### Authoring toolbar (bottom left)
+
+**22** **Undo** — undo last authoring change.
+
+**23** **Redo** — redo last undone change.
+
+**24** **Save** — commit all pending authoring edits to the RDF store in a single batch.
+
+**25** **Re-layout** — re-apply the current layout algorithm in-place.
+
 ### Node authoring halo (visible on selected node)
 
-**24** **Edit / Delete** — buttons that appear above a selected node. **Edit** opens the property editor (IRI, annotation properties, custom fields). **Delete** permanently removes the entity from the RDF store.
+Hover over any node to reveal the authoring halo with these controls:
 
-**25** **Remove** (✕) — removes the node from the canvas view without deleting it from the RDF store.
-
-**26** **Establish Link** (plug icon, right side) — drag to another node to create a new edge. A dialog confirms the predicate with scored autocomplete from loaded ontologies.
-
-**27** **Expand neighbours** (∧, bottom) — load and show all RDF neighbours of the node on the canvas.
+- **Edit / Delete** — buttons that appear above a selected node. **Edit** opens the property editor (IRI, annotation properties, custom fields). **Delete** permanently removes the entity from the RDF store.
+- **Remove** (✕) — removes the node from the canvas view without deleting it from the RDF store.
+- **Establish Link** (plug icon, right side) — drag to another node to create a new edge. A dialog confirms the predicate with scored autocomplete from loaded ontologies.
+- **Expand neighbours** (∧, bottom) — load and show all RDF neighbours of the node on the canvas.
 
 ### Canvas elements
 
-**28** **Individual node** — represents an RDF subject. The header shows the local name, a coloured namespace badge, and the OWL class. Properties (IRI, annotations, custom fields) are shown in an editable table on selection.
+**26** **Individual node** — represents an RDF subject. The header shows the local name, a coloured namespace badge, and the OWL class. Properties (IRI, annotations, custom fields) are shown in an editable table on selection.
 
-**29** **Edge / predicate** — labelled arrow between two nodes. Amber dashed edges are inferred triples. Double-click to open the link property editor (scored autocomplete from ontologies).
+**27** **Edge / predicate** — labelled arrow between two nodes. Amber dashed edges are inferred triples. Double-click to open the link property editor (scored autocomplete from ontologies).
 
-**30** **Minimap** — overview panel at bottom-right. Click to jump to a region, drag to pan.
+**28** **Minimap** — overview panel at bottom-right. Click to jump to a region, drag to pan.
 
 ### Canvas interactions
 - **Add a node**: type in **2** Search and press Enter to search the ontology; select a match to place it on the canvas.
-- **Authoring mode** is always active: hover a node to reveal the halo (**24**–**27**).
-- Drag the **26** Establish Link handle to another node to create a new edge.
-- Double-click an edge (**26**) to open the link property editor.
+- **Authoring mode** is always active: hover a node to reveal the halo.
+- Drag the **Establish Link** handle to another node to create a new edge.
+- Double-click an edge to open the link property editor.
 - Scroll to zoom; drag the background to pan.
 - Namespace legend panel: enable via **1** View menu → Show Legend. Click a namespace entry's pencil icon to rename its URI; renames propagate across all stored triples.
-- Use the fit-view button in the canvas controls (left side, zoom icon group) to reset the viewport.
+- Use the fit-view button (**19** Zoom controls) to reset the viewport.
 
 </details>
 
@@ -424,7 +460,7 @@ Troubleshooting
 AI / MCP Integration
 --------------------
 
-Ontosphere exposes a full [Model Context Protocol](https://modelcontextprotocol.io) tool surface so AI agents can build and reason over knowledge graphs through natural-language chat.
+Ontosphere exposes a full [Model Context Protocol](https://modelcontextprotocol.io) tool surface so AI agents can build and reason over knowledge graphs through natural-language chat. See the [feat-ai-relay demo video](https://thhanke.github.io/ontosphere/demo-videos/feat-ai-relay.mp4) for a walkthrough, or the [workflow demos](#workflow-demos) for full AI-driven sessions.
 
 ### How it works
 
@@ -553,7 +589,7 @@ The relay handles execution and result feedback automatically — no manual copy
 
 Recording demo videos
 ---------------------
-See [docs/demo-scripts/HOWTO.md](docs/demo-scripts/HOWTO.md) for the full guide.
+See [docs/demo-scripts/HOWTO.md](docs/demo-scripts/HOWTO.md) for the full guide. All videos are listed in [Video tutorials](#video-tutorials) above.
 
 Three styles of demo video are supported:
 
@@ -567,28 +603,6 @@ iframe via `callToolOnStage()`. No relay popup needed. Example: `pizza-tutorial-
 
 **Feature demos** — focused 60–90 second demos, one per paper feature section. All use
 `reasoning-demo.ttl` as the shared dataset. Seeds mix MCP tool calls with UI action blocks.
-
-### Feature demos (paper-aligned)
-
-| Video | Paper Section | Description |
-|-------|---------------|-------------|
-| [feat-loading.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-loading.mp4) | §3.1 Zero-Install + RDF Loading | URL param load, file upload, SPARQL endpoint |
-| [feat-exploration.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-exploration.mp4) | §3.2 Visual Exploration | TBox/ABox toggle, search, zoom/pan, minimap |
-| [feat-authoring.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-authoring.mp4) | §3.3 Canvas Authoring | Add class, draw edge, edit annotation, undo/redo |
-| [feat-clustering.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-clustering.mp4) | §3.4 Hierarchical Clustering | L2 fold/unfold, L3 Louvain community detection |
-| [feat-reasoning.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-reasoning.mp4) | §3.5 OWL 2 DL Reasoning | Konclude WASM, inferred triples, ABox inspection |
-| [feat-shacl.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-shacl.mp4) | §3.6 SHACL Validation | Load shapes, validate, reasoning interplay |
-| [feat-ai-relay.mp4](https://thhanke.github.io/ontosphere/demo-videos/feat-ai-relay.mp4) | §3.7 MCP + AI Relay | Bookmarklet injection, AI tool calls, relay round trip |
-
-### Workflow demos
-
-| Video | Description |
-|-------|-------------|
-| [iswc2026-comprehensive.mp4](https://thhanke.github.io/ontosphere/demo-videos/iswc2026-comprehensive.mp4) | Full 3-minute walkthrough of all features |
-| [foaf-social-network.mp4](https://thhanke.github.io/ontosphere/demo-videos/foaf-social-network.mp4) | AI builds a FOAF social graph with DL reasoning |
-| [scene-ontology.mp4](https://thhanke.github.io/ontosphere/demo-videos/scene-ontology.mp4) | AI builds a film scene ontology on BFO/RO upper ontology |
-| [pizza-tutorial.mp4](https://thhanke.github.io/ontosphere/demo-videos/pizza-tutorial.mp4) | Manchester Pizza Ontology — class hierarchy, disjointness, DL reasoning |
-| [pizza-tutorial-chat.mp4](https://thhanke.github.io/ontosphere/demo-videos/pizza-tutorial-chat.mp4) | OWL pizza tutorial as AI tutor lesson, side-by-side chat |
 
 To re-record all videos:
 ```sh
