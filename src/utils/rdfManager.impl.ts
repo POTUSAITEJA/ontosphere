@@ -33,6 +33,43 @@ type SubjectsSubscriber = (
 const DEFAULT_GRAPH = "urn:vg:data";
 const IRI_REGEX = /^[a-z][a-z0-9+.-]*:/i;
 
+// OPFS persistence enable preference. Stored in localStorage (same browser-
+// storage pattern the rest of the app config uses) so the user's choice
+// survives a reload. Defaults to ENABLED in the real app; in test/SSR contexts
+// (no localStorage) it reads the default and writes are silently skipped.
+const PERSISTENCE_PREF_KEY = "ontosphere.persistence.enabled";
+
+const getLocalStorage = (): Storage | null => {
+  try {
+    if (typeof localStorage !== "undefined") return localStorage;
+  } catch {
+    /* access can throw in sandboxed contexts */
+  }
+  return null;
+};
+
+const readPersistenceEnabledPreference = (): boolean => {
+  const ls = getLocalStorage();
+  if (!ls) return true; // default enabled
+  try {
+    const raw = ls.getItem(PERSISTENCE_PREF_KEY);
+    if (raw === null) return true; // unset → default enabled
+    return raw !== "false";
+  } catch {
+    return true;
+  }
+};
+
+const writePersistenceEnabledPreference = (enabled: boolean): void => {
+  const ls = getLocalStorage();
+  if (!ls) return;
+  try {
+    ls.setItem(PERSISTENCE_PREF_KEY, enabled ? "true" : "false");
+  } catch {
+    /* quota / sandbox — preference simply not persisted */
+  }
+};
+
 const DEFAULT_BLACKLIST_PREFIXES = ["owl", "rdf", "rdfs", "xml", "xsd"];
 const DEFAULT_BLACKLIST_URIS = [
   "http://www.w3.org/2002/07/owl",
@@ -510,6 +547,9 @@ export class RDFManagerImpl {
       }
       console.debug("[rdfManager] bootstrapState.getBlacklist failed", err);
     }
+    // Push the saved OPFS persistence preference to the worker. No-ops in the
+    // worker when OPFS is unavailable (jsdom/Node) so tests are unaffected.
+    this.syncPersistencePreference();
   }
 
   private handleWorkerChange = (payload: any) => {
@@ -744,10 +784,33 @@ export class RDFManagerImpl {
    */
   async explainInconsistency(
     maxJustifications = 1,
-  ): Promise<{ subject: string; predicate: string; object: string }[][]> {
+  ): Promise<
+    {
+      subject: string;
+      predicate: string;
+      object: string;
+      objectTermType?: string;
+      objectDatatype?: string;
+      objectLanguage?: string;
+      graph?: string;
+    }[][]
+  > {
     const response = await this.worker.call("explainInconsistency", { maxJustifications });
     const safe = isPlainObject(response) ? response : {};
-    return Array.isArray(safe.mips) ? (safe.mips as { subject: string; predicate: string; object: string }[][]) : [];
+    // C1 + H2: the worker now annotates each justification axiom with its source
+    // `graph` and full object term (objectTermType/Datatype/Language). These are
+    // OPTIONAL — older worker builds omit them and callers must tolerate absence.
+    return Array.isArray(safe.mips)
+      ? (safe.mips as {
+          subject: string;
+          predicate: string;
+          object: string;
+          objectTermType?: string;
+          objectDatatype?: string;
+          objectLanguage?: string;
+          graph?: string;
+        }[][])
+      : [];
   }
 
   /** IRIs of classes entailed to be unsatisfiable (equivalent to owl:Nothing). */
@@ -757,8 +820,182 @@ export class RDFManagerImpl {
     return Array.isArray(safe.unsatisfiable) ? (safe.unsatisfiable as string[]) : [];
   }
 
+  /**
+   * Explain why an entailed axiom (subjectIri predicateIri objectIri) holds —
+   * Horridge-style justifications for an ARBITRARY entailed axiom, not just
+   * inconsistency. Each justification is a minimal set of ontology axioms whose
+   * conjunction entails the requested axiom. Returns `isEntailed:false` with an
+   * empty list when the axiom is not entailed, and `isEntailed:true` with an
+   * empty list when the axiom is asserted-only (nothing to derive) or for
+   * unsupported shapes. Supported shapes: rdfs:subClassOf and rdf:type with an
+   * IRI object. READ-ONLY — never mutates urn:vg:data.
+   */
+  async explainEntailment(
+    subjectIri: string,
+    predicateIri: string,
+    objectIri: string,
+    opts?: { objectIsLiteral?: boolean; maxJustifications?: number },
+  ): Promise<{
+    isEntailed: boolean | null;
+    justifications: { subject: string; predicate: string; object: string }[][];
+    ontologyInconsistent?: boolean;
+    vacuous?: boolean;
+    reason?: string;
+  }> {
+    const response = await this.worker.call("explainEntailment", {
+      subjectIri,
+      predicateIri,
+      objectIri,
+      objectIsLiteral: opts?.objectIsLiteral,
+      maxJustifications: opts?.maxJustifications,
+    });
+    const safe = (isPlainObject(response) ? response : {}) as Record<string, unknown>;
+    // C1: when the ontology is already inconsistent the reduction is invalid and
+    // the worker reports isEntailed:null with ontologyInconsistent:true. Preserve
+    // null (do NOT coerce to false) so the tool can distinguish "vacuous, fix
+    // consistency first" from "not entailed".
+    const ontologyInconsistent = safe.ontologyInconsistent === true;
+    return {
+      isEntailed: ontologyInconsistent ? null : safe.isEntailed === true,
+      justifications: Array.isArray(safe.justifications)
+        ? (safe.justifications as { subject: string; predicate: string; object: string }[][])
+        : [],
+      ...(ontologyInconsistent ? { ontologyInconsistent: true } : {}),
+      ...(safe.vacuous === true ? { vacuous: true } : {}),
+      ...(typeof safe.reason === "string" ? { reason: safe.reason } : {}),
+    };
+  }
+
+  /**
+   * Search existing ontology terms (classes / properties / individuals) by
+   * label or IRI local-name across ALL graphs — especially urn:vg:ontologies
+   * (loaded ontologies). Pure store query (no reasoner). Returns ranked
+   * candidates so callers can REUSE an existing IRI instead of minting a new
+   * one. `kinds` defaults to classes + properties; `limit` defaults to 25.
+   */
+  async searchTerms(
+    query: string,
+    opts?: {
+      kinds?: ("class" | "objectProperty" | "datatypeProperty" | "property" | "individual")[];
+      limit?: number;
+    },
+  ): Promise<
+    Array<{
+      iri: string;
+      label: string;
+      kind: "class" | "objectProperty" | "datatypeProperty" | "property" | "individual";
+      prefix?: string;
+      score: number;
+    }>
+  > {
+    const response = await this.worker.call("searchTerms", {
+      query,
+      kinds: opts?.kinds,
+      limit: opts?.limit,
+    });
+    const safe = isPlainObject(response) ? response : {};
+    return Array.isArray(safe.results)
+      ? (safe.results as Array<{
+          iri: string;
+          label: string;
+          kind: "class" | "objectProperty" | "datatypeProperty" | "property" | "individual";
+          prefix?: string;
+          score: number;
+        }>)
+      : [];
+  }
+
+  /**
+   * Extract a self-contained syntactic-locality-based MODULE (sub-ontology) over
+   * a signature Σ. The worker gathers the TBox/axiom triples from the SAME base
+   * graphs the reasoning path reads (urn:vg:data + urn:vg:ontologies), runs the
+   * ⊥-module ("bot", default) or iterated ⊤⊥* ("star") locality fixpoint, and
+   * returns the module triples plus size metrics. The module preserves ALL
+   * entailments over Σ (the conformance guarantee). READ-ONLY — never mutates
+   * urn:vg:data. This is the building block for incremental / modular reasoning
+   * (R2); full auto-incremental-on-edit is a documented follow-up.
+   */
+  async extractModule(
+    signature: string[],
+    opts?: { moduleType?: "bot" | "star"; includeOntologies?: boolean },
+  ): Promise<{
+    moduleTriples: { subject: string; predicate: string; object: string }[];
+    moduleSize: number;
+    fullSize: number;
+    signature: string[];
+  }> {
+    const response = await this.worker.call("extractModule", {
+      signature,
+      moduleType: opts?.moduleType,
+      includeOntologies: opts?.includeOntologies,
+    });
+    const safe = (isPlainObject(response) ? response : {}) as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+    return {
+      moduleTriples: Array.isArray(safe.moduleTriples)
+        ? (safe.moduleTriples as { subject: string; predicate: string; object: string }[])
+        : [],
+      moduleSize: num(safe.moduleSize),
+      fullSize: num(safe.fullSize),
+      signature: Array.isArray(safe.signature) ? (safe.signature as string[]) : [...signature],
+    };
+  }
+
+  /**
+   * Symbolically verify a repair candidate: re-run the Konclude consistency
+   * oracle on a COPY of the data store with the given axioms removed. Returns
+   * true when removing those axioms makes the ontology consistent. Never
+   * mutates urn:vg:data.
+   *
+   * Backwards-compatible boolean wrapper around `verifyRepairDetailed`.
+   */
+  async verifyRepair(
+    removals: { subject: string; predicate: string; object: string }[],
+  ): Promise<boolean> {
+    return (await this.verifyRepairDetailed(removals)).verifiedConsistent;
+  }
+
+  /**
+   * Like `verifyRepair` but also reports how many of the requested removals
+   * actually matched a quad in the store. `matchedCount < requestedCount`
+   * means some removals matched nothing (e.g. a serialization mismatch), so a
+   * `verifiedConsistent:false` may simply mean "the store was not changed"
+   * rather than "removing this repair leaves the ontology inconsistent" (L2).
+   */
+  async verifyRepairDetailed(
+    removals: { subject: string; predicate: string; object: string }[],
+  ): Promise<{
+    verifiedConsistent: boolean;
+    removedCount: number;
+    requestedCount: number;
+    matchedCount: number;
+  }> {
+    const response = await this.worker.call("verifyRepair", { removals });
+    const safe = (isPlainObject(response) ? response : {}) as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+    return {
+      verifiedConsistent: safe.verifiedConsistent === true,
+      removedCount: num(safe.removedCount),
+      requestedCount: num(safe.requestedCount),
+      matchedCount: num(safe.matchedCount),
+    };
+  }
+
   onReasoningStage(handler: (payload: { id: string; stage: string; meta?: Record<string, unknown> }) => void): () => void {
     return this.worker.on('reasoningStage', handler);
+  }
+
+  /**
+   * Subscribe to streaming import-progress events emitted while a large
+   * importSerialized is writing triples to the store in chunks. `loaded` is the
+   * running count of parsed triples processed so far; `total` is the full parsed
+   * count for this import. Optional and non-breaking — callers that don't
+   * subscribe see no behavioural change. Returns an unsubscribe function.
+   */
+  onImportProgress(
+    handler: (payload: { id: string; loaded: number; total?: number; graphName?: string }) => void,
+  ): () => void {
+    return this.worker.on('importProgress', handler);
   }
 
   private mergePrefixes(input?: Record<string, string>, graphName?: string) {
@@ -1049,7 +1286,7 @@ export class RDFManagerImpl {
   async applyBatch(
     changes: { adds?: any[]; removes?: any[]; options?: { suppressSubjects?: boolean } },
     graphName: string = DEFAULT_GRAPH,
-  ): Promise<void> {
+  ): Promise<{ added: number; removed: number }> {
     const payload: RDFWorkerCommandPayloads["syncBatch"] = {
       graphName,
       adds: [],
@@ -1102,12 +1339,62 @@ export class RDFManagerImpl {
       };
     }
 
-    await this.worker.call("syncBatch", payload);
+    // The worker's syncBatch returns the ACTUAL number of quads added/removed
+    // from the store (after match resolution and de-duplication). Surfacing
+    // these real deltas lets callers (e.g. provenance revert) report honest
+    // partial outcomes instead of assuming the requested counts were applied.
+    const delta = (await this.worker.call("syncBatch", payload)) as
+      | { added?: number; removed?: number }
+      | undefined;
+    return {
+      added: typeof delta?.added === "number" ? delta.added : 0,
+      removed: typeof delta?.removed === "number" ? delta.removed : 0,
+    };
   }
 
   clear(): void {
     void this.worker.call("clear").catch((err) => {
       console.error("[rdfManager] clear failed", err);
+    });
+  }
+
+  // ── OPFS persistence / crash recovery ──────────────────────────────────────
+  //
+  // Client-side, zero-backend durability. The actual OPFS I/O lives in the
+  // worker (sync access handles require a worker context); the main thread only
+  // owns the enable PREFERENCE (persisted to localStorage so the user's choice
+  // survives a reload) and forwards it to the worker. When OPFS is unavailable
+  // (jsdom/Node, or browsers without OPFS) the worker no-ops regardless, so
+  // these methods are always safe to call.
+
+  isPersistenceEnabled(): boolean {
+    return readPersistenceEnabledPreference();
+  }
+
+  setPersistenceEnabled(enabled: boolean): void {
+    writePersistenceEnabledPreference(enabled);
+    // Promise.resolve guards against test doubles whose call() returns undefined.
+    void Promise.resolve(this.worker.call("setPersistence", { enabled })).catch((err) => {
+      console.error("[rdfManager] setPersistence failed", err);
+    });
+  }
+
+  async clearPersistedStore(): Promise<void> {
+    await Promise.resolve(this.worker.call("clearPersistedStore")).catch((err) => {
+      console.error("[rdfManager] clearPersistedStore failed", err);
+    });
+  }
+
+  /**
+   * Push the persisted preference to the worker on startup so the worker's
+   * persistence enable flag matches the user's saved choice. Safe to call
+   * repeatedly; no-ops in the worker when OPFS is unavailable.
+   */
+  private syncPersistencePreference(): void {
+    const enabled = readPersistenceEnabledPreference();
+    // Promise.resolve guards against test doubles whose call() returns undefined.
+    void Promise.resolve(this.worker.call("setPersistence", { enabled })).catch(() => {
+      /* worker may not be ready yet; preference is re-pushed on next toggle */
     });
   }
 
@@ -1204,6 +1491,39 @@ export class RDFManagerImpl {
     const payload: ExportGraphPayload = {
       graphName,
       format: "application/rdf+xml",
+    };
+    const response = await this.worker.call("exportGraph", payload);
+    if (isPlainObject(response) && typeof (response as any).content === "string") {
+      return (response as any).content;
+    }
+    return "";
+  }
+
+  /**
+   * Dataset-faithful export as N-Quads. Unlike the single-graph Turtle/JSON-LD/RDF-XML
+   * exporters, this collects quads from ALL urn:vg:* graphs (data, inferred, shapes,
+   * ontologies, workflows) and preserves each quad's graph term so the multi-graph
+   * partition round-trips. The `graphName` argument is ignored for dataset formats; it
+   * is accepted only for signature symmetry with the other exporters.
+   */
+  async exportToNQuads(_graphName: string = DEFAULT_GRAPH): Promise<string> {
+    const payload: ExportGraphPayload = {
+      format: "application/n-quads",
+    };
+    const response = await this.worker.call("exportGraph", payload);
+    if (isPlainObject(response) && typeof (response as any).content === "string") {
+      return (response as any).content;
+    }
+    return "";
+  }
+
+  /**
+   * Dataset-faithful export as TriG. Same multi-graph semantics as {@link exportToNQuads}
+   * but with the more human-readable TriG syntax (prefixes + grouped GRAPH blocks).
+   */
+  async exportToTriG(_graphName: string = DEFAULT_GRAPH): Promise<string> {
+    const payload: ExportGraphPayload = {
+      format: "application/trig",
     };
     const response = await this.worker.call("exportGraph", payload);
     if (isPlainObject(response) && typeof (response as any).content === "string") {

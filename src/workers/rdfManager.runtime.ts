@@ -24,6 +24,13 @@ import { ensureDefaultNamespaceMap } from "../constants/namespaces.ts";
 import { RDF_TYPE, RDFS_LABEL, SHACL } from "../constants/vocabularies.ts";
 import { OWL_SCHEMA_AXIOMS } from "../constants/owlSchemaData.ts";
 import { mipsToReasoningError, shaclViolationToEntry } from "./reasoningDiagnostics.ts";
+import { buildEntailmentProbe } from "./entailmentProbe.ts";
+import {
+  extractBotModule,
+  extractStarModule,
+  type LocalityTriple,
+} from "./localityModule.ts";
+import { OpfsPersistence, createOpfsBackend } from "./opfsPersistence.ts";
 import { QueryEngine } from "@comunica/query-sparql-rdfjs";
 const KONCLUDE_INFERRED_GRAPH_IRI = "urn:vg:inferred";
 
@@ -185,6 +192,13 @@ function _decodeBuffers(combined: ArrayBuffer): N3.Quad[] {
 // incorrectly inside Vite worker bundles.
 // ---------------------------------------------------------------------------
 
+// M1: monotonic, deterministic counter giving each explainEntailment call a
+// unique probeId. Module-scoped so probe blank-node labels (vg_neg_*/vg_wit_*)
+// are unique per call and cannot collide with a real ontology bnode that
+// happens to carry the constant default label. Deterministic (not Math.random)
+// so probe construction stays reproducible.
+let _entailmentProbeCounter = 0;
+
 class KoncludeReasoner {
   readonly ready: Promise<void>;
   private readonly worker: Worker;
@@ -285,7 +299,7 @@ class KoncludeReasoner {
       const inferredGraphNode = N3.DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI);
       store.removeQuads(store.getQuads(null, null, null, inferredGraphNode));
 
-      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:shapes"]);
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:shapes", "urn:vg:provenance"]);
       const allQuads: N3.Quad[] = store.getQuads(null, null, null, null);
       const sourceQuads = allQuads.filter((q) => {
         const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
@@ -349,9 +363,36 @@ class KoncludeReasoner {
     return !consistent;
   }
 
+  /**
+   * Direct (non-queued) variant of getUnsatisfiableClasses: classify a candidate
+   * quad set and return the IRIs of classes entailed equivalent to owl:Nothing.
+   * Mirrors getUnsatisfiableClasses' de-skolemisation but takes pre-filtered
+   * quads and runs INSIDE an existing _queue slot (like _checkInconsistencyDirect)
+   * so callers such as explainEntailment can use it without re-acquiring _queue
+   * (which would deadlock). Used for C2 vacuous-truth detection.
+   */
+  private async _getUnsatisfiableClassesDirect(candidates: N3.Quad[]): Promise<string[]> {
+    const BNODE_PREFIX = "urn:vg:bnode:";
+    const deskolemized = candidates.map((q) => {
+      const subj = q.subject.termType === "NamedNode" && q.subject.value.startsWith(BNODE_PREFIX)
+        ? N3.DataFactory.blankNode(q.subject.value.slice(BNODE_PREFIX.length))
+        : q.subject;
+      const obj = q.object.termType === "NamedNode" && q.object.value.startsWith(BNODE_PREFIX)
+        ? N3.DataFactory.blankNode(q.object.value.slice(BNODE_PREFIX.length))
+        : q.object;
+      if (subj === q.subject && obj === q.object) return q;
+      return N3.DataFactory.quad(subj, q.predicate, obj, q.graph);
+    });
+    const { tripleBuffer, strTableBuffer } = _encodeToBuffers(deskolemized);
+    await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer, false], [tripleBuffer, strTableBuffer]);
+    await this._call("classification", []);
+    const raw = (await this._call("getUnsatisfiableClassBuffer", [])) as string;
+    return typeof raw === "string" ? raw.split("\n").map((s) => s.trim()).filter(Boolean) : [];
+  }
+
   checkConsistency(store: N3.Store): Promise<boolean> {
     const result = this._queue.then(async () => {
-      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes"]);
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes", "urn:vg:provenance"]);
       const candidates: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
         const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
         return !EXCLUDED_GRAPHS.has(g);
@@ -370,25 +411,12 @@ class KoncludeReasoner {
    */
   getUnsatisfiableClasses(store: N3.Store): Promise<string[]> {
     const result = this._queue.then(async () => {
-      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes"]);
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes", "urn:vg:provenance"]);
       const candidates: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
         const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
         return !EXCLUDED_GRAPHS.has(g);
       });
-      const BNODE_PREFIX = "urn:vg:bnode:";
-      const deskolemized = candidates.map((q) => {
-        const subj = q.subject.termType === "NamedNode" && q.subject.value.startsWith(BNODE_PREFIX)
-          ? N3.DataFactory.blankNode(q.subject.value.slice(BNODE_PREFIX.length)) : q.subject;
-        const obj = q.object.termType === "NamedNode" && q.object.value.startsWith(BNODE_PREFIX)
-          ? N3.DataFactory.blankNode(q.object.value.slice(BNODE_PREFIX.length)) : q.object;
-        if (subj === q.subject && obj === q.object) return q;
-        return N3.DataFactory.quad(subj, q.predicate, obj, q.graph);
-      });
-      const { tripleBuffer, strTableBuffer } = _encodeToBuffers(deskolemized);
-      await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer, false], [tripleBuffer, strTableBuffer]);
-      await this._call("classification", []);
-      const raw = (await this._call("getUnsatisfiableClassBuffer", [])) as string;
-      return typeof raw === "string" ? raw.split("\n").map((s) => s.trim()).filter(Boolean) : [];
+      return this._getUnsatisfiableClassesDirect(candidates);
     });
     this._queue = result.then(() => {}, () => {});
     return result;
@@ -396,7 +424,7 @@ class KoncludeReasoner {
 
   explainInconsistency(store: N3.Store, maxJustifications = 1): Promise<N3.Quad[][]> {
     const result = this._queue.then(async () => {
-      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes"]);
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes", "urn:vg:provenance"]);
       const allBase: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
         const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
         return !EXCLUDED_GRAPHS.has(g);
@@ -405,7 +433,54 @@ class KoncludeReasoner {
       if (!(await this._checkInconsistencyDirect(allBase))) return [];
       if (maxJustifications === 0) return [];
 
-      const allCandidates = allBase;
+      // Filter out pure declaration and annotation triples that cannot be the
+      // cause of a logical inconsistency on their own.  This shrinks the O(N)
+      // oracle search substantially for ontologies with many labels/comments.
+      const ANNOTATION_PREDICATES = new Set([
+        "http://www.w3.org/2000/01/rdf-schema#label",
+        "http://www.w3.org/2000/01/rdf-schema#comment",
+        "http://www.w3.org/2000/01/rdf-schema#seeAlso",
+        "http://www.w3.org/2000/01/rdf-schema#isDefinedBy",
+        // skos
+        "http://www.w3.org/2004/02/skos/core#prefLabel",
+        "http://www.w3.org/2004/02/skos/core#altLabel",
+        "http://www.w3.org/2004/02/skos/core#hiddenLabel",
+        "http://www.w3.org/2004/02/skos/core#note",
+        "http://www.w3.org/2004/02/skos/core#definition",
+        "http://www.w3.org/2004/02/skos/core#example",
+        "http://www.w3.org/2004/02/skos/core#scopeNote",
+        "http://www.w3.org/2004/02/skos/core#editorialNote",
+        "http://www.w3.org/2004/02/skos/core#changeNote",
+        "http://www.w3.org/2004/02/skos/core#historyNote",
+        // dc / dcterms
+        "http://purl.org/dc/elements/1.1/title",
+        "http://purl.org/dc/elements/1.1/description",
+        "http://purl.org/dc/elements/1.1/creator",
+        "http://purl.org/dc/elements/1.1/date",
+        "http://purl.org/dc/terms/title",
+        "http://purl.org/dc/terms/description",
+        "http://purl.org/dc/terms/creator",
+        "http://purl.org/dc/terms/date",
+        "http://purl.org/dc/terms/created",
+        "http://purl.org/dc/terms/modified",
+      ]);
+      const OWL_DECLARATION_OBJECTS = new Set([
+        "http://www.w3.org/2002/07/owl#Class",
+        "http://www.w3.org/2002/07/owl#ObjectProperty",
+        "http://www.w3.org/2002/07/owl#DatatypeProperty",
+        "http://www.w3.org/2002/07/owl#AnnotationProperty",
+        "http://www.w3.org/2002/07/owl#NamedIndividual",
+        "http://www.w3.org/2002/07/owl#Ontology",
+      ]);
+      const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+      const isNonLogical = (q: N3.Quad): boolean => {
+        const pred = q.predicate.value;
+        if (ANNOTATION_PREDICATES.has(pred)) return true;
+        // rdf:type declarations to OWL meta-vocabulary objects are non-logical
+        if (pred === RDF_TYPE_URI && OWL_DECLARATION_OBJECTS.has(q.object.value)) return true;
+        return false;
+      };
+      const allCandidates = allBase.filter((q) => !isNonLogical(q));
 
       const justifications: N3.Quad[][] = [];
 
@@ -474,6 +549,258 @@ class KoncludeReasoner {
       }
 
       return justifications;
+    });
+    this._queue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  /**
+   * BlackBox minimisation: given a candidate quad set that is KNOWN to be
+   * inconsistent, shrink it to ONE minimal inconsistent subset using the
+   * consistency oracle. Same algorithm as the inner closure in
+   * explainInconsistency (binary expand + single-axiom prune). Must run inside a
+   * _queue slot (uses _checkInconsistencyDirect).
+   */
+  private async _findOneInconsistentJustification(candidates: N3.Quad[]): Promise<N3.Quad[] | null> {
+    let working = [...candidates];
+    let changed = true;
+    while (changed && working.length > 1) {
+      changed = false;
+      const mid = Math.floor(working.length / 2);
+      const firstHalf = working.slice(0, mid);
+      const secondHalf = working.slice(mid);
+      if (await this._checkInconsistencyDirect(firstHalf)) {
+        working = firstHalf; changed = true; continue;
+      }
+      if (await this._checkInconsistencyDirect(secondHalf)) {
+        working = secondHalf; changed = true; continue;
+      }
+      break;
+    }
+    let i = 0;
+    while (i < working.length) {
+      if (working.length === 1) break;
+      const without = [...working.slice(0, i), ...working.slice(i + 1)];
+      if (await this._checkInconsistencyDirect(without)) {
+        working = without;
+      } else {
+        i++;
+      }
+    }
+    return working.length > 0 ? working : null;
+  }
+
+  /**
+   * Explain why an axiom (subjectIri predicateIri objectIri) is ENTAILED by the
+   * ontology — a Horridge-style justification for an arbitrary entailed axiom,
+   * not just for inconsistency.
+   *
+   * Path B (entailment-as-unsatisfiability): α is entailed ⇔ O ∪ ¬α is
+   * inconsistent. We add a small PROBE set encoding ¬α to the ontology's
+   * candidate axioms, run the SAME BlackBox justification search used for
+   * inconsistency, then strip the probe triples out of each justification. What
+   * remains is a minimal subset of the ONTOLOGY's own axioms entailing α.
+   *
+   * Supported shapes (object must be an IRI): rdfs:subClassOf and rdf:type.
+   * Other predicates / literal objects fall back to a pure asserted-triple
+   * check: isEntailed reflects asserted presence, justifications stay empty.
+   *
+   * READ-ONLY — operates on a filtered copy of the store's base quads; never
+   * mutates urn:vg:data.
+   */
+  explainEntailment(
+    store: N3.Store,
+    subjectIri: string,
+    predicateIri: string,
+    objectIri: string,
+    objectIsClassLike: boolean,
+    maxJustifications = 1,
+  ): Promise<{
+    isEntailed: boolean | null;
+    justifications: N3.Quad[][];
+    ontologyInconsistent?: boolean;
+    vacuous?: boolean;
+    reason?: string;
+  }> {
+    const result = this._queue.then(async () => {
+      const EXCLUDED_GRAPHS = new Set(["urn:vg:workflows", "urn:vg:inferred", "urn:vg:shapes", "urn:vg:provenance"]);
+      const allBase: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
+        const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
+        return !EXCLUDED_GRAPHS.has(g);
+      });
+
+      // C1 (SOUNDNESS): the reduction α entailed ⇔ (O ∪ ¬α) inconsistent is only
+      // VALID when O itself is consistent. If O is ALREADY inconsistent then
+      // O ∪ ¬α is inconsistent for EVERY α, so the reduction would report
+      // isEntailed:true for arbitrary non-entailed axioms, with a "justification"
+      // that is the pre-existing contradiction — not α's support. Guard exactly
+      // like explainInconsistency: bail out before running the reduction.
+      if (await this._checkInconsistencyDirect(allBase)) {
+        return {
+          isEntailed: null as boolean | null,
+          justifications: [] as N3.Quad[][],
+          ontologyInconsistent: true,
+          reason:
+            "Ontology is already inconsistent; entailment is vacuous (everything is entailed by a contradiction). " +
+            "Run explainDiagnostics and fix consistency first.",
+        };
+      }
+
+      // Asserted-triple short circuit: if the exact axiom is already asserted it
+      // is trivially "entailed" but there is nothing to explain beyond itself
+      // (per spec: empty justifications for asserted-only).
+      const assertedAxiom = allBase.some(
+        (q) =>
+          q.subject.value === subjectIri &&
+          q.predicate.value === predicateIri &&
+          q.object.value === objectIri,
+      );
+
+      // M1: a unique, deterministic probeId per call so the injected blank-node
+      // labels (vg_neg_*/vg_wit_*) can never collide with a real ontology bnode
+      // that happens to carry the constant default label. A monotonic counter is
+      // deterministic (reproducible) and collision-proof — Math.random is not.
+      const probeId = `probe_${++_entailmentProbeCounter}`;
+      const probe = buildEntailmentProbe<N3.Quad>(
+        N3.DataFactory as unknown as Parameters<typeof buildEntailmentProbe>[0],
+        subjectIri,
+        predicateIri,
+        objectIri,
+        objectIsClassLike,
+        probeId,
+      );
+
+      if (probe.kind === "unsupported") {
+        // No reduction available — report asserted presence with no derivation.
+        return { isEntailed: assertedAxiom, justifications: [] as N3.Quad[][], ontologyInconsistent: false };
+      }
+
+      // O ∪ ¬α. The probe blank nodes are fresh, so they cannot collide with
+      // ontology terms; _checkInconsistencyDirect de-skolemises urn:vg:bnode:*
+      // IRIs but leaves real blank nodes (the probe terms) untouched.
+      const withProbe = [...allBase, ...probe.probeQuads];
+      const entailed = await this._checkInconsistencyDirect(withProbe);
+      if (!entailed) {
+        return { isEntailed: false, justifications: [] as N3.Quad[][] };
+      }
+
+      // C2 (SOUNDNESS): vacuous-truth detection. For the subClassOf shape the
+      // probe asserts A ⊑ ¬B plus a witness `_w a A`. If class A is UNSATISFIABLE
+      // in O alone (A ⊑ ⊥), the witness forces O inconsistent REGARDLESS of B, so
+      // A ⊑ (anything) reports entailed. That is logically true (the empty class
+      // is a subclass of everything) but the "derivation" is misleading — the
+      // real cause is A's unsatisfiability, not any path A→B. Flag it explicitly.
+      //
+      // rdf:type shape: the analogous vacuous case is the subject individual being
+      // forced into an unsatisfiable class by O alone — but since we already
+      // verified O is consistent (C1 guard), a concrete individual that is part of
+      // a consistent O cannot be independently unsatisfiable in the same sense
+      // without contradicting that guard. There is therefore no clean reasoner
+      // signal to surface for rdf:type here, so this vacuous detection is
+      // intentionally limited to the subClassOf shape. (Documented limitation.)
+      if (probe.kind === "subClassOf") {
+        const unsat = await this._getUnsatisfiableClassesDirect(allBase);
+        if (unsat.includes(subjectIri)) {
+          return {
+            isEntailed: true as boolean | null,
+            justifications: [] as N3.Quad[][],
+            vacuous: true,
+            reason:
+              `Subject class is unsatisfiable in the ontology, so it is a subclass of ` +
+              `anything (vacuous truth). The entailment does not reflect a genuine ` +
+              `derivation path to the requested superclass; fix the unsatisfiable ` +
+              `class first (see explainDiagnostics / unsatisfiableClasses).`,
+          };
+        }
+      }
+
+      if (maxJustifications === 0) {
+        return { isEntailed: true, justifications: [] as N3.Quad[][] };
+      }
+
+      // Filter the ONTOLOGY candidates the same way explainInconsistency does
+      // (drop pure declarations / annotations that cannot drive entailment), but
+      // ALWAYS keep the probe quads in the search set.
+      const ANNOTATION_PREDICATES = new Set([
+        "http://www.w3.org/2000/01/rdf-schema#label",
+        "http://www.w3.org/2000/01/rdf-schema#comment",
+        "http://www.w3.org/2000/01/rdf-schema#seeAlso",
+        "http://www.w3.org/2000/01/rdf-schema#isDefinedBy",
+      ]);
+      const OWL_DECLARATION_OBJECTS = new Set([
+        "http://www.w3.org/2002/07/owl#Class",
+        "http://www.w3.org/2002/07/owl#ObjectProperty",
+        "http://www.w3.org/2002/07/owl#DatatypeProperty",
+        "http://www.w3.org/2002/07/owl#AnnotationProperty",
+        "http://www.w3.org/2002/07/owl#NamedIndividual",
+        "http://www.w3.org/2002/07/owl#Ontology",
+      ]);
+      const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+      const isNonLogical = (q: N3.Quad): boolean => {
+        const pred = q.predicate.value;
+        if (ANNOTATION_PREDICATES.has(pred)) return true;
+        if (pred === RDF_TYPE_URI && OWL_DECLARATION_OBJECTS.has(q.object.value)) return true;
+        return false;
+      };
+      const ontologyCandidates = allBase.filter((q) => !isNonLogical(q));
+      const allCandidates = [...ontologyCandidates, ...probe.probeQuads];
+
+      const stripProbe = (j: N3.Quad[]): N3.Quad[] =>
+        j.filter((q) => !probe.probeKeys.has(`${q.subject.value}\0${q.predicate.value}\0${q.object.value}`));
+
+      const justifications: N3.Quad[][] = [];
+
+      const j1Raw = await this._findOneInconsistentJustification(allCandidates);
+      if (!j1Raw || j1Raw.length === 0) {
+        // Entailed but no minimal subset found (should not happen) — report
+        // entailment without a derivation rather than a false negative.
+        return { isEntailed: true, justifications: [] as N3.Quad[][] };
+      }
+      justifications.push(stripProbe(j1Raw));
+
+      if (maxJustifications > 1) {
+        // Hitting-set enumeration over the ONTOLOGY axioms only; probe quads are
+        // never excluded (they encode the fixed query ¬α).
+        const probeSet = probe.probeQuads;
+        const hsQueue: Array<{ excluded: Set<string>; justification: N3.Quad[] }> = [
+          { excluded: new Set(), justification: j1Raw },
+        ];
+        const exploredExclusions = new Set<string>();
+        const keyOf = (q: N3.Quad) => `${q.subject.value}\0${q.predicate.value}\0${q.object.value}`;
+        const jKeyOf = (j: N3.Quad[]) => j.map(keyOf).sort().join("|");
+        while (hsQueue.length > 0 && justifications.length < maxJustifications) {
+          const { excluded, justification: currentJ } = hsQueue.shift()!;
+          const excludedKey = [...excluded].sort().join("|");
+          if (exploredExclusions.has(excludedKey)) continue;
+          exploredExclusions.add(excludedKey);
+          for (const axiomInJ of currentJ) {
+            // Never exclude probe axioms — only the ontology's own axioms.
+            if (probe.probeKeys.has(keyOf(axiomInJ))) continue;
+            const newExcluded = new Set(excluded);
+            newExcluded.add(keyOf(axiomInJ));
+            const newExcludedKey = [...newExcluded].sort().join("|");
+            if (exploredExclusions.has(newExcludedKey)) continue;
+            const reduced = [
+              ...ontologyCandidates.filter((q) => !newExcluded.has(keyOf(q))),
+              ...probeSet,
+            ];
+            if (!(await this._checkInconsistencyDirect(reduced))) continue;
+            const jNew = await this._findOneInconsistentJustification(reduced);
+            if (!jNew || jNew.length === 0) continue;
+            const jKey = jKeyOf(jNew);
+            const already = justifications.some(
+              (j) => jKeyOf([...j, ...probeSet.filter((p) => jNew.some((x) => keyOf(x) === keyOf(p)))]) === jKey,
+            ) || justifications.some((j) => jKeyOf(j) === jKeyOf(stripProbe(jNew)));
+            if (!already) {
+              justifications.push(stripProbe(jNew));
+              if (justifications.length >= maxJustifications) break;
+              hsQueue.push({ excluded: newExcluded, justification: jNew });
+            }
+          }
+        }
+      }
+
+      return { isEntailed: true, justifications };
     });
     this._queue = result.then(() => {}, () => {});
     return result;
@@ -609,6 +936,130 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
   ];
   let workerChangeCounter = 0;
 
+  // ── OPFS persistence / crash recovery ─────────────────────────────────────
+  //
+  // Client-side, zero-backend durability: the durable graphs are debounced-
+  // snapshotted to an OPFS file and restored on store init. The OPFS backend is
+  // null (→ everything no-ops) when OPFS is unavailable, e.g. jsdom/Node tests,
+  // so the existing suite is completely unaffected. The enable preference comes
+  // from the main thread (localStorage) via the setPersistence command; default
+  // is enabled, but the availability guard means tests stay no-op regardless.
+  const opfsPersistence = new OpfsPersistence({ backend: createOpfsBackend(), enabled: true });
+  // Suppresses snapshot scheduling while a restore is loading quads into the
+  // store (those addQuad calls funnel through emitChange and would otherwise
+  // schedule a redundant snapshot of what we just read back).
+  let restoreInProgress = false;
+
+  function schedulePersistenceSnapshot() {
+    if (restoreInProgress) return;
+    try {
+      if (sharedStore) opfsPersistence.scheduleSnapshot(sharedStore);
+    } catch (err) {
+      debugLog("[rdfManager.worker] schedulePersistenceSnapshot skipped", err);
+    }
+  }
+
+  // ── Incremental per-named-graph triple counters ───────────────────────────
+  //
+  // getGraphCounts is called frequently (every reasoning report refresh, UI
+  // panel update). Full-scanning the store with getQuads(null,null,null,null)
+  // on every call is O(store size). Instead we maintain a Map<graphIri,count>
+  // that is kept in lock-step with the shared store by wrapping its mutation
+  // methods (addQuad / removeQuad / removeQuads) at store-creation time. Because
+  // EVERY mutation of the shared store funnels through those methods, this single
+  // wrapping point covers all mutation sites — import, syncBatch, clearInferred,
+  // namespace rename, graph purge, the Konclude reasoner's inferred-quad writes,
+  // etc. — without touching any of those (protected) regions.
+  //
+  // The map key matches collectGraphCountsFromStore's bucketing exactly:
+  // a non-empty graph IRI uses that IRI; the default graph maps to
+  // "urn:vg:default".
+  let graphCounts: Map<string, number> = new Map();
+  // True once the counters are known to mirror the live store. Any store reset
+  // re-installs the wrappers and recomputes, flipping this back to true. A false
+  // value forces a one-time full recompute in getGraphCounts (the fallback).
+  let graphCountsReady = false;
+
+  const DEFAULT_GRAPH_KEY = "urn:vg:default";
+
+  function graphKeyOf(graphTerm: any): string {
+    const v = graphTerm?.value;
+    return typeof v === "string" && v.length > 0 ? v : DEFAULT_GRAPH_KEY;
+  }
+
+  function incGraphCount(graphTerm: any, delta: number): void {
+    const key = graphKeyOf(graphTerm);
+    const next = (graphCounts.get(key) || 0) + delta;
+    if (next > 0) graphCounts.set(key, next);
+    else graphCounts.delete(key);
+  }
+
+  /** Recompute the counter map from scratch by scanning the store once. */
+  function recomputeGraphCounts(store: any): void {
+    graphCounts = new Map();
+    try {
+      const quads = store.getQuads(null, null, null, null) || [];
+      for (const q of quads) incGraphCount(q?.graph, 1);
+    } catch (err) {
+      debugLog("[VG_REASONING_WORKER] recomputeGraphCounts failed", err);
+    }
+    graphCountsReady = true;
+  }
+
+  /**
+   * Wrap addQuad / removeQuad / removeQuads on a store so that every mutation
+   * adjusts the incremental graph counters. N3 Store.addQuad/removeQuad return a
+   * boolean indicating whether the store actually changed (dedup-aware), so the
+   * counter delta is exact. removeQuads returns no delta, so we route it through
+   * the wrapped removeQuad to stay precise.
+   */
+  function installGraphCountTracking(store: any): void {
+    if (!store || store.__vgCountTracked) return;
+    const origAddQuad = store.addQuad.bind(store);
+    const origRemoveQuad = store.removeQuad.bind(store);
+    const origAddQuads = typeof store.addQuads === "function" ? store.addQuads.bind(store) : null;
+
+    store.addQuad = (...args: any[]) => {
+      const changed = origAddQuad(...args);
+      if (changed) {
+        const q = args[0];
+        // addQuad(quad) or addQuad(s, p, o, g)
+        const graphTerm = args.length >= 4 ? args[3] : q?.graph;
+        incGraphCount(graphTerm, 1);
+      }
+      return changed;
+    };
+
+    store.removeQuad = (...args: any[]) => {
+      const changed = origRemoveQuad(...args);
+      if (changed) {
+        const q = args[0];
+        const graphTerm = args.length >= 4 ? args[3] : q?.graph;
+        incGraphCount(graphTerm, -1);
+      }
+      return changed;
+    };
+
+    // removeQuads(quads) — iterate through wrapped removeQuad for exact deltas.
+    store.removeQuads = (quads: any) => {
+      const list = Array.isArray(quads) ? quads : Array.from(quads || []);
+      for (const q of list) store.removeQuad(q);
+    };
+
+    if (origAddQuads) {
+      store.addQuads = (quads: any) => {
+        const list = Array.isArray(quads) ? quads : Array.from(quads || []);
+        for (const q of list) store.addQuad(q);
+      };
+    }
+
+    Object.defineProperty(store, "__vgCountTracked", {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+
   /**
    * Seed the store with OWL/RDFS/RDF meta-ontology domain/range axioms into the
    * ontology named graph (`urn:vg:ontologies`).  This is the same graph that
@@ -677,19 +1128,73 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     });
   }
 
-  function resetSharedStore() {
+  function resetSharedStore(options?: { restore?: boolean }) {
     const { StoreCls, DataFactory } = resolveN3();
     if (!StoreCls) throw new Error("n3-store-unavailable");
     sharedStore = new (StoreCls as any)();
     workerChangeCounter = 0;
+    // Reset and re-install incremental graph counters BEFORE seeding so the
+    // seed axioms (loadSchemaOntology) are counted through the wrapped methods.
+    graphCounts = new Map();
+    graphCountsReady = true;
+    installGraphCountTracking(sharedStore);
     // Non-negotiable: always seed the store with OWL/RDFS/RDF meta-ontology axioms
     if (DataFactory) loadSchemaOntology(sharedStore, DataFactory);
+    // Crash recovery: only on the initial lazy creation of the store (NOT on an
+    // explicit `clear`, which intentionally wipes everything). Restored quads
+    // merge over the seeds — the N3 store dedups, so re-seeded ontology axioms
+    // are not double-counted. No-ops when OPFS is unavailable (jsdom/Node/tests).
+    if (options?.restore && opfsPersistence.isActive()) {
+      void restorePersistedStore();
+    }
     return sharedStore;
+  }
+
+  /**
+   * Read the OPFS snapshot and merge it into the freshly-seeded store, then emit
+   * the restored subjects so the canvas reflects the recovered graph. Guarded by
+   * restoreInProgress so the restore's addQuad calls do not schedule a redundant
+   * snapshot of what we just read back. Never throws.
+   */
+  async function restorePersistedStore(): Promise<void> {
+    const store = sharedStore;
+    if (!store) return;
+    restoreInProgress = true;
+    try {
+      const loaded = await opfsPersistence.restore(store);
+      if (loaded > 0) {
+        const { DataFactory } = resolveN3();
+        debugLog("[rdfManager.worker] restored quads from OPFS", loaded);
+        emitChange({ reason: "restorePersisted", added: loaded });
+        if (DataFactory) {
+          const subjects = new Set<string>();
+          for (const g of ["urn:vg:data", "urn:vg:ontologies", "urn:vg:shapes", "urn:vg:workflows"]) {
+            const gTerm = DataFactory.namedNode(g);
+            for (const q of store.getQuads(null, null, null, gTerm) || []) {
+              subjects.add(subjectTermToString(q.subject));
+            }
+          }
+          const emission = prepareSubjectEmissionFromSet(subjects, store, DataFactory);
+          if (emission.subjects.length > 0) {
+            emitSubjects(
+              emission.subjects,
+              emission.quadsBySubject,
+              emission.snapshot,
+              { reason: "restorePersisted" },
+            );
+          }
+        }
+      }
+    } catch (err) {
+      debugLog("[rdfManager.worker] restorePersistedStore failed", err);
+    } finally {
+      restoreInProgress = false;
+    }
   }
 
   function getSharedStore() {
     if (sharedStore) return sharedStore;
-    return resetSharedStore();
+    return resetSharedStore({ restore: true });
   }
 
   function handleInbound(incoming: unknown) {
@@ -751,6 +1256,33 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       });
     }
   }
+
+  // Streaming liveness signal during a large importSerialized. Uses the same
+  // {type:"event"} envelope that emitChange/emitSubjects use, so clients can
+  // subscribe via worker.on("importProgress", cb).
+  function emitImportProgress(
+    id: string,
+    loaded: number,
+    graphName?: string,
+    total?: number,
+  ) {
+    try {
+      post({
+        type: "event",
+        event: "importProgress",
+        payload: {
+          id,
+          loaded,
+          ...(typeof total === "number" ? { total } : {}),
+          ...(graphName ? { graphName } : {}),
+        },
+      });
+    } catch (err) {
+      debugLog("[rdfManager.worker] importProgress emission skipped", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
   let lastChangeMeta: Record<string, unknown> | null = null;
 
   function emitChange(meta?: Record<string, unknown> | null) {
@@ -762,6 +1294,9 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         event: "change",
         payload: { changeCount: workerChangeCounter, meta: meta || null },
       });
+      // Every store mutation funnels through emitChange, so this is the single
+      // debounce trigger for OPFS persistence. No-ops when OPFS is unavailable.
+      schedulePersistenceSnapshot();
     } catch (err) {
       console.error("[rdfManager.worker] emitChange failed", err);
     }
@@ -1293,6 +1828,21 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
   }
 
   function collectGraphCountsFromStore(store: any): Record<string, number> {
+    // Fast path: for the live shared store, serve from the maintained counters
+    // (O(graphs)) instead of scanning every quad. The counters are kept in
+    // lock-step via the wrapped mutation methods installed in resetSharedStore.
+    // Fallback: if the counters were never initialised for this store (e.g. a
+    // store created before tracking was installed), recompute once and cache.
+    if (store && store === sharedStore) {
+      if (!graphCountsReady || !store.__vgCountTracked) {
+        recomputeGraphCounts(store);
+      }
+      const out: Record<string, number> = {};
+      for (const [k, v] of graphCounts) out[k] = v;
+      return out;
+    }
+
+    // Transient / non-shared store (e.g. reasoning working copies): full scan.
     const counts: Record<string, number> = {};
     try {
       const quads = store.getQuads(null, null, null, null) || [];
@@ -1306,6 +1856,282 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       debugLog("[VG_REASONING_WORKER] collectGraphCountsFromStore failed", err);
     }
     return counts;
+  }
+
+  // ── searchTerms (grounding / retrieval) ───────────────────────────────────
+  //
+  // Pure store query: find existing ontology terms by label or IRI local-name
+  // across ALL graphs (especially urn:vg:ontologies) so agents reuse existing
+  // IRIs instead of minting new ones. No reasoner involved.
+
+  type SearchKind = "class" | "objectProperty" | "datatypeProperty" | "property" | "individual";
+
+  type SearchTermResult = {
+    iri: string;
+    label: string;
+    kind: SearchKind;
+    prefix?: string;
+    score: number;
+  };
+
+  const SKOS_PREF_LABEL = "http://www.w3.org/2004/02/skos/core#prefLabel";
+  const SKOS_ALT_LABEL = "http://www.w3.org/2004/02/skos/core#altLabel";
+  // rdf:type object IRI → the search kind it implies.
+  const TYPE_IRI_TO_KIND: Record<string, SearchKind> = {
+    "http://www.w3.org/2002/07/owl#Class": "class",
+    "http://www.w3.org/2000/01/rdf-schema#Class": "class",
+    "http://www.w3.org/2002/07/owl#ObjectProperty": "objectProperty",
+    "http://www.w3.org/2002/07/owl#DatatypeProperty": "datatypeProperty",
+    "http://www.w3.org/2002/07/owl#AnnotationProperty": "property",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property": "property",
+    "http://www.w3.org/2002/07/owl#NamedIndividual": "individual",
+  };
+  // A requested kind matches a candidate's kind set. "property" is an umbrella
+  // that also accepts object/datatype/annotation properties.
+  function kindMatchesRequest(requested: Set<SearchKind>, candidateKinds: Set<SearchKind>): boolean {
+    for (const k of candidateKinds) {
+      if (requested.has(k)) return true;
+      if (requested.has("property") && (k === "objectProperty" || k === "datatypeProperty")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function localNameOf(iri: string): string {
+    const hash = iri.lastIndexOf("#");
+    if (hash >= 0) return iri.slice(hash + 1);
+    const slash = iri.lastIndexOf("/");
+    if (slash >= 0) return iri.slice(slash + 1);
+    const colon = iri.lastIndexOf(":");
+    if (colon >= 0) return iri.slice(colon + 1);
+    return iri;
+  }
+
+  // Resolve the prefix for an IRI: prefer the worker's live namespace map, then
+  // fall back to the well-known registry, using longest-namespace-wins so more
+  // specific namespaces (e.g. pmdco) beat broad ones.
+  function resolvePrefixForIri(iri: string): string | undefined {
+    let best: { prefix: string; len: number } | undefined;
+    const consider = (prefix: string, ns: string) => {
+      if (!ns || !prefix) return;
+      if (!iri.startsWith(ns)) return;
+      if (!best || ns.length > best.len) best = { prefix, len: ns.length };
+    };
+    for (const [prefix, ns] of Object.entries(workerNamespaces)) consider(prefix, String(ns));
+    const wk = WELL_KNOWN?.prefixes ?? {};
+    for (const [prefix, ns] of Object.entries(wk)) consider(prefix, String(ns));
+    return best?.prefix;
+  }
+
+  /**
+   * Ranking (higher = better match):
+   *   100  exact label match
+   *    80  label startsWith query
+   *    60  label substring contains query
+   *    50  exact local-name match
+   *    40  local-name startsWith query
+   *    30  local-name substring contains query
+   * A small +5 bonus is added when the term has any label at all (prefer
+   * documented terms). The best (highest) score across all of a term's labels
+   * and its local name is kept.
+   */
+  function scoreMatch(query: string, labels: string[], localName: string): number {
+    const q = query.trim().toLowerCase();
+    if (!q) return 0;
+    let best = 0;
+    for (const raw of labels) {
+      const label = String(raw || "").toLowerCase();
+      if (!label) continue;
+      if (label === q) best = Math.max(best, 100);
+      else if (label.startsWith(q)) best = Math.max(best, 80);
+      else if (label.includes(q)) best = Math.max(best, 60);
+    }
+    const ln = localName.toLowerCase();
+    if (ln === q) best = Math.max(best, 50);
+    else if (ln.startsWith(q)) best = Math.max(best, 40);
+    else if (ln.includes(q)) best = Math.max(best, 30);
+    if (best > 0 && labels.some((l) => String(l || "").trim().length > 0)) best += 5;
+    return best;
+  }
+
+  /**
+   * extractModuleFromStore — R2 locality-based module extraction over the store.
+   *
+   * Gathers the asserted/ontology axiom triples from the SAME base graphs the
+   * Konclude reasoning path consumes (urn:vg:data + urn:vg:ontologies; the other
+   * urn:vg:* graphs — inferred, shapes, workflows, provenance — are excluded so
+   * the module is over the TBox/ABox the reasoner sees), converts each N3 quad to
+   * the pure extractor's { subject, predicate, object, objectIsLiteral } shape,
+   * and runs the ⊥-module ("bot") or iterated ⊤⊥* ("star") fixpoint for the given
+   * signature Σ. The returned module preserves ALL entailments over Σ (the
+   * conformance proof lives in moduleConformance.integration.test.ts).
+   *
+   * READ-ONLY: only reads quads; never mutates the store.
+   */
+  function extractModuleFromStore(
+    store: any,
+    signature: string[],
+    moduleType: "bot" | "star",
+    includeOntologies: boolean,
+  ): {
+    moduleTriples: { subject: string; predicate: string; object: string }[];
+    moduleSize: number;
+    fullSize: number;
+    signature: string[];
+  } {
+    // Same graph selection as the reasoning path: keep urn:vg:data and (optionally)
+    // urn:vg:ontologies; drop inferred/shapes/workflows/provenance so the module
+    // is computed over exactly the asserted TBox/ABox + loaded ontologies.
+    const MODULE_EXCLUDED_GRAPHS = new Set([
+      "urn:vg:inferred",
+      "urn:vg:shapes",
+      "urn:vg:workflows",
+      "urn:vg:provenance",
+    ]);
+    const allQuads: Quad[] = store.getQuads(null, null, null, null) || [];
+    const axioms: LocalityTriple[] = [];
+    // De-skolemize at the boundary: on import the worker skolemizes blank nodes to
+    // urn:vg:bnode:{hash} named IRIs (skolemizeQuads). The pure locality extractor's
+    // isBlankNode (localityModule.ts) only recognizes blank-node FORMS (`_:`, `bN`,
+    // `n3-`), NOT the skolem IRI — so an anonymous OWL class expression (restriction,
+    // list cell, intersection, …) would be misread as an ordinary NAMED class and its
+    // body dropped from the module → lost entailments (UNSOUND). We mirror EXACTLY the
+    // reasoning path's de-skolemization (rdfManager.runtime.ts reason()/_check…Direct):
+    // strip the urn:vg:bnode: prefix off subject/object. The reasoning path rebuilds a
+    // real N3 blank node (value === bare hash); here we emit the `_:`-prefixed form so
+    // isBlankNode's `startsWith("_:")` branch accepts it (a bare hex hash like
+    // "5f3a2b1c" would NOT match the `^b\d+$` branch). Predicates are always NamedNodes.
+    const BNODE_PREFIX = "urn:vg:bnode:";
+    const deskolemizeTerm = (value: string, termType: string): string =>
+      termType === "NamedNode" && value.startsWith(BNODE_PREFIX)
+        ? `_:${value.slice(BNODE_PREFIX.length)}`
+        : value;
+    for (const q of allQuads) {
+      const g = q.graph?.termType === "DefaultGraph" ? "" : q.graph?.value ?? "";
+      if (MODULE_EXCLUDED_GRAPHS.has(g)) continue;
+      if (!includeOntologies && g === "urn:vg:ontologies") continue;
+      axioms.push({
+        subject: deskolemizeTerm(q.subject.value, q.subject.termType),
+        predicate: q.predicate.value,
+        object: deskolemizeTerm(q.object.value, q.object.termType),
+        objectIsLiteral: q.object.termType === "Literal",
+      });
+    }
+
+    // includeDeclarationsForSignature: re-attach the owl:Class / owl:*Property
+    // declarations for every symbol in the module so the result is a SELF-
+    // CONTAINED, classifiable ontology. Declarations are always ⊥-local (they
+    // entail nothing about Σ) so this does not change the logical module, but a
+    // reasoner needs the explicit typing to classify the module in isolation —
+    // exactly what makes the conformance guarantee usable for modular reasoning.
+    const moduleTriples =
+      moduleType === "star"
+        ? extractStarModule(axioms, signature, { includeDeclarationsForSignature: true })
+        : extractBotModule(axioms, signature, { includeDeclarationsForSignature: true });
+
+    return {
+      moduleTriples: moduleTriples.map((t) => ({
+        subject: t.subject,
+        predicate: t.predicate,
+        object: t.object,
+      })),
+      moduleSize: moduleTriples.length,
+      fullSize: axioms.length,
+      signature: [...signature],
+    };
+  }
+
+  function searchTermsInStore(
+    store: any,
+    payload: RDFWorkerCommandPayloads["searchTerms"],
+  ): { results: SearchTermResult[] } {
+    const query = String(payload?.query ?? "").trim();
+    const limit =
+      typeof payload?.limit === "number" && payload.limit > 0 ? Math.floor(payload.limit) : 25;
+    const requestedKinds = new Set<SearchKind>(
+      payload?.kinds && payload.kinds.length > 0
+        ? payload.kinds
+        : (["class", "objectProperty", "datatypeProperty", "property"] as SearchKind[]),
+    );
+    if (!query) return { results: [] };
+
+    // Accumulate per-subject metadata across ALL graphs in one store pass.
+    const meta = new Map<string, { kinds: Set<SearchKind>; labels: string[] }>();
+    const ensure = (iri: string) => {
+      let entry = meta.get(iri);
+      if (!entry) {
+        entry = { kinds: new Set<SearchKind>(), labels: [] };
+        meta.set(iri, entry);
+      }
+      return entry;
+    };
+
+    const allQuads = store.getQuads(null, null, null, null) || [];
+    for (const q of allQuads) {
+      const subj = q?.subject;
+      if (!subj || subj.termType !== "NamedNode") continue; // skip blank nodes / literals
+      const subjIri = String(subj.value || "");
+      if (!subjIri) continue;
+      const pred = String(q?.predicate?.value || "");
+      const obj = q?.object;
+
+      if (pred === RDF_TYPE_IRI && obj?.termType === "NamedNode") {
+        const kind = TYPE_IRI_TO_KIND[String(obj.value)];
+        if (kind) ensure(subjIri).kinds.add(kind);
+        continue;
+      }
+      if (
+        (pred === RDFS_LABEL_IRI || pred === SKOS_PREF_LABEL || pred === SKOS_ALT_LABEL) &&
+        obj?.termType === "Literal"
+      ) {
+        const text = String(obj.value || "").trim();
+        if (text) ensure(subjIri).labels.push(text);
+      }
+    }
+
+    const results: SearchTermResult[] = [];
+    for (const [iri, entry] of meta) {
+      // Only terms whose declared kind set intersects the requested kinds.
+      if (entry.kinds.size === 0) continue;
+      if (!kindMatchesRequest(requestedKinds, entry.kinds)) continue;
+
+      const localName = localNameOf(iri);
+      const score = scoreMatch(query, entry.labels, localName);
+      if (score <= 0) continue;
+
+      // Pick the representative kind: prefer one the caller actually asked for.
+      let kind: SearchKind | undefined;
+      for (const k of entry.kinds) {
+        if (
+          requestedKinds.has(k) ||
+          (requestedKinds.has("property") && (k === "objectProperty" || k === "datatypeProperty"))
+        ) {
+          kind = k;
+          break;
+        }
+      }
+      if (!kind) kind = entry.kinds.values().next().value as SearchKind;
+
+      results.push({
+        iri,
+        label: entry.labels[0] ?? "",
+        kind,
+        prefix: resolvePrefixForIri(iri),
+        score,
+      });
+    }
+
+    results.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      // Stable secondary ordering: labelled before unlabelled, then by IRI.
+      const al = a.label ? 0 : 1;
+      const bl = b.label ? 0 : 1;
+      if (al !== bl) return al - bl;
+      return a.iri.localeCompare(b.iri);
+    });
+
+    return { results: results.slice(0, limit) };
   }
 
   function resolveRdfParser(pkg: any) {
@@ -1333,19 +2159,48 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     }
   }
 
+  /**
+   * Resolve an export format string into the writer format + media type, and crucially
+   * whether the serialisation can REPRESENT named graphs.
+   *
+   * `dropGraph:true`  → single-graph formats (Turtle / JSON-LD / RDF-XML). These cannot
+   *                     encode quads, so every quad must be remapped into the default
+   *                     graph before writing. The multi-graph partition is flattened.
+   * `dropGraph:false` → dataset formats (N-Quads / TriG). N3.js' Writer emits the graph
+   *                     term for each quad, so the urn:vg:* partition round-trips intact.
+   *
+   * For dataset formats we also flag `dataset:true`, which the export handler uses to
+   * decide it should collect quads from ALL urn:vg:* graphs rather than a single graph.
+   */
   function normalizeExportFormat(format?: string) {
     const raw = typeof format === "string" ? format.toLowerCase().trim() : "";
     if (raw === "application/ld+json" || raw === "ld+json" || raw === "jsonld" || raw === "json-ld") {
-      return { writerFormat: "application/ld+json", mediaType: "application/ld+json", dropGraph: true };
+      return { writerFormat: "application/ld+json", mediaType: "application/ld+json", dropGraph: true, dataset: false };
     }
     if (raw === "application/rdf+xml" || raw === "rdfxml" || raw === "rdf+xml" || raw === "rdf-xml") {
-      return { writerFormat: "application/rdf+xml", mediaType: "application/rdf+xml", dropGraph: true };
+      return { writerFormat: "application/rdf+xml", mediaType: "application/rdf+xml", dropGraph: true, dataset: false };
     }
     if (raw === "application/n-quads" || raw === "nquads" || raw === "n-quads") {
-      return { writerFormat: "application/n-quads", mediaType: "application/n-quads", dropGraph: false };
+      return { writerFormat: "application/n-quads", mediaType: "application/n-quads", dropGraph: false, dataset: true };
     }
-    return { writerFormat: "text/turtle", mediaType: "text/turtle", dropGraph: true };
+    if (raw === "application/trig" || raw === "trig") {
+      return { writerFormat: "application/trig", mediaType: "application/trig", dropGraph: false, dataset: true };
+    }
+    return { writerFormat: "text/turtle", mediaType: "text/turtle", dropGraph: true, dataset: false };
   }
+
+  /**
+   * The complete set of named graphs that make up a VocabGraph "dataset". Dataset-faithful
+   * exports (N-Quads / TriG) collect quads from every one of these so the five-graph
+   * partition round-trips. Order is deterministic for stable output.
+   */
+  const VG_DATASET_GRAPHS = [
+    "urn:vg:data",
+    "urn:vg:inferred",
+    "urn:vg:shapes",
+    "urn:vg:ontologies",
+    "urn:vg:workflows",
+  ] as const;
 
 
 
@@ -1412,6 +2267,19 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         case "setDebug":
           workerDebugEnabled = !!(payload && typeof payload === "object" && (payload as { enabled?: unknown }).enabled);
           result = { enabled: workerDebugEnabled };
+          break;
+        case "setPersistence": {
+          const enabled = !!(payload && typeof payload === "object" && (payload as { enabled?: unknown }).enabled);
+          opfsPersistence.setEnabled(enabled);
+          // Turning persistence ON for an already-populated store: capture the
+          // current state immediately so a reload right after enabling recovers.
+          if (enabled && sharedStore) schedulePersistenceSnapshot();
+          result = { enabled: opfsPersistence.isEnabled(), active: opfsPersistence.isActive() };
+          break;
+        }
+        case "clearPersistedStore":
+          await opfsPersistence.clear();
+          result = true;
           break;
         case "syncLoad": {
           const { DataFactory } = resolveN3();
@@ -1699,31 +2567,48 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             });
           });
 
-          // Skolemize the full parsed batch, then write to store
-          for (const normalized of skolemizeQuads(parsedBuffer, DataFactory)) {
-            try {
-              const exists =
-                typeof store.countQuads === "function"
-                  ? store.countQuads(
-                      normalized.subject,
-                      normalized.predicate,
-                      normalized.object,
-                      normalized.graph,
-                    ) > 0
-                  : (store.getQuads(
-                      normalized.subject,
-                      normalized.predicate,
-                      normalized.object,
-                      normalized.graph,
-                    ) || []).length > 0;
-              if (exists) continue;
-              store.addQuad(normalized);
-              addedCount += 1;
-              touchedSubjects.add(subjectTermToString(normalized.subject));
-              addedSerialized.push(serializeQuad(normalized));
-            } catch (err) {
-              debugLog("[rdfManager.worker] importSerialized.data failed", err);
+          // Skolemize + insert in CHUNKS rather than buffering a second fully
+          // materialised copy and then probing the store once per quad.
+          //
+          // Two perf wins vs. the previous implementation:
+          //  1. No per-quad existence pre-check (the old store.countQuads /
+          //     store.getQuads probe was O(1) amortised but allocated and ran
+          //     for EVERY quad). N3 Store.addQuad already dedupes and returns a
+          //     boolean telling us whether the store actually changed — so we
+          //     count newly-added quads exactly without any pre-probe.
+          //  2. Progress is emitted after each chunk so the client sees liveness
+          //     instead of one silent freeze until the whole file is loaded.
+          //
+          // skolemizeQuads hashes each blank-node label independently, so
+          // skolemizing per-chunk yields identical urn:vg:bnode:* IRIs as
+          // skolemizing the whole batch — chunking is safe for content hashing.
+          const IMPORT_CHUNK_SIZE = 5000;
+          const total = parsedBuffer.length;
+          let processed = 0;
+          for (let start = 0; start < total; start += IMPORT_CHUNK_SIZE) {
+            const slice = parsedBuffer.slice(start, start + IMPORT_CHUNK_SIZE);
+            for (const normalized of skolemizeQuads(slice, DataFactory)) {
+              try {
+                const changed = store.addQuad(normalized);
+                // N3 returns true only when the quad was not already present.
+                // Use the same truthiness the counter wrapper uses so addedCount
+                // and the incremental graph counter never diverge.
+                if (changed) {
+                  addedCount += 1;
+                  touchedSubjects.add(subjectTermToString(normalized.subject));
+                  addedSerialized.push(serializeQuad(normalized));
+                }
+              } catch (err) {
+                debugLog("[rdfManager.worker] importSerialized.data failed", err);
+              }
             }
+            processed += slice.length;
+            // Release the slice's source references eagerly to keep peak memory
+            // closer to a single materialisation rather than buffer + store copy.
+            for (let i = start; i < start + slice.length && i < total; i++) {
+              (parsedBuffer as any)[i] = undefined;
+            }
+            emitImportProgress(msg.id, processed, graphName, total);
           }
 
           if (
@@ -1875,47 +2760,78 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             payload && typeof payload === "object" ? (payload as ExportGraphPayload).format : undefined,
           );
 
-          // Collect quads from the requested graph PLUS urn:vg:inferred.
-          // For inferred quads, apply "data-grounded" filtering: only keep inferred
-          // triples whose subject is a NamedNode present in the data graph.
-          // This eliminates OWL-vocabulary self-inferences, literal-as-subject noise,
-          // and reflexive owl:sameAs trivia that the reasoner produces as side-effects.
           const OWL_SAME_AS = "http://www.w3.org/2002/07/owl#sameAs";
-          const graphTerm = createGraphTerm(graphName, DataFactory);
-          const inferredTerm = DataFactory.namedNode("urn:vg:inferred");
-          const primaryQuads: Quad[] = store.getQuads(null, null, null, graphTerm) || [];
 
-          // Build the set of data-graph subjects for inferred-triple filtering
-          const dataSubjects = new Set<string>();
-          for (const q of primaryQuads) {
-            if (q.subject.termType === "NamedNode") dataSubjects.add(q.subject.value);
-          }
+          // ----------------------------------------------------------------------------
+          // Quad collection. Two strategies:
+          //
+          //  (A) DATASET-FAITHFUL (N-Quads / TriG, formatInfo.dataset === true):
+          //      Collect quads from EVERY urn:vg:* graph and keep their graph terms intact
+          //      so the five-graph partition (data / inferred / shapes / ontologies /
+          //      workflows) round-trips. No data-grounded filtering or graph-flattening is
+          //      applied — a dataset export is a faithful snapshot of the store.
+          //
+          //  (B) SINGLE-GRAPH (Turtle / JSON-LD / RDF-XML, the historical behaviour):
+          //      Collect quads from the requested graph PLUS urn:vg:inferred, apply
+          //      "data-grounded" filtering to the inferred quads (only keep inferred triples
+          //      whose subject is a NamedNode present in the data graph — this strips
+          //      OWL-vocabulary self-inferences, literal-as-subject noise, and reflexive
+          //      owl:sameAs trivia), then flatten everything into the default graph below.
+          // ----------------------------------------------------------------------------
+          let mergedQuads: Quad[];
 
-          const rawInferred: Quad[] =
-            graphName !== "urn:vg:inferred"
-              ? (store.getQuads(null, null, null, inferredTerm) || [])
-              : [];
+          if (formatInfo.dataset) {
+            // (A) Faithful dataset export across all urn:vg:* graphs.
+            const seenKeys = new Set<string>();
+            mergedQuads = [];
+            for (const g of VG_DATASET_GRAPHS) {
+              const gTerm = DataFactory.namedNode(g);
+              const rawGraphQuads: Quad[] = store.getQuads(null, null, null, gTerm) || [];
+              // Skolemise blank nodes consistently with the single-graph path so output is
+              // stable and re-parseable; they are de-skolemised back to bnodes below.
+              for (const q of skolemizeQuads(rawGraphQuads, DataFactory)) {
+                const k = quadKeyFromTerms(q);
+                if (!seenKeys.has(k)) { seenKeys.add(k); mergedQuads.push(q); }
+              }
+            }
+          } else {
+            // (B) Single-graph export: requested graph + data-grounded inferred.
+            const graphTerm = createGraphTerm(graphName, DataFactory);
+            const inferredTerm = DataFactory.namedNode("urn:vg:inferred");
+            const primaryQuads: Quad[] = store.getQuads(null, null, null, graphTerm) || [];
 
-          const skolemizedInferred = skolemizeQuads(rawInferred, DataFactory);
-          const filteredInferred = skolemizedInferred.filter((q) => {
-            // Must be grounded in data (subject is a NamedNode known from the data graph)
-            if (q.subject.termType !== "NamedNode") return false;
-            if (!dataSubjects.has(q.subject.value)) return false;
-            // Drop reflexive owl:sameAs (X sameAs X)
-            if (
-              q.predicate.value === OWL_SAME_AS &&
-              q.object.termType === "NamedNode" &&
-              q.object.value === q.subject.value
-            ) return false;
-            return true;
-          });
+            // Build the set of data-graph subjects for inferred-triple filtering
+            const dataSubjects = new Set<string>();
+            for (const q of primaryQuads) {
+              if (q.subject.termType === "NamedNode") dataSubjects.add(q.subject.value);
+            }
 
-          // Merge, deduplicating by quad key
-          const seenKeys = new Set<string>();
-          const mergedQuads: Quad[] = [];
-          for (const q of [...primaryQuads, ...filteredInferred]) {
-            const k = quadKeyFromTerms(q);
-            if (!seenKeys.has(k)) { seenKeys.add(k); mergedQuads.push(q); }
+            const rawInferred: Quad[] =
+              graphName !== "urn:vg:inferred"
+                ? (store.getQuads(null, null, null, inferredTerm) || [])
+                : [];
+
+            const skolemizedInferred = skolemizeQuads(rawInferred, DataFactory);
+            const filteredInferred = skolemizedInferred.filter((q) => {
+              // Must be grounded in data (subject is a NamedNode known from the data graph)
+              if (q.subject.termType !== "NamedNode") return false;
+              if (!dataSubjects.has(q.subject.value)) return false;
+              // Drop reflexive owl:sameAs (X sameAs X)
+              if (
+                q.predicate.value === OWL_SAME_AS &&
+                q.object.termType === "NamedNode" &&
+                q.object.value === q.subject.value
+              ) return false;
+              return true;
+            });
+
+            // Merge, deduplicating by quad key
+            const seenKeys = new Set<string>();
+            mergedQuads = [];
+            for (const q of [...primaryQuads, ...filteredInferred]) {
+              const k = quadKeyFromTerms(q);
+              if (!seenKeys.has(k)) { seenKeys.add(k); mergedQuads.push(q); }
+            }
           }
 
           const deskolemized = mergedQuads.map((q) => {
@@ -2587,8 +3503,11 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               }
             }
             result = { type: "update" };
+          } else if (queryResult.resultType === "boolean") {
+            const answer = await queryResult.execute();
+            result = { type: "ask", boolean: answer };
           } else {
-            throw new Error(`Unsupported result type: ${queryResult.resultType}`);
+            throw new Error(`Unsupported result type: ${(queryResult as { resultType?: string }).resultType ?? "unknown"}`);
           }
           break;
         }
@@ -2641,7 +3560,38 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           result = {
             count: mips.length,
             mips: mips.map((m) =>
-              m.map((q) => ({ subject: q.subject.value, predicate: q.predicate.value, object: q.object.value })),
+              m.map((q) => {
+                // C1 + H2: preserve the SOURCE GRAPH and the full OBJECT TERM
+                // (termType + datatype/language) so the apply path can target the
+                // exact graph the axiom physically lives in (urn:vg:data OR
+                // urn:vg:ontologies) and reconstruct a precise typed/lang literal
+                // instead of a lossy lexical-only fallback that may remove the
+                // wrong literal. All new fields are OPTIONAL — `subject/predicate/
+                // object` keep their existing string shape for back-compat.
+                const obj = q.object as Quad["object"];
+                const out: {
+                  subject: string;
+                  predicate: string;
+                  object: string;
+                  objectTermType?: string;
+                  objectDatatype?: string;
+                  objectLanguage?: string;
+                  graph?: string;
+                } = {
+                  subject: q.subject.value,
+                  predicate: q.predicate.value,
+                  object: obj.value,
+                  objectTermType: obj.termType,
+                };
+                if (obj.termType === "Literal") {
+                  const lit = obj as { datatype?: { value?: string }; language?: string };
+                  if (lit.datatype?.value) out.objectDatatype = lit.datatype.value;
+                  if (lit.language) out.objectLanguage = lit.language;
+                }
+                const g = q.graph?.termType === "DefaultGraph" ? "" : q.graph?.value;
+                if (g) out.graph = g;
+                return out;
+              }),
             ),
           };
           break;
@@ -2652,6 +3602,120 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           // The wrapper filters base graphs (excludes inferred/shapes/workflows) internally.
           const unsatisfiable = await konclude.getUnsatisfiableClasses(getSharedStore());
           result = { unsatisfiable: Array.isArray(unsatisfiable) ? unsatisfiable : [] };
+          break;
+        }
+        case "verifyRepair": {
+          // R1 — symbolic verification of a repair candidate.
+          //
+          // Build a working store COPY of the shared store with the candidate's
+          // axioms removed, then run the SAME Konclude consistency oracle that
+          // explainInconsistency() / checkConsistency() use (the wrapper filters
+          // base graphs and de-skolemises internally). The shared urn:vg:data
+          // store is never mutated.
+          //
+          // verifyRepair accepts an ARRAY of removals: callers verify a single
+          // axiom (per-repair check) OR the full hitting set at once (the union
+          // is the valid fix even when no single removal restores consistency).
+          const p = (msg.payload ?? { removals: [] }) as {
+            removals: { subject: string; predicate: string; object: string }[];
+          };
+          const { StoreCls } = resolveN3();
+          if (!StoreCls) throw new Error("n3-store-unavailable");
+          const konclude = getKoncludeReasoner();
+          await konclude.ready;
+          const source = getSharedStore();
+          const removals = p.removals ?? [];
+          // Track which requested removal keys actually matched a quad so the
+          // caller can distinguish "removed but still inconsistent" from
+          // "nothing matched" (L2). A removal whose key matches zero quads (e.g.
+          // a serialization mismatch) would otherwise leave the store unchanged
+          // and report verifiedConsistent:false as if the repair had failed.
+          const matchedKeys = new Set<string>();
+          const requestedKeys = new Set(
+            removals.map((r) => `${r.subject} ${r.predicate} ${r.object}`),
+          );
+          const copy = new (StoreCls as any)();
+          const allQuads: Quad[] = source.getQuads(null, null, null, null);
+          for (const q of allQuads) {
+            const key = `${q.subject.value} ${q.predicate.value} ${q.object.value}`;
+            if (requestedKeys.has(key)) {
+              matchedKeys.add(key);
+              continue;
+            }
+            copy.addQuad(q);
+          }
+          const removedCount = allQuads.length - copy.size;
+          const verifiedConsistent = await konclude.checkConsistency(copy);
+          result = {
+            verifiedConsistent,
+            removedCount,
+            requestedCount: requestedKeys.size,
+            matchedCount: matchedKeys.size,
+          };
+          break;
+        }
+        case "searchTerms": {
+          // Grounding / retrieval — pure store query (no reasoner). Find existing
+          // ontology terms (classes / properties / individuals) by label or IRI
+          // local-name across ALL graphs (esp. urn:vg:ontologies) so agents
+          // REUSE an existing IRI instead of minting a new ex: one.
+          const p = (msg.payload ?? { query: "" }) as RDFWorkerCommandPayloads["searchTerms"];
+          result = searchTermsInStore(getSharedStore(), p);
+          break;
+        }
+        case "explainEntailment": {
+          // Entailment explanation channel — "why is A subClassOf B?" /
+          // "why is x of type C?". Reduces entailment to (in)consistency using
+          // the EXISTING Konclude consistency oracle (Path B), then strips the
+          // injected probe axioms from each justification. READ-ONLY: operates on
+          // the shared store's base quads; never mutates urn:vg:data.
+          const p = (msg.payload ?? {
+            subjectIri: "",
+            predicateIri: "",
+            objectIri: "",
+          }) as RDFWorkerCommandPayloads["explainEntailment"];
+          const n = typeof p.maxJustifications === "number" ? p.maxJustifications : 1;
+          const konclude = getKoncludeReasoner();
+          await konclude.ready;
+          // Objects are treated as class-like (IRI) unless explicitly flagged as
+          // a literal. The MCP/public API only passes IRIs, so default true.
+          const objectIsClassLike = p.objectIsLiteral !== true;
+          const { isEntailed, justifications, ontologyInconsistent, vacuous, reason } =
+            await konclude.explainEntailment(
+              getSharedStore(),
+              p.subjectIri,
+              p.predicateIri,
+              p.objectIri,
+              objectIsClassLike,
+              n,
+            );
+          result = {
+            isEntailed,
+            justifications: justifications.map((j) =>
+              j.map((q) => ({ subject: q.subject.value, predicate: q.predicate.value, object: q.object.value })),
+            ),
+            // C1/C2: surface the soundness flags so the agent sees a clear message
+            // instead of a bogus "entailed". Only include when set.
+            ...(ontologyInconsistent ? { ontologyInconsistent: true } : {}),
+            ...(vacuous ? { vacuous: true } : {}),
+            ...(reason ? { reason } : {}),
+          };
+          break;
+        }
+        case "extractModule": {
+          // R2 — locality-based MODULE EXTRACTION. Gather the TBox/axiom triples
+          // from the SAME base graphs the reasoning path reads (urn:vg:data +
+          // urn:vg:ontologies), convert N3 quads → the pure extractor's triple
+          // shape, and run the ⊥-module ("bot") or iterated ⊤⊥* ("star")
+          // extraction over the requested signature. The result preserves ALL
+          // entailments over Σ (see localityModule.ts / moduleConformance test).
+          //
+          // READ-ONLY: operates on a read of the shared store via a classified
+          // snapshot; never mutates urn:vg:data.
+          const p = (msg.payload ?? { signature: [] }) as RDFWorkerCommandPayloads["extractModule"];
+          const moduleType = p.moduleType === "star" ? "star" : "bot";
+          const includeOntologies = p.includeOntologies !== false;
+          result = extractModuleFromStore(getSharedStore(), p.signature, moduleType, includeOntologies);
           break;
         }
         default:
@@ -2704,11 +3768,11 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         kSharedStoreRef = getSharedStore();
         kWorkingStore = new (StoreCls as any)();
         try {
-          const workflowsGraph = "urn:vg:workflows";
+          const reasoningExcludedGraphs = new Set(["urn:vg:workflows", "urn:vg:provenance"]);
           const allQuads: Quad[] = kSharedStoreRef.getQuads(null, null, null, null);
           const filteredQuads = allQuads.filter((q: Quad) => {
             const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
-            return g !== workflowsGraph;
+            return !reasoningExcludedGraphs.has(g);
           });
           kWorkingStore.addQuads(filteredQuads);
         } catch (_) {
@@ -2754,7 +3818,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           // before the MIPS explanation run. explainInconsistency() hits the consistency
           // cache set above, so no second WASM consistency call is made.
           reasoningStage({ type: "reasoningStage", id: msg.id, stage: "inconsistent-detected", meta: { durationMs: Date.now() - kStart } });
-          const mips = await konclude.explainInconsistency(kWorkingStore, 1);
+          const DEFAULT_UI_MAX_JUSTIFICATIONS = 3;
+          const mips = await konclude.explainInconsistency(kWorkingStore, DEFAULT_UI_MAX_JUSTIFICATIONS);
           kReasonerDuration = Date.now() - kStart;
           kIsConsistent = false;
           kMipsErrors = mips.map(mipsToReasoningError);
@@ -3416,6 +4481,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     },
     terminate() {
       sharedStore = null;
+      graphCounts = new Map();
+      graphCountsReady = false;
       workerNamespaces = {};
       workerBlacklistPrefixes = new Set(["owl", "rdf", "rdfs", "xml", "xsd"]);
       workerBlacklistUris = [

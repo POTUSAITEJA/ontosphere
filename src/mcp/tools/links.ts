@@ -2,8 +2,16 @@
 import type { McpTool } from '../types';
 import { rdfManager } from '@/utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
+import { getProvenanceRecorder, type ProvQuad } from '@/mcp/provenance';
 import { expandIri } from './iriUtils';
 import * as Reactodia from '@reactodia/workspace';
+
+/** Classify an object value as iri / bnode / literal for faithful revert. */
+function classifyObjectType(value: string): ProvQuad['ot'] {
+  if (value.startsWith('_:')) return 'bnode';
+  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(value)) return 'iri';
+  return 'literal';
+}
 
 interface LinkParams {
   subjectIri?: string;
@@ -61,6 +69,18 @@ export const linkTools: McpTool[] = [
         }
         rdfManager.addTriple(subjectIri, predicateIri, objectIri);
 
+        // Provenance must NEVER flip a successful mutation to success:false.
+        // Record in its own guard (including the object-type classification,
+        // which could throw on hostile input) so a provenance fault only logs.
+        try {
+          await getProvenanceRecorder().recordEdit({
+            tool: 'addTriple',
+            added: [{ s: subjectIri, p: predicateIri, o: objectIri, ot: classifyObjectType(objectIri) }],
+          });
+        } catch (provErr) {
+          console.warn('[addTriple] provenance recordEdit failed (mutation still applied)', provErr);
+        }
+
         const { ctx } = getWorkspaceRefs();
         const model = ctx.model;
         await model.requestLinks({
@@ -103,6 +123,17 @@ export const linkTools: McpTool[] = [
         const expandError = [subjectIri, predicateIri, objectIri].find(v => v.startsWith('Unknown prefix:'));
         if (expandError) return { success: false as const, error: expandError };
         rdfManager.removeTriple(subjectIri, predicateIri, objectIri);
+
+        // Provenance is best-effort; a fault must not flip the successful removal.
+        try {
+          await getProvenanceRecorder().recordEdit({
+            tool: 'removeLink',
+            removed: [{ s: subjectIri, p: predicateIri, o: objectIri, ot: classifyObjectType(objectIri) }],
+          });
+        } catch (provErr) {
+          console.warn('[removeLink] provenance recordEdit failed (mutation still applied)', provErr);
+        }
+
         return { success: true as const, data: { removed: { s: subjectIri, p: predicateIri, o: objectIri } } };
       } catch (e) {
         return { success: false as const, error: String(e) };

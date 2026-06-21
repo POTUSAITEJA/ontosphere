@@ -4,8 +4,9 @@ import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import { useAppConfigStore } from '@/stores/appConfigStore';
 import { VALID_ALGORITHMS } from './layout';
 import { rdfManager } from '@/utils/rdfManager';
-import { checkOwl2Profile, type ProfileTriple } from '@/utils/owlProfile';
+import { checkOwl2Profile, detectOwl2Profiles, type ProfileTriple } from '@/utils/owlProfile';
 import { buildRepairBrief, type DiagnosticsData } from './diagnosticsBrief';
+import { computeRepairs, type RepairSuggestion } from './computeRepairs';
 const EXPORT_FORMATS = ['turtle', 'jsonld', 'rdfxml', 'svg', 'png'];
 
 const DATA_GRAPH = 'urn:vg:data';
@@ -46,7 +47,11 @@ const runReasoning: McpTool = {
       const refs = getWorkspaceRefs();
 
       if (clearBefore) {
-        refs.clearInferred?.() ?? refs.dataProvider.clearInferred();
+        if (refs.clearInferred) {
+          refs.clearInferred();
+        } else {
+          refs.dataProvider.clearInferred();
+        }
       }
 
       const prevShaclEnabled = useAppConfigStore.getState().config.shaclEnabled;
@@ -140,10 +145,14 @@ const explainDiagnostics: McpTool = {
   name: 'explainDiagnostics',
   description:
     "Run the full symbolic verifier (OWL 2 DL reasoning + SHACL) and return ONE structured, actionable diagnosis of everything wrong with the current graph. " +
-    "Use this to decide what to fix after authoring. Response: { isConsistent, justifications, unsatisfiableClasses, profile, shaclViolations, repairBrief }. " +
+    "Use this to decide what to fix after authoring. Response: { isConsistent, justifications, unsatisfiableClasses, profile, shaclViolations, repairBrief, suggestedRepairs }. " +
     "isConsistent=false means a logical contradiction: `justifications` lists each minimal set of axioms (MIPS) causing it — remove or revise one axiom per set. " +
-    "`unsatisfiableClasses` are classes that can never have instances (best-effort). `profile` reports OWL 2 DL profile violations (e.g. a literal on an object property). " +
-    "`shaclViolations` are data-shape conformance failures. `repairBrief` is a ranked plain-language summary you can act on directly. Read-only: never mutates asserted data.",
+    "`unsatisfiableClasses` are classes that can never have instances (best-effort). `profile` reports OWL 2 profile analysis: the legacy DL sanity check (owl2dl + violations, e.g. a literal on an object property) PLUS structural EL/QL/RL detection (el/ql/rl each { valid, violations:[{construct,axiom,reason}] }) and `mostRestrictive` (EL|QL|RL|DL|Full) — the tightest profile the ontology fits, indicating whether a cheaper profile-specific reasoner suffices. " +
+    "`shaclViolations` are data-shape conformance failures. `repairBrief` is a ranked plain-language summary you can act on directly. " +
+    "`suggestedRepairs` is a ranked list of EXECUTABLE reasoner-computed fixes, each { id, issue, action:{tool,args}, rationale, verifiedConsistent?, verifiedSet?, justificationsCovered?, needsValue?, needsManualReview? }: " +
+    "for inconsistencies they form a minimal hitting set over the MIPS — removing the WHOLE set restores consistency. verifiedConsistent:true ⇒ removing that ONE axiom alone restores consistency; with multiple independent contradictions it is commonly false for every repair (means 'not ALONE', not 'wrong'). " +
+    "Trust the top-level `repairSetVerifiedConsistent` / per-repair `verifiedSet` (the full set together) and apply the entire set. needsManualReview:true ⇒ no auto-repair (inspect manually). " +
+    "Apply each by calling its action.tool (always removeLink for inconsistency repairs) with action.args. Read-only: never mutates asserted data.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -172,9 +181,22 @@ const explainDiagnostics: McpTool = {
       let unsatisfiableClasses: string[] = [];
       try { unsatisfiableClasses = await rdfManager.getUnsatisfiableClasses(); } catch { unsatisfiableClasses = []; }
 
-      // 4. OWL 2 DL profile check over the asserted data graph.
+      // 4. OWL 2 profile detection over the asserted data graph.
+      //    Keep the legacy DL-sanity fields (owl2dl + violations) for backward
+      //    compatibility, and ADD structural EL/QL/RL classification plus the
+      //    `mostRestrictive` label (the tightest profile the ontology fits —
+      //    tells an agent whether a cheaper, profile-specific reasoner suffices).
       const profileTriples = await loadDataProfileTriples();
-      const profile = checkOwl2Profile(profileTriples);
+      const dlReport = checkOwl2Profile(profileTriples);
+      const profiles = detectOwl2Profiles(profileTriples);
+      const profile = {
+        owl2dl: dlReport.owl2dl,
+        violations: dlReport.violations,
+        el: profiles.el,
+        ql: profiles.ql,
+        rl: profiles.rl,
+        mostRestrictive: profiles.mostRestrictive,
+      };
 
       // 5. SHACL conformance.
       const shacl = await rdfManager.runShaclValidation();
@@ -187,13 +209,284 @@ const explainDiagnostics: McpTool = {
         profile,
         shaclViolations,
       };
-      const repairBrief = buildRepairBrief(data);
 
-      return { success: true, data: { ...data, repairBrief } };
+      // R1 — reasoner-computed repair suggestions. Compute ranked, executable
+      // candidates from the symbolic diagnostics (minimal hitting set over the
+      // MIPS + SHACL candidates), then symbolically VERIFY the inconsistency
+      // candidates by re-running the consistency oracle on a store copy without
+      // the removed axioms. Verification is read-only (operates on a copy).
+      const suggestedRepairs: RepairSuggestion[] = computeRepairs(data);
+
+      // `repairSetVerifiedConsistent` is the paper-critical signal: does removing
+      // the FULL hitting set at once restore global consistency? With multiple
+      // disjoint contradictions no single removal does, so per-axiom checks are
+      // all false even though the union IS valid (M2). null = not verified.
+      let repairSetVerifiedConsistent: boolean | null = null;
+      let repairSetMatchWarning: string | undefined;
+
+      if (isConsistent === false) {
+        // Executable inconsistency repairs (skip needsManualReview markers,
+        // which have no axiom to remove).
+        const actionable = suggestedRepairs.filter(
+          (r) =>
+            r.issue === 'inconsistency' &&
+            !r.needsManualReview &&
+            r.action.args.subjectIri &&
+            r.action.args.predicateIri &&
+            r.action.args.objectIri,
+        );
+
+        // 1. Per-axiom verification — meaning: does removing THIS axiom ALONE
+        //    restore consistency? Commonly false with disjoint contradictions;
+        //    it does NOT mean the repair is wrong (cross-ref verifiedSet).
+        await Promise.all(
+          actionable.map(async (r) => {
+            const { subjectIri, predicateIri, objectIri } = r.action.args;
+            try {
+              r.verifiedConsistent = await rdfManager.verifyRepair([
+                { subject: subjectIri!, predicate: predicateIri!, object: objectIri! },
+              ]);
+            } catch {
+              // Leave verifiedConsistent undefined when the oracle is unavailable.
+            }
+          }),
+        );
+
+        // 2. Full-set verification — remove EVERY inconsistency repair at once.
+        //    This is the hitting-set guarantee: their union restores consistency
+        //    even when each individual removal does not.
+        if (actionable.length > 0) {
+          const removals = actionable.map((r) => ({
+            subject: r.action.args.subjectIri!,
+            predicate: r.action.args.predicateIri!,
+            object: r.action.args.objectIri!,
+          }));
+          try {
+            const detailed = await rdfManager.verifyRepairDetailed(removals);
+            repairSetVerifiedConsistent = detailed.verifiedConsistent;
+            // L2: warn when some removals matched nothing — a false verdict then
+            // means "the store was not actually changed", not "repair failed".
+            if (detailed.matchedCount < detailed.requestedCount) {
+              repairSetMatchWarning =
+                `Only ${detailed.matchedCount} of ${detailed.requestedCount} repair ` +
+                `axioms matched a triple in the store; the consistency verdict may ` +
+                `reflect an unchanged store rather than the repair's effect ` +
+                `(check for serialization mismatches).`;
+            }
+            // Annotate each actionable repair with the shared full-set verdict.
+            for (const r of actionable) r.verifiedSet = detailed.verifiedConsistent;
+          } catch {
+            // Oracle unavailable — leave repairSetVerifiedConsistent null.
+          }
+        }
+      }
+
+      const repairBrief = buildRepairBrief(data, suggestedRepairs, {
+        repairSetVerifiedConsistent,
+        repairSetMatchWarning,
+      });
+
+      return {
+        success: true,
+        data: {
+          ...data,
+          repairBrief,
+          suggestedRepairs,
+          repairSetVerifiedConsistent,
+          ...(repairSetMatchWarning ? { repairSetMatchWarning } : {}),
+        },
+      };
     } catch (e) {
       return { success: false, error: `explainDiagnostics: ${(e as Error)?.message ?? String(e)}` };
     }
   },
 };
 
-export const reasoningTools: McpTool[] = [runReasoning, clearInferred, getCapabilities, explainDiagnostics];
+// ---------------------------------------------------------------------------
+// explainEntailment
+// ---------------------------------------------------------------------------
+
+/** Local name of an IRI for compact, human-readable summaries. */
+function localName(iri: string): string {
+  const hash = iri.lastIndexOf('#');
+  const slash = iri.lastIndexOf('/');
+  const cut = Math.max(hash, slash);
+  return cut >= 0 && cut < iri.length - 1 ? iri.slice(cut + 1) : iri;
+}
+
+function axiomToText(a: { subject: string; predicate: string; object: string }): string {
+  return `${localName(a.subject)} ${localName(a.predicate)} ${localName(a.object)}`;
+}
+
+const explainEntailment: McpTool = {
+  name: 'explainEntailment',
+  description:
+    "Explain WHY a specific entailed axiom holds — Horridge-style justifications for an ARBITRARY entailed axiom (not just inconsistency). " +
+    "Ask 'why is A rdfs:subClassOf B?' or 'why is x rdf:type C?' and get back the minimal set(s) of asserted axioms whose conjunction logically entails it. " +
+    "Input: { subjectIri, predicateIri, objectIri, maxJustifications? }. " +
+    "Returns { isEntailed, justifications, summary, ontologyInconsistent?, vacuous?, reason? }: isEntailed=true means the OWL 2 DL reasoner derives the axiom; " +
+    "justifications is a list of minimal axiom sets (each { subject, predicate, object }[]) — every axiom in a set is needed to derive the conclusion. " +
+    "An empty justifications list with isEntailed=true means the axiom is directly asserted (nothing to derive) or its shape is unsupported. " +
+    "isEntailed=false with empty justifications means the axiom is NOT entailed. " +
+    "ontologyInconsistent=true (isEntailed=null) means the ontology is ALREADY inconsistent so entailment is vacuous — run explainDiagnostics and fix consistency first; the result is NOT a real entailment. " +
+    "vacuous=true (subClassOf only) means the axiom holds ONLY because the subject class is unsatisfiable (empty class ⊑ anything) — not a genuine derivation; fix the unsatisfiable class. " +
+    "summary is a short plain-language 'Inferred because: …' explanation. " +
+    "Supported shapes: rdfs:subClassOf and rdf:type with an IRI object (e.g. transitive subclass A⊑B,B⊑C ⟹ A⊑C, or domain/range-driven type inference). " +
+    "Read-only: never mutates asserted data.",
+  inputSchema: {
+    type: 'object',
+    required: ['subjectIri', 'predicateIri', 'objectIri'],
+    properties: {
+      subjectIri: { type: 'string', description: 'IRI of the axiom subject (e.g. the subclass, or the individual).' },
+      predicateIri: { type: 'string', description: 'IRI of the predicate — rdfs:subClassOf or rdf:type.' },
+      objectIri: { type: 'string', description: 'IRI of the axiom object (e.g. the superclass, or the class).' },
+      maxJustifications: { type: 'number', default: 1, description: 'Maximum number of independent justifications to return.' },
+    },
+  },
+  async handler(params): Promise<McpResult> {
+    try {
+      const { subjectIri, predicateIri, objectIri, maxJustifications = 1 } = (params ?? {}) as {
+        subjectIri?: string;
+        predicateIri?: string;
+        objectIri?: string;
+        maxJustifications?: number;
+      };
+      if (!subjectIri || !predicateIri || !objectIri) {
+        return { success: false, error: 'explainEntailment requires subjectIri, predicateIri and objectIri.' };
+      }
+
+      // Ensure the reasoner has the current asserted graph (read-only).
+      const { isEntailed, justifications, ontologyInconsistent, vacuous, reason } =
+        await rdfManager.explainEntailment(
+          subjectIri,
+          predicateIri,
+          objectIri,
+          { maxJustifications },
+        );
+
+      const axiomText = axiomToText({ subject: subjectIri, predicate: predicateIri, object: objectIri });
+      let summary: string;
+      if (ontologyInconsistent) {
+        // C1: the ontology is already inconsistent, so the entailment reduction is
+        // VACUOUS (a contradiction entails everything). isEntailed is null here.
+        summary =
+          `Cannot decide whether ${axiomText} is entailed: the ontology is already ` +
+          `inconsistent, so every axiom is "entailed" by the contradiction. ` +
+          `Run explainDiagnostics and fix consistency first.`;
+        return {
+          success: true,
+          data: { isEntailed: null, ontologyInconsistent: true, justifications: [], reason, summary },
+        };
+      }
+      if (vacuous) {
+        // C2: A ⊑ anything holds only because the subject class is unsatisfiable.
+        summary =
+          `${axiomText} holds only VACUOUSLY: the subject class is unsatisfiable in the ` +
+          `ontology, so it is a subclass of everything. This is not a genuine derivation — ` +
+          `fix the unsatisfiable class (see explainDiagnostics / unsatisfiableClasses).`;
+        return {
+          success: true,
+          data: { isEntailed: true, vacuous: true, justifications, reason, summary },
+        };
+      }
+      if (!isEntailed) {
+        summary = `${axiomText} is NOT entailed by the current ontology.`;
+      } else if (justifications.length === 0) {
+        summary = `${axiomText} holds — it is directly asserted (no derivation needed).`;
+      } else {
+        const sets = justifications
+          .map((j, i) => {
+            const axioms = j.map(axiomToText).join('; ');
+            return justifications.length > 1 ? `[${i + 1}] ${axioms}` : axioms;
+          })
+          .join(' | ');
+        summary = `${axiomText} is inferred because: ${sets}.`;
+      }
+
+      return { success: true, data: { isEntailed, justifications, summary } };
+    } catch (e) {
+      return { success: false, error: `explainEntailment: ${(e as Error)?.message ?? String(e)}` };
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// extractModule
+// ---------------------------------------------------------------------------
+
+/** Serialise a triple object as one N-Triples-ish line for the turtle output. */
+function tripleToTurtleLine(t: { subject: string; predicate: string; object: string }): string {
+  const term = (v: string): string =>
+    v.startsWith('_:') || /^b\d+$/.test(v) ? v : `<${v}>`;
+  return `${term(t.subject)} ${term(t.predicate)} ${term(t.object)} .`;
+}
+
+const extractModule: McpTool = {
+  name: 'extractModule',
+  description:
+    'Extract a self-contained locality-based module (sub-ontology) that preserves all entailments over the given terms — for reuse, focused reasoning, or export (ROBOT-extract style). ' +
+    'Input { signature: string[] (≥1 class/property IRIs), moduleType?: "bot"|"star" (default "bot"; "star" = the smaller iterated ⊤⊥* module), includeOntologies?: boolean (default true — also draw axioms from loaded ontologies in urn:vg:ontologies) }. ' +
+    'Returns { success, data: { moduleTriples: {subject,predicate,object}[], moduleTurtle, moduleSize, fullSize, reductionPercent, signature } }. ' +
+    'The module is the standard syntactic-locality module (Cuenca Grau et al., JAIR 2008) over the asserted graph (+ loaded ontologies): for every axiom α expressible using only the signature terms, O ⊨ α iff module ⊨ α. ' +
+    'This is the building block for incremental / modular reasoning: reason over the small module instead of the whole ontology when your question is confined to the signature. ' +
+    'NOTE: this extracts the module + guarantees Σ-entailment conformance; it does NOT by itself perform live incremental-reasoning-on-edit (a global inconsistency outside Σ still needs separate handling — a documented follow-up). Read-only: never mutates asserted data.',
+  inputSchema: {
+    type: 'object',
+    required: ['signature'],
+    properties: {
+      signature: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Class / property IRIs that define the module signature Σ (at least one). Prefix notation supported.',
+      },
+      moduleType: {
+        type: 'string',
+        enum: ['bot', 'star'],
+        default: 'bot',
+        description: '"bot" = the ⊥-locality module (default). "star" = the iterated ⊤⊥* module (⊆ bot; usually smaller). Both preserve all Σ-entailments.',
+      },
+      includeOntologies: {
+        type: 'boolean',
+        default: true,
+        description: 'Include axioms from loaded ontologies (urn:vg:ontologies) in addition to the asserted graph (urn:vg:data). Default true.',
+      },
+    },
+  },
+  async handler(params): Promise<McpResult> {
+    try {
+      const { signature, moduleType, includeOntologies } = (params ?? {}) as {
+        signature?: string[];
+        moduleType?: 'bot' | 'star';
+        includeOntologies?: boolean;
+      };
+      if (!Array.isArray(signature) || signature.length === 0) {
+        return { success: false, error: 'extractModule requires a non-empty signature array of term IRIs.' };
+      }
+
+      const { moduleTriples, moduleSize, fullSize, signature: sig } = await rdfManager.extractModule(
+        signature,
+        { moduleType, includeOntologies },
+      );
+
+      const reductionPercent =
+        fullSize > 0 ? Math.round(((fullSize - moduleSize) / fullSize) * 1000) / 10 : 0;
+      const moduleTurtle = moduleTriples.map(tripleToTurtleLine).join('\n');
+
+      return {
+        success: true,
+        data: {
+          moduleTriples,
+          moduleTurtle,
+          moduleSize,
+          fullSize,
+          reductionPercent,
+          signature: sig,
+        },
+      };
+    } catch (e) {
+      return { success: false, error: `extractModule: ${(e as Error)?.message ?? String(e)}` };
+    }
+  },
+};
+
+export const reasoningTools: McpTool[] = [runReasoning, clearInferred, getCapabilities, explainDiagnostics, explainEntailment, extractModule];

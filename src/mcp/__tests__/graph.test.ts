@@ -37,6 +37,10 @@ vi.mock('@/mcp/workspaceContext', () => ({
   })),
 }));
 
+vi.mock('@/mcp/provenance', () => ({
+  getProvenanceRecorder: () => ({ recordEdit: vi.fn().mockResolvedValue(null) }),
+}));
+
 import { graphTools } from '../tools/graph';
 import { rdfManager } from '@/utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
@@ -135,6 +139,10 @@ describe('queryGraph', () => {
     (rdfManager.sparqlQuery as ReturnType<typeof vi.fn>).mockResolvedValue({ type: 'update' });
   }
 
+  function mockAsk(answer: boolean) {
+    (rdfManager.sparqlQuery as ReturnType<typeof vi.fn>).mockResolvedValue({ type: 'ask', boolean: answer });
+  }
+
   it('returns rows for SELECT *', async () => {
     mockSelect([
       { s: EX + 'Alice', p: RDFS_LABEL, o: 'Alice' },
@@ -174,10 +182,20 @@ describe('queryGraph', () => {
     expect((result as any).error).toContain('SPARQL parse error');
   });
 
-  it('rejects ASK queries', async () => {
-    const result = await tool('queryGraph').handler({ sparql: `ASK { <${EX}Alice> ?p ?o }` });
-    expect(result.success).toBe(false);
-    expect((result as any).error).toContain('ASK');
+  it('ASK returns boolean true when the worker says true', async () => {
+    mockAsk(true);
+    const result = await tool('queryGraph').handler({ sparql: `ASK { <${EX}Alice> ?p ?o }` }) as any;
+    expect(result.success).toBe(true);
+    expect(result.data.type).toBe('ask');
+    expect(result.data.boolean).toBe(true);
+  });
+
+  it('ASK returns boolean false when the worker says false', async () => {
+    mockAsk(false);
+    const result = await tool('queryGraph').handler({ sparql: `ASK { <${EX}NoSuchThing> ?p ?o }` }) as any;
+    expect(result.success).toBe(true);
+    expect(result.data.type).toBe('ask');
+    expect(result.data.boolean).toBe(false);
   });
 
   it('CONSTRUCT returns triples without writing to store', async () => {

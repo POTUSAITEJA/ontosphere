@@ -16,7 +16,8 @@ export const mcpServerDescription =
   'GRAPH ARCHITECTURE\n' +
   'urn:vg:data = asserted triples (all mutations go here)\n' +
   'urn:vg:inferred = DL-derived (Konclude; runReasoning writes; clearInferred removes)\n' +
-  'urn:vg:shapes = SHACL constraints (loadShacl writes; validateGraph reads)\n\n' +
+  'urn:vg:shapes = SHACL constraints (loadShacl writes; validateGraph reads)\n' +
+  'urn:vg:provenance = PROV-O record of agent edits (auto-written; excluded from reasoning/SHACL/export; listAgentEdits/diffAgentEdits/revertAgentBatch)\n\n' +
   'Pre-loaded prefixes: rdf: rdfs: owl: xsd: foaf: skos: dc: dcterms: schema: ex:\n' +
   'After loadOntology or setNamespace, those prefixes work in all tool IRI arguments.\n\n' +
   'Recommended workflow:\n' +
@@ -103,11 +104,15 @@ export const mcpManifest: McpToolManifestEntry[] = [
   },
   {
     name: 'exportGraph',
-    description: 'Export the current RDF graph as Turtle, JSON-LD, or RDF-XML.',
+    description:
+      'Export the current RDF graph. turtle | jsonld | rdfxml flatten the store into a single ' +
+      'default graph (named-graph structure is lost). nquads | trig are dataset-faithful: they ' +
+      'collect quads from every urn:vg:* graph (data, inferred, shapes, ontologies, workflows) ' +
+      'and preserve each graph IRI, so the multi-graph partition round-trips on re-import.',
     inputSchema: {
       type: 'object',
       properties: {
-        format: { type: 'string', enum: ['turtle', 'jsonld', 'rdfxml'] },
+        format: { type: 'string', enum: ['turtle', 'jsonld', 'rdfxml', 'nquads', 'trig'] },
       },
       required: ['format'],
     },
@@ -154,7 +159,7 @@ export const mcpManifest: McpToolManifestEntry[] = [
   },
   {
     name: 'addNode',
-    description: 'Create a NEW entity on the canvas. Writes rdf:type(s) + rdfs:label atomically so the canvas pipeline fires once, then auto-navigates to the new node. The node appears in the view matching its rdf:type (owl:Class → TBox; owl:ObjectProperty → TBox; owl:AnnotationProperty → TBox; owl:NamedIndividual or unknown → ABox). To assign multiple types at once (e.g. owl:NamedIndividual + ex:SalamiTopping) use typeIris:[\"owl:NamedIndividual\",\"ex:SalamiTopping\"] — do NOT call addNode + addTriple separately for this. Object and annotation properties are first-class OWL entities — create them as nodes with typeIri=owl:ObjectProperty, then assert rdfs:domain and rdfs:range on them via addTriple. Use setViewMode before calling addNode. For 5+ individuals use loadRdf(turtle=...) instead. Use addTriple (not addNode) to add properties or relationships to an entity that already exists.',
+    description: 'Create a NEW entity on the canvas. Writes rdf:type(s) + rdfs:label atomically so the canvas pipeline fires once, then auto-navigates to the new node. The node appears in the view matching its rdf:type (owl:Class → TBox; owl:ObjectProperty → TBox; owl:AnnotationProperty → TBox; owl:NamedIndividual or unknown → ABox). To assign multiple types at once (e.g. owl:NamedIndividual + ex:SalamiTopping) use typeIris:["owl:NamedIndividual","ex:SalamiTopping"] — do NOT call addNode + addTriple separately for this. Object and annotation properties are first-class OWL entities — create them as nodes with typeIri=owl:ObjectProperty, then assert rdfs:domain and rdfs:range on them via addTriple. Use setViewMode before calling addNode. For 5+ individuals use loadRdf(turtle=...) instead. Use addTriple (not addNode) to add properties or relationships to an entity that already exists.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -206,6 +211,24 @@ export const mcpManifest: McpToolManifestEntry[] = [
     },
   },
   {
+    name: 'searchTerms',
+    description:
+      'Search existing ontology terms (classes / properties / individuals) by label or local name across all loaded ontologies (urn:vg:ontologies) and the asserted graph, so you can REUSE an existing IRI instead of minting a new ex: one. ALWAYS call this before creating a new class or property — if a pmdco:/bfo:/iof:/qudt: (etc.) term already exists, reuse it. Results are ranked (exact label > label prefix > label substring > local-name match) and include the resolved prefix when known. Covers terms already loaded into the store; it does not query remote registries (LOV/BioPortal). To pull in more vocabularies first, use loadOntology.',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: { type: 'string', description: 'Label or local-name substring to search for (case-insensitive), e.g. "process" or "Specimen".' },
+        kinds: {
+          type: 'array',
+          items: { type: 'string', enum: ['class', 'objectProperty', 'datatypeProperty', 'property', 'individual'] },
+          description: 'Optional filter. Omit for classes + properties. "property" matches object, datatype and annotation properties.',
+        },
+        limit: { type: 'integer', default: 25, description: 'Maximum results to return.' },
+      },
+    },
+  },
+  {
     name: 'addTriple',
     description:
       'Assert any RDF triple on entities that already exist on the canvas. ' +
@@ -232,7 +255,7 @@ export const mcpManifest: McpToolManifestEntry[] = [
   },
   {
     name: 'removeLink',
-    description: 'Remove an object-property triple (edge) between two nodes.',
+    description: 'Remove ANY triple from the RDF store, given its subject, predicate, and object. Despite the name it is not limited to object-property edges: the object may be an IRI (an ABox edge or a TBox axiom such as owl:disjointWith / rdfs:subClassOf) OR a literal value (an annotation like rdfs:comment) — the matching triple is removed in all cases. Reasoner-computed repairs (explainDiagnostics.suggestedRepairs) apply via this tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -353,14 +376,70 @@ export const mcpManifest: McpToolManifestEntry[] = [
     name: 'explainDiagnostics',
     description:
       'Run the full symbolic verifier (OWL 2 DL reasoning + SHACL) and return ONE structured diagnosis of everything wrong with the current graph: ' +
-      '{ isConsistent, justifications, unsatisfiableClasses, profile, shaclViolations, repairBrief }. ' +
+      '{ isConsistent, justifications, unsatisfiableClasses, profile, shaclViolations, repairBrief, suggestedRepairs }. ' +
       'When isConsistent=false, justifications lists each minimal contradictory axiom set (MIPS) — remove or revise one axiom per set. ' +
-      'profile reports OWL 2 DL profile violations (e.g. a literal on an object property); shaclViolations are data-shape failures; ' +
-      'repairBrief is a ranked plain-language summary to act on. Use after authoring to decide what to fix. Read-only.',
+      'profile reports OWL 2 profile analysis: the legacy DL sanity check (owl2dl + violations, e.g. a literal on an object property) PLUS structural EL/QL/RL detection — el/ql/rl each { valid, violations:[{construct,axiom,reason}] } listing the disallowed constructs found, and mostRestrictive (EL|QL|RL|DL|Full) is the tightest profile the ontology fits, telling you whether a cheaper profile-specific reasoner (EL/QL/RL) is sound & complete instead of full OWL 2 DL; shaclViolations are data-shape failures; ' +
+      'repairBrief is a ranked plain-language summary to act on. ' +
+      'suggestedRepairs is a ranked list of EXECUTABLE, reasoner-computed fixes: each { id, issue, action:{tool,args}, rationale, verifiedConsistent?, verifiedSet?, justificationsCovered?, needsValue?, needsManualReview? }. ' +
+      'For inconsistencies the repairs form a minimal hitting set over the MIPS — removing the WHOLE set restores consistency. Apply each via its action.tool (always removeLink for inconsistency repairs; it removes IRI- and literal-object triples and TBox axioms alike) with action.args. ' +
+      'verifiedConsistent reports whether removing that ONE axiom alone restores consistency; with multiple independent contradictions this is commonly false for every repair even though the fix is correct — it means "not ALONE", not "wrong". ' +
+      'The top-level repairSetVerifiedConsistent (and per-repair verifiedSet) reports whether removing the FULL set together restores consistency — that is the signal to trust; apply the entire set. ' +
+      'needsManualReview:true marks a contradiction with no auto-computable repair (inspect manually). SHACL repairs use addTriple with needsValue:true when you must supply the object value. ' +
+      'Use after authoring to decide what to fix. Read-only: never mutates asserted data.',
     inputSchema: {
       type: 'object',
       properties: {
         maxJustifications: { type: 'number', default: 3, description: 'Max independent inconsistency justifications (MIPS) to return.' },
+      },
+    },
+  },
+  {
+    name: 'explainEntailment',
+    description:
+      "Explain WHY a specific entailed axiom holds — Horridge-style justifications for an ARBITRARY entailed axiom (not just inconsistency). " +
+      "Ask 'why is A rdfs:subClassOf B?' or 'why is x rdf:type C?' and get the minimal set(s) of asserted axioms whose conjunction logically entails it. " +
+      "Returns { isEntailed, justifications, summary }: isEntailed=true means the OWL 2 DL reasoner derives the axiom; justifications is a list of minimal axiom sets (each { subject, predicate, object }[]). " +
+      "Empty justifications with isEntailed=true ⇒ the axiom is directly asserted (nothing to derive) or its shape is unsupported. isEntailed=false ⇒ not entailed. summary is a plain-language 'Inferred because: …' explanation. " +
+      "Supported shapes: rdfs:subClassOf and rdf:type with an IRI object (e.g. transitive subclass, domain/range-driven type inference). Read-only: never mutates asserted data.",
+    inputSchema: {
+      type: 'object',
+      required: ['subjectIri', 'predicateIri', 'objectIri'],
+      properties: {
+        subjectIri: { type: 'string', description: 'IRI of the axiom subject (the subclass, or the individual).' },
+        predicateIri: { type: 'string', description: 'IRI of the predicate — rdfs:subClassOf or rdf:type.' },
+        objectIri: { type: 'string', description: 'IRI of the axiom object (the superclass, or the class).' },
+        maxJustifications: { type: 'number', default: 1, description: 'Maximum number of independent justifications to return.' },
+      },
+    },
+  },
+  {
+    name: 'extractModule',
+    description:
+      'Extract a self-contained locality-based module (sub-ontology) that preserves all entailments over the given terms — for reuse, focused reasoning, or export (ROBOT-extract style). ' +
+      'Input { signature: string[] (≥1 class/property IRIs), moduleType?: "bot"|"star" (default "bot"; "star" = the smaller iterated ⊤⊥* module), includeOntologies?: boolean (default true) }. ' +
+      'Returns { moduleTriples: {subject,predicate,object}[], moduleTurtle, moduleSize, fullSize, reductionPercent, signature }. ' +
+      'The module is the standard syntactic-locality module (Cuenca Grau et al., JAIR 2008) over the asserted graph (+ loaded ontologies): for every axiom α over the signature, O ⊨ α iff module ⊨ α — the building block for incremental / modular reasoning. ' +
+      'It extracts the module and guarantees Σ-entailment conformance; it does not by itself perform live incremental-reasoning-on-edit (a documented follow-up). Read-only: never mutates asserted data.',
+    inputSchema: {
+      type: 'object',
+      required: ['signature'],
+      properties: {
+        signature: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Class / property IRIs defining the module signature Σ (at least one). Prefix notation supported.',
+        },
+        moduleType: {
+          type: 'string',
+          enum: ['bot', 'star'],
+          default: 'bot',
+          description: '"bot" = ⊥-locality module (default). "star" = iterated ⊤⊥* module (⊆ bot; usually smaller). Both preserve all Σ-entailments.',
+        },
+        includeOntologies: {
+          type: 'boolean',
+          default: true,
+          description: 'Include axioms from loaded ontologies (urn:vg:ontologies) alongside the asserted graph (urn:vg:data). Default true.',
+        },
       },
     },
   },
@@ -480,6 +559,60 @@ export const mcpManifest: McpToolManifestEntry[] = [
       required: ['url'],
       properties: {
         url: { type: 'string', description: 'URL to load shapes from. Can be a direct .ttl URL, a GitHub tree URL (https://github.com/owner/repo/tree/branch/path), or comma-separated mix of both.' },
+      },
+    },
+  },
+  {
+    name: 'listAgentEdits',
+    description:
+      'List recorded agent edit batches (provenance of mutations) most-recent-first. Each mutating tool call (addNode/updateNode/removeNode/addTriple/removeLink/loadRdf) is recorded as a PROV-O Activity in the urn:vg:provenance sidecar graph. Returns [{batchId, tool, agent, timestamp, addedCount, removedCount, reverted}]. Use diffAgentEdits to inspect triples and revertAgentBatch to undo. The journal is in-memory and volatile (cleared on page reload).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', description: 'Maximum number of batches to return (most recent first).' },
+      },
+    },
+  },
+  {
+    name: 'diffAgentEdits',
+    description:
+      'Inspect the exact triples added and removed by a recorded agent edit batch. Pass the batchId from listAgentEdits. Returns {tool, agent, timestamp, reverted, added:[{s,p,o}], removed:[{s,p,o}]}.',
+    inputSchema: {
+      type: 'object',
+      required: ['batchId'],
+      properties: {
+        batchId: { type: 'string', description: 'Batch identifier from listAgentEdits.' },
+      },
+    },
+  },
+  {
+    name: 'revertAgentBatch',
+    description:
+      'Undo a recorded agent edit batch: re-removes the triples it added and re-adds the triples it removed, in urn:vg:data. Idempotent — reverting an already-reverted batch is a safe no-op (reported via alreadyReverted). Best-effort if the graph changed since: returns {success, alreadyReverted?, reverted:{addedRemoved, removedRestored}, requested:{...}}. Marks the batch reverted (prov:wasInvalidatedBy + vg:reverted true) in urn:vg:provenance.',
+    inputSchema: {
+      type: 'object',
+      required: ['batchId'],
+      properties: {
+        batchId: { type: 'string', description: 'Batch identifier from listAgentEdits.' },
+      },
+    },
+  },
+  {
+    name: 'generateDatasetMetadata',
+    description:
+      'Generate VoID + DCAT metadata describing the current dataset (triple/class/property counts, ' +
+      'partitions, vocabularies used) for FAIR publishing. Computes void:triples, void:entities, ' +
+      'void:classes, void:properties, void:distinctSubjects/distinctObjects, per-class void:classPartition ' +
+      'and per-predicate void:propertyPartition, void:vocabulary / dcterms:conformsTo for each vocabulary used, ' +
+      'and a dcat:Dataset with dcterms:title/description plus dcat:distribution entries for each export format. ' +
+      'Returns { turtle, summary } — the Turtle document and a structured summary (triples, classes, properties, ' +
+      'subjects, vocabularies, topClasses, topProperties). Pass includeInferred=true to fold urn:vg:inferred ' +
+      'triples into the counts. Read-only: never mutates the graph.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        includeInferred: { type: 'boolean', default: false, description: 'Fold inferred triples (urn:vg:inferred) into the counts and partitions.' },
+        format: { type: 'string', enum: ['turtle'], default: 'turtle', description: 'Serialisation of the metadata document. Only "turtle" is currently supported.' },
       },
     },
   },

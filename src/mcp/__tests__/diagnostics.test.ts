@@ -8,12 +8,16 @@ const {
   mockRunShacl,
   mockGetUnsat,
   mockFetchQuadsPage,
+  mockVerifyRepair,
+  mockVerifyRepairDetailed,
 } = vi.hoisted(() => ({
   mockRunReasoning: vi.fn(),
   mockExplainInconsistency: vi.fn(),
   mockRunShacl: vi.fn(),
   mockGetUnsat: vi.fn(),
   mockFetchQuadsPage: vi.fn(),
+  mockVerifyRepair: vi.fn(),
+  mockVerifyRepairDetailed: vi.fn(),
 }));
 
 vi.mock('@/utils/rdfManager', () => ({
@@ -23,6 +27,8 @@ vi.mock('@/utils/rdfManager', () => ({
     runShaclValidation: mockRunShacl,
     getUnsatisfiableClasses: mockGetUnsat,
     fetchQuadsPage: mockFetchQuadsPage,
+    verifyRepair: mockVerifyRepair,
+    verifyRepairDetailed: mockVerifyRepairDetailed,
   },
 }));
 
@@ -44,6 +50,13 @@ beforeEach(() => {
   mockRunShacl.mockResolvedValue({ conforms: true, violations: [], shapeCount: 0 });
   mockGetUnsat.mockResolvedValue([]);
   mockFetchQuadsPage.mockResolvedValue({ items: [] });
+  mockVerifyRepair.mockResolvedValue(true);
+  mockVerifyRepairDetailed.mockResolvedValue({
+    verifiedConsistent: true,
+    removedCount: 1,
+    requestedCount: 1,
+    matchedCount: 1,
+  });
 });
 
 describe('explainDiagnostics', () => {
@@ -76,6 +89,108 @@ describe('explainDiagnostics', () => {
     expect(res.data.justifications[0]).toHaveLength(2);
     expect(mockExplainInconsistency).toHaveBeenCalledWith(2);
     expect(res.data.repairBrief.toLowerCase()).toContain('disjointwith');
+  });
+
+  it('inconsistent graph → returns ranked, verified suggestedRepairs targeting a justification axiom', async () => {
+    mockRunReasoning.mockResolvedValue({ isConsistent: false, errors: [] });
+    const mips = [
+      [
+        { subject: 'http://ex/frank', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'http://ex/Employee' },
+        { subject: 'http://ex/frank', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'http://ex/Contractor' },
+        { subject: 'http://ex/Employee', predicate: 'http://www.w3.org/2002/07/owl#disjointWith', object: 'http://ex/Contractor' },
+      ],
+    ];
+    mockExplainInconsistency.mockResolvedValue(mips);
+    mockVerifyRepair.mockResolvedValue(true);
+
+    const res = (await explainDiagnostics.handler({ maxJustifications: 3 })) as { success: boolean; data: any };
+    expect(res.success).toBe(true);
+    expect(Array.isArray(res.data.suggestedRepairs)).toBe(true);
+    expect(res.data.suggestedRepairs.length).toBeGreaterThanOrEqual(1);
+
+    const top = res.data.suggestedRepairs[0];
+    // The action targets an axiom that actually appears in a justification.
+    const axiomKeys = new Set(mips.flat().map((a) => `${a.subject} ${a.predicate} ${a.object}`));
+    const topKey = `${top.action.args.subjectIri} ${top.action.args.predicateIri} ${top.action.args.objectIri}`;
+    expect(axiomKeys.has(topKey)).toBe(true);
+    // The top candidate was symbolically verified.
+    expect(top.verifiedConsistent).toBe(true);
+    expect(top.action.tool).toMatch(/removeLink|removeTriple/);
+    // verifyRepair was invoked with the chosen axiom.
+    expect(mockVerifyRepair).toHaveBeenCalled();
+    // The brief enumerates the ranked repairs.
+    expect(res.data.repairBrief).toContain('SUGGESTED REPAIRS');
+  });
+
+  it('does not call verifyRepair when the graph is consistent', async () => {
+    await explainDiagnostics.handler({});
+    expect(mockVerifyRepair).not.toHaveBeenCalled();
+    expect(mockVerifyRepairDetailed).not.toHaveBeenCalled();
+  });
+
+  it('M2: two disjoint contradictions → per-axiom false, but full-set verified true is surfaced', async () => {
+    mockRunReasoning.mockResolvedValue({ isConsistent: false, errors: [] });
+    // Two INDEPENDENT contradictions (no shared axiom).
+    const mips = [
+      [
+        { subject: 'http://ex/frank', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'http://ex/A' },
+        { subject: 'http://ex/frank', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'http://ex/B' },
+      ],
+      [
+        { subject: 'http://ex/gina', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'http://ex/P' },
+        { subject: 'http://ex/gina', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'http://ex/Q' },
+      ],
+    ];
+    mockExplainInconsistency.mockResolvedValue(mips);
+    // Per-axiom removal NEVER restores consistency (the other clash remains).
+    mockVerifyRepair.mockResolvedValue(false);
+    // The FULL set together DOES restore consistency.
+    mockVerifyRepairDetailed.mockResolvedValue({
+      verifiedConsistent: true,
+      removedCount: 2,
+      requestedCount: 2,
+      matchedCount: 2,
+    });
+
+    const res = (await explainDiagnostics.handler({ maxJustifications: 3 })) as { success: boolean; data: any };
+    expect(res.success).toBe(true);
+
+    const inc = res.data.suggestedRepairs.filter((r: any) => r.issue === 'inconsistency' && !r.needsManualReview);
+    expect(inc.length).toBeGreaterThanOrEqual(2);
+    // Every per-axiom verdict is false…
+    for (const r of inc) expect(r.verifiedConsistent).toBe(false);
+    // …yet the full-set verdict is true and surfaced both top-level and per-repair.
+    expect(res.data.repairSetVerifiedConsistent).toBe(true);
+    for (const r of inc) expect(r.verifiedSet).toBe(true);
+    // The brief must NOT read a per-axiom false as "this repair is wrong".
+    expect(res.data.repairBrief).toContain('apply the full repair set');
+    expect(res.data.repairBrief).toContain('restore consistency');
+    // verifyRepairDetailed was called once with ALL removals.
+    expect(mockVerifyRepairDetailed).toHaveBeenCalledTimes(1);
+    expect(mockVerifyRepairDetailed.mock.calls[0][0]).toHaveLength(2);
+  });
+
+  it('L2: a matchedCount < requestedCount surfaces a warning (nothing-matched vs still-inconsistent)', async () => {
+    mockRunReasoning.mockResolvedValue({ isConsistent: false, errors: [] });
+    mockExplainInconsistency.mockResolvedValue([
+      [
+        { subject: 'http://ex/frank', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'http://ex/A' },
+        { subject: 'http://ex/frank', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'http://ex/B' },
+      ],
+    ]);
+    mockVerifyRepair.mockResolvedValue(false);
+    // One removal requested but zero matched (serialization mismatch).
+    mockVerifyRepairDetailed.mockResolvedValue({
+      verifiedConsistent: false,
+      removedCount: 0,
+      requestedCount: 1,
+      matchedCount: 0,
+    });
+    const res = (await explainDiagnostics.handler({})) as { success: boolean; data: any };
+    expect(res.success).toBe(true);
+    expect(res.data.repairSetMatchWarning).toBeTruthy();
+    expect(res.data.repairSetMatchWarning).toContain('0 of 1');
+    expect(res.data.repairBrief).toContain('WARNING');
   });
 
   it('unsatisfiable class from Konclude is reported', async () => {

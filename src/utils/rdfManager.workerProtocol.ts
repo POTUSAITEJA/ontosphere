@@ -140,6 +140,63 @@ export type RDFWorkerCommandPayloads = {
   runShaclValidation: undefined;
   explainInconsistency: { maxJustifications?: number };
   getUnsatisfiableClasses: undefined;
+  /**
+   * Symbolically verify a repair candidate: build a working store COPY without
+   * the listed axioms and re-run the EXISTING Konclude consistency oracle.
+   * Never mutates urn:vg:data. Returns { verifiedConsistent: boolean }.
+   */
+  verifyRepair: { removals: { subject: string; predicate: string; object: string }[] };
+  /**
+   * Search existing ontology terms (classes / properties / individuals) by
+   * label (rdfs:label, skos:prefLabel, skos:altLabel) or IRI local-name across
+   * ALL graphs — especially urn:vg:ontologies (loaded ontologies). Pure store
+   * query, no reasoner. Returns ranked candidates so agents REUSE an existing
+   * IRI instead of minting a new one. `kinds` defaults to classes + properties.
+   */
+  searchTerms: {
+    query: string;
+    kinds?: ("class" | "objectProperty" | "datatypeProperty" | "property" | "individual")[];
+    limit?: number;
+  };
+  /**
+   * Explain why an entailed axiom (subjectIri predicateIri objectIri) holds:
+   * Horridge-style justifications for an ARBITRARY entailed axiom (not just
+   * inconsistency). Uses an entailment-as-unsatisfiability reduction over the
+   * EXISTING Konclude consistency oracle. Supported shapes: rdfs:subClassOf and
+   * rdf:type with an IRI object. READ-ONLY — never mutates urn:vg:data.
+   * Returns { isEntailed, justifications: {subject,predicate,object}[][] }.
+   */
+  explainEntailment: {
+    subjectIri: string;
+    predicateIri: string;
+    objectIri: string;
+    /** Set true only when the object is a literal value (default: IRI object). */
+    objectIsLiteral?: boolean;
+    maxJustifications?: number;
+  };
+  /**
+   * Extract a self-contained syntactic-locality-based MODULE (sub-ontology) over
+   * a signature Σ. Gathers the TBox/axiom triples from the SAME base graphs the
+   * reasoning path uses (urn:vg:data + urn:vg:ontologies), converts them to the
+   * locality extractor's triple shape, and runs the ⊥-module ("bot") or iterated
+   * ⊤⊥* ("star") extraction. The module preserves ALL entailments over Σ.
+   * READ-ONLY — operates on a read of the store; never mutates urn:vg:data.
+   * Returns { moduleTriples: {subject,predicate,object}[], moduleSize, fullSize, signature }.
+   */
+  extractModule: {
+    signature: string[];
+    moduleType?: "bot" | "star";
+    includeOntologies?: boolean;
+  };
+  /**
+   * Enable or disable OPFS crash-recovery persistence for this session. The
+   * enable preference is owned by the main thread (localStorage); this command
+   * pushes it to the worker, where the actual OPFS I/O lives. When OPFS is
+   * unavailable the worker no-ops regardless of this flag.
+   */
+  setPersistence: { enabled: boolean };
+  /** Delete the OPFS snapshot file (forget the persisted graph). */
+  clearPersistedStore: undefined;
 };
 
 export const RDF_WORKER_COMMANDS = [
@@ -171,6 +228,12 @@ export const RDF_WORKER_COMMANDS = [
   "runShaclValidation",
   "explainInconsistency",
   "getUnsatisfiableClasses",
+  "verifyRepair",
+  "searchTerms",
+  "explainEntailment",
+  "extractModule",
+  "setPersistence",
+  "clearPersistedStore",
 ] as const;
 
 export type RDFWorkerCommandName = (typeof RDF_WORKER_COMMANDS)[number];
@@ -622,6 +685,101 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
   getUnsatisfiableClasses(payload) {
     invariant(typeof payload === "undefined", "getUnsatisfiableClasses payload must be undefined");
   },
+  verifyRepair(payload) {
+    assertPlainObject(payload, "verifyRepair payload must be an object");
+    const { removals } = payload as { removals: unknown };
+    assertArray(removals, "verifyRepair.removals must be an array");
+    for (const entry of removals as unknown[]) {
+      assertPlainObject(entry, "verifyRepair.removals entry must be an object");
+      const r = entry as Record<string, unknown>;
+      assertString(r.subject, "verifyRepair.removals entry.subject must be a string");
+      assertString(r.predicate, "verifyRepair.removals entry.predicate must be a string");
+      assertString(r.object, "verifyRepair.removals entry.object must be a string");
+    }
+  },
+  searchTerms(payload) {
+    assertPlainObject(payload, "searchTerms payload must be an object");
+    const { query, kinds, limit } = payload as RDFWorkerCommandPayloads["searchTerms"];
+    assertString(query, "searchTerms.query must be a string");
+    invariant(query.trim().length > 0, "searchTerms.query must be a non-empty string", { query });
+    if (typeof kinds !== "undefined") {
+      assertStringArray(kinds, "searchTerms.kinds must be an array of strings when provided");
+      const VALID_KINDS = new Set([
+        "class",
+        "objectProperty",
+        "datatypeProperty",
+        "property",
+        "individual",
+      ]);
+      for (const kind of kinds) {
+        invariant(
+          VALID_KINDS.has(kind),
+          "searchTerms.kinds entries must be one of 'class' | 'objectProperty' | 'datatypeProperty' | 'property' | 'individual'",
+          { kind },
+        );
+      }
+    }
+    assertOptionalFiniteNumber(limit, "searchTerms.limit must be a number when provided");
+  },
+  explainEntailment(payload) {
+    assertPlainObject(payload, "explainEntailment payload must be an object");
+    const { subjectIri, predicateIri, objectIri, objectIsLiteral, maxJustifications } =
+      payload as RDFWorkerCommandPayloads["explainEntailment"];
+    assertString(subjectIri, "explainEntailment.subjectIri must be a string");
+    assertString(predicateIri, "explainEntailment.predicateIri must be a string");
+    assertString(objectIri, "explainEntailment.objectIri must be a string");
+    invariant(subjectIri.trim().length > 0, "explainEntailment.subjectIri must be non-empty", { subjectIri });
+    invariant(predicateIri.trim().length > 0, "explainEntailment.predicateIri must be non-empty", { predicateIri });
+    invariant(objectIri.trim().length > 0, "explainEntailment.objectIri must be non-empty", { objectIri });
+    if (typeof objectIsLiteral !== "undefined") {
+      assertBoolean(objectIsLiteral, "explainEntailment.objectIsLiteral must be a boolean when provided");
+    }
+    assertOptionalFiniteNumber(
+      maxJustifications,
+      "explainEntailment.maxJustifications must be a number when provided",
+    );
+  },
+  extractModule(payload) {
+    assertPlainObject(payload, "extractModule payload must be an object");
+    const { signature, moduleType, includeOntologies } =
+      payload as RDFWorkerCommandPayloads["extractModule"];
+    assertStringArray(signature, "extractModule.signature must be an array of strings");
+    invariant(
+      signature.length > 0,
+      "extractModule.signature must be a non-empty array of term IRIs",
+      { signature },
+    );
+    for (const term of signature) {
+      invariant(
+        typeof term === "string" && term.trim().length > 0,
+        "extractModule.signature entries must be non-empty strings",
+        { term },
+      );
+    }
+    if (typeof moduleType !== "undefined") {
+      invariant(
+        moduleType === "bot" || moduleType === "star",
+        "extractModule.moduleType must be 'bot' or 'star' when provided",
+        { moduleType },
+      );
+    }
+    if (typeof includeOntologies !== "undefined") {
+      assertBoolean(
+        includeOntologies,
+        "extractModule.includeOntologies must be a boolean when provided",
+      );
+    }
+  },
+  setPersistence(payload) {
+    assertPlainObject(payload, "setPersistence payload must be an object");
+    assertBoolean(
+      (payload as { enabled: unknown }).enabled,
+      "setPersistence.enabled must be a boolean",
+    );
+  },
+  clearPersistedStore(payload) {
+    invariant(typeof payload === "undefined", "clearPersistedStore payload must be undefined");
+  },
 };
 
 export function validateRdfWorkerCommandInput(
@@ -669,6 +827,10 @@ export type RDFWorkerEventMap = {
   reasoningStage: { id: string; stage: string; meta?: Record<string, unknown> };
   reasoningResult: ReasoningResult;
   reasoningError: { message: string; stack?: string };
+  // Streaming liveness signal during a large importSerialized: `loaded` is the
+  // running count of triples written to the store so far; `total` is included
+  // only when cheaply known (it usually is not for a streamed parse).
+  importProgress: { id: string; loaded: number; total?: number; graphName?: string };
 };
 
 export type RDFWorkerEventName = keyof RDFWorkerEventMap;
@@ -752,6 +914,7 @@ export function assertRdfWorkerSubscriptionRequest(
     "reasoningStage",
     "reasoningResult",
     "reasoningError",
+    "importProgress",
   ]);
   invariant(validEvents.has(message.event as RDFWorkerEventName), "Unknown subscription event", {
     event: message.event,
@@ -863,6 +1026,29 @@ export function assertRdfWorkerEvent(value: unknown): asserts value is RDFWorker
         assertOptionalString(
           (payload as { stack?: unknown }).stack,
           "reasoningError payload.stack must be a string when provided",
+        );
+      }
+      return;
+    case "importProgress":
+      assertPlainObject(payload, "importProgress payload must be an object");
+      assertString(
+        (payload as { id: unknown }).id,
+        "importProgress payload.id must be a string",
+      );
+      assertNumber(
+        (payload as { loaded: unknown }).loaded,
+        "importProgress payload.loaded must be a finite number",
+      );
+      if (typeof (payload as { total?: unknown }).total !== "undefined") {
+        assertNumber(
+          (payload as { total?: unknown }).total,
+          "importProgress payload.total must be a finite number when provided",
+        );
+      }
+      if (typeof (payload as { graphName?: unknown }).graphName !== "undefined") {
+        assertOptionalString(
+          (payload as { graphName?: unknown }).graphName,
+          "importProgress payload.graphName must be a string when provided",
         );
       }
       return;

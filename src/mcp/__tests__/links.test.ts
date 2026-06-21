@@ -25,6 +25,11 @@ vi.mock('@/mcp/workspaceContext', () => ({
   getWorkspaceRefs: mockGetWorkspaceRefs,
 }));
 
+// No-op provenance recorder — recording is covered in provenance.test.ts.
+vi.mock('@/mcp/provenance', () => ({
+  getProvenanceRecorder: () => ({ recordEdit: vi.fn().mockResolvedValue(null) }),
+}));
+
 import { rdfManager } from '@/utils/rdfManager';
 import { linkTools } from '../tools/links';
 

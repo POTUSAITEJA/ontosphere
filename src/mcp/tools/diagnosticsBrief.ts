@@ -4,9 +4,35 @@
 
 export interface DiagnosticsData {
   isConsistent: boolean | null;
-  justifications: { subject: string; predicate: string; object: string }[][];
+  /**
+   * Inconsistency justifications (MIPS). Each axiom carries the optional source
+   * `graph` it physically resides in (urn:vg:data OR urn:vg:ontologies for
+   * imported schema axioms) and, for literal objects, the object term's
+   * `objectTermType`/`objectDatatype`/`objectLanguage`. These flow end-to-end
+   * so the apply path targets the correct graph and reconstructs the EXACT
+   * typed/lang literal (C1 + H2). All extra fields are OPTIONAL for back-compat.
+   */
+  justifications: {
+    subject: string;
+    predicate: string;
+    object: string;
+    objectTermType?: string;
+    objectDatatype?: string;
+    objectLanguage?: string;
+    graph?: string;
+  }[][];
   unsatisfiableClasses: string[];
-  profile: { owl2dl: boolean; violations: { axiom: string; reason: string }[] };
+  profile: {
+    // Legacy OWL 2 DL sanity-check fields (kept for backward compatibility).
+    owl2dl: boolean;
+    violations: { axiom: string; reason: string }[];
+    // Structural EL / QL / RL detection (added). Optional so older callers and
+    // fixtures that only set { owl2dl, violations } still type-check.
+    el?: { valid: boolean; violations: { construct: string; axiom: string; reason: string }[] };
+    ql?: { valid: boolean; violations: { construct: string; axiom: string; reason: string }[] };
+    rl?: { valid: boolean; violations: { construct: string; axiom: string; reason: string }[] };
+    mostRestrictive?: 'EL' | 'QL' | 'RL' | 'DL' | 'Full';
+  };
   shaclViolations: {
     focusNode: string | null;
     path: string | null;
@@ -61,25 +87,22 @@ function buildInconsistencySection(
   return lines.join('\n');
 }
 
-function buildUnsatisfiableSection(classes: string[]): string {
-  const lines: string[] = [`${sectionNum(2)}. UNSATISFIABLE CLASSES`];
-  for (const cls of classes) {
-    lines.push(
-      `   - ${localName(cls)}: This class can never have instances — relax its definition` +
-        ' (e.g. remove a disjointness or an over-constraining restriction).',
-    );
-  }
-  return lines.join('\n');
-}
-
 function buildProfileSection(
-  violations: DiagnosticsData['profile']['violations'],
+  profile: DiagnosticsData['profile'],
   num: number,
 ): string {
   const lines: string[] = [`${num}. OWL 2 DL PROFILE VIOLATIONS`];
-  for (const v of violations) {
+  for (const v of profile.violations) {
     lines.push(`   - Axiom: ${localName(v.axiom)}`);
     lines.push(`     Reason: ${v.reason}`);
+  }
+  if (profile.mostRestrictive) {
+    lines.push(
+      `   Tightest fitting OWL 2 profile: ${profile.mostRestrictive}` +
+        ` (EL=${profile.el?.valid ? 'in' : 'out'},` +
+        ` QL=${profile.ql?.valid ? 'in' : 'out'},` +
+        ` RL=${profile.rl?.valid ? 'in' : 'out'}).`,
+    );
   }
   return lines.join('\n');
 }
@@ -113,17 +136,102 @@ function buildShaclSection(
   return lines.join('\n');
 }
 
-// Small helper to compute running section numbers
-let _num = 0;
-function sectionNum(base: number): number {
-  return base;
+// ---------------------------------------------------------------------------
+// Suggested-repairs section (R1)
+// ---------------------------------------------------------------------------
+
+/** Minimal shape of a repair suggestion this brief needs (kept local to avoid a cycle). */
+export interface BriefRepair {
+  id: string;
+  issue: string;
+  action: {
+    tool: string;
+    args: {
+      subjectIri?: string;
+      predicateIri?: string;
+      objectIri?: string;
+      // C1 + H2: source graph + object term metadata threaded from the MIPS so
+      // the apply path hits the right graph and reconstructs the exact literal.
+      graph?: string;
+      objectTermType?: string;
+      objectDatatype?: string;
+      objectLanguage?: string;
+    };
+  };
+  rationale: string;
+  verifiedConsistent?: boolean;
+  verifiedSet?: boolean;
+  needsValue?: boolean;
+  needsManualReview?: boolean;
+}
+
+/** Extra verification context surfaced alongside the ranked repair list. */
+export interface RepairBriefOptions {
+  /**
+   * Result of removing the FULL hitting set at once. true ⇒ applying ALL the
+   * suggested inconsistency repairs together restores consistency; false ⇒ it
+   * does not (manual review needed); null/undefined ⇒ not verified.
+   */
+  repairSetVerifiedConsistent?: boolean | null;
+  /** Warning when some repair axioms matched no triple during verification. */
+  repairSetMatchWarning?: string;
+}
+
+function buildSuggestedRepairsSection(
+  repairs: BriefRepair[],
+  options: RepairBriefOptions = {},
+): string {
+  const lines: string[] = ['SUGGESTED REPAIRS (ranked):'];
+
+  const hasMultiple =
+    repairs.filter((r) => r.issue === 'inconsistency' && !r.needsManualReview).length > 1;
+
+  repairs.forEach((r) => {
+    if (r.needsManualReview) {
+      lines.push(`   ${r.id}. [manual review] — ${r.rationale}`);
+      return;
+    }
+    // A per-axiom `false` does NOT mean the repair is wrong: with multiple
+    // independent contradictions no single removal restores consistency on its
+    // own. Render it as "not alone" and point to the full set.
+    const verify =
+      r.verifiedConsistent === true
+        ? ' [verified: removing this alone restores consistency]'
+        : r.verifiedConsistent === false
+          ? hasMultiple
+            ? ' [verified: does NOT restore consistency ALONE — apply the full repair set below]'
+            : ' [verified: does NOT alone restore consistency]'
+          : '';
+    const value = r.needsValue ? ' [you must supply a value]' : '';
+    lines.push(`   ${r.id}. ${r.action.tool} — ${r.rationale}${verify}${value}`);
+  });
+
+  // Full-set verdict (M2): the union of the suggested repairs is the actual fix.
+  if (options.repairSetVerifiedConsistent === true) {
+    lines.push(
+      '   ⇒ Applying ALL of the above inconsistency repairs together is verified to restore consistency.',
+    );
+  } else if (options.repairSetVerifiedConsistent === false) {
+    lines.push(
+      '   ⇒ NOTE: applying all of the above together was NOT verified to restore consistency — manual review may be required.',
+    );
+  }
+  if (options.repairSetMatchWarning) {
+    lines.push(`   ⇒ WARNING: ${options.repairSetMatchWarning}`);
+  }
+
+  return lines.join('\n');
 }
 
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
-export function buildRepairBrief(d: DiagnosticsData): string {
+export function buildRepairBrief(
+  d: DiagnosticsData,
+  repairs: BriefRepair[] = [],
+  options: RepairBriefOptions = {},
+): string {
   const hasInconsistency = d.isConsistent === false;
   const hasUnsatisfiable = d.unsatisfiableClasses.length > 0;
   const hasProfileViolations = d.profile.owl2dl === false && d.profile.violations.length > 0;
@@ -161,13 +269,17 @@ export function buildRepairBrief(d: DiagnosticsData): string {
   }
 
   if (hasProfileFlag) {
-    sections.push(buildProfileSection(d.profile.violations, num));
+    sections.push(buildProfileSection(d.profile, num));
     num++;
   }
 
   if (hasShaclViolations) {
     sections.push(buildShaclSection(d.shaclViolations, num));
     num++;
+  }
+
+  if (repairs.length > 0) {
+    sections.push(buildSuggestedRepairsSection(repairs, options));
   }
 
   return sections.join('\n\n');
