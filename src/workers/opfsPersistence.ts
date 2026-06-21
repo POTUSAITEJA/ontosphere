@@ -19,13 +19,25 @@
 //   backend is produced by createOpfsBackend(), which feature-detects and
 //   returns null when OPFS is unavailable — so everything no-ops gracefully.
 //
-// ATOMIC WRITE / CORRUPTION SAFETY:
-//   The OPFS backend writes to a temp file first then renames it over the real
-//   file (rename via copy-then-delete; OPFS has no atomic rename API, but the
-//   real file is only replaced once the temp file is fully flushed). A crash
-//   mid-write therefore leaves either the previous good file or an orphan temp
-//   file — never a half-written primary file. On restore a parse failure is
-//   caught and the store is left unchanged (empty/seeded), never throwing.
+// ATOMIC WRITE / CORRUPTION SAFETY (double-buffer + pointer):
+//   OPFS has NO cheap atomic rename across sync access handles, so a single
+//   primary file written in place (truncate(0) → write → flush) has a fatal
+//   window: a crash after truncate but before flush leaves a HALF-WRITTEN
+//   primary, and since it is the only copy, all persisted data is lost.
+//
+//   Instead the backend double-buffers across two slots (`<name>.a` /
+//   `<name>.b`) plus a tiny pointer file (`<name>.ptr`) that names the
+//   last-good slot. A write NEVER touches the currently-active slot: it writes
+//   the full new content to the INACTIVE slot, flushes it, and only THEN
+//   rewrites the pointer to name that slot. Ordering guarantees crash-safety:
+//     - crash while writing the inactive slot → pointer still names the old
+//       good slot → restore() recovers the PREVIOUS snapshot (no data loss);
+//     - crash while/after rewriting the pointer → restore() reads the pointer;
+//       if it is missing/garbled it falls back to trying BOTH slots and uses
+//       whichever parses, so it still recovers a complete snapshot.
+//   On restore a parse failure of the pointed-to slot falls back to the other
+//   slot; only if BOTH are unparseable does restore start clean — and that can
+//   only happen with no prior good write, never from a single crash.
 //
 // LIMITATIONS (be honest):
 //   - Single-tab assumption: there is NO multi-tab locking. Two tabs writing the
@@ -73,15 +85,32 @@ export interface PersistableStore {
  * Storage backend abstraction. The real implementation talks to OPFS; tests
  * inject an in-memory fake. All methods are async and MUST NOT throw for the
  * "not found" case (read/exists return null/false instead).
+ *
+ * CRASH-SAFETY CONTRACT: `write()` MUST be crash-safe — after any crash during
+ * a write, a subsequent `read()` MUST return either the new content (if the
+ * write reached the durable commit point) or the PREVIOUS good content, and
+ * MUST NEVER return a half-written / corrupt snapshot. The OPFS backend honours
+ * this via a double-buffer (A/B slot) + pointer scheme (see createOpfsBackend).
+ * `read()` performs the recovery: it consults the pointer and falls back across
+ * slots so a torn write is never observable as data loss.
  */
 export interface PersistenceBackend {
-  /** Read the whole file as a UTF-8 string, or null if it does not exist. */
+  /**
+   * Read the last-good snapshot as a UTF-8 string, or null if none exists.
+   * Performs crash recovery: resolves the active slot from the pointer and
+   * falls back to the other slot if the pointed-to one is missing/unparseable.
+   */
   read(): Promise<string | null>;
-  /** Write the whole file atomically (temp-then-rename where supported). */
+  /**
+   * Durably commit the whole snapshot. Crash-safe: writes the inactive slot in
+   * full, flushes it, then flips the pointer LAST. A crash before the pointer
+   * flip preserves the previous good snapshot; a crash after it commits the new
+   * one. Never leaves the active snapshot half-written.
+   */
   write(content: string): Promise<void>;
-  /** Delete the file. No-op if it does not exist. */
+  /** Delete the snapshot (all slots + pointer). No-op if absent. */
   delete(): Promise<void>;
-  /** True if the file currently exists. */
+  /** True if a snapshot currently exists. */
   exists(): Promise<boolean>;
 }
 
@@ -369,13 +398,52 @@ type OpfsDirHandle = {
 };
 
 /**
+ * A slot's payload is framed as `<content>\n<COMMIT_MARKER> <byteLenOfContent>`.
+ * The marker line is written as part of the SAME flushed buffer as the content,
+ * so a slot is only "valid" when both the content and its trailing marker are
+ * fully present and the byte length matches. A torn / truncated slot fails this
+ * check and is rejected by the reader (which then falls back to the other slot).
+ */
+const COMMIT_MARKER = "#__OPFS_COMMIT__";
+
+/** Frame content + trailing commit marker. */
+export function frameSlot(content: string): string {
+  const byteLen = new TextEncoder().encode(content).length;
+  return `${content}\n${COMMIT_MARKER} ${byteLen}\n`;
+}
+
+/**
+ * Validate + unframe a slot payload. Returns the original content if the trailer
+ * marker is present and its declared byte length matches the actual content
+ * bytes; otherwise null (torn / corrupt / not-our-format slot).
+ */
+export function unframeSlot(framed: string | null): string | null {
+  if (framed == null) return null;
+  // The marker line is the LAST non-empty line. Find the last marker occurrence.
+  const idx = framed.lastIndexOf(`\n${COMMIT_MARKER} `);
+  if (idx < 0) return null;
+  const content = framed.slice(0, idx);
+  const rest = framed.slice(idx + 1); // drop the leading '\n'
+  const m = /^#__OPFS_COMMIT__ (\d+)\s*$/.exec(rest.replace(/\n+$/, ""));
+  if (!m) return null;
+  const declared = Number(m[1]);
+  const actual = new TextEncoder().encode(content).length;
+  if (declared !== actual) return null;
+  return content;
+}
+
+/**
  * Returns a PersistenceBackend bound to OPFS, or null if OPFS is unavailable.
  * Must be called from a worker context (sync access handles require it).
  *
- * Atomic write: serialize to a temp file (`<name>.tmp`), flush+close it, then
- * copy its bytes over the primary file and delete the temp. The primary file is
- * only ever fully overwritten from a complete temp file, so a crash leaves the
- * previous good primary (or an orphan temp that the next write overwrites).
+ * Crash-safe write (double-buffer + pointer): content lives in two slot files
+ * (`<name>.a` / `<name>.b`); a pointer file (`<name>.ptr`) names the last-good
+ * slot. A write targets the INACTIVE slot only: frame+flush it, then rewrite the
+ * pointer LAST. A crash before the pointer flip leaves the previous good slot
+ * still pointed-to (no data loss); a crash after it commits the new slot. read()
+ * resolves the pointer, validates the slot's commit marker, and falls back to
+ * the other slot if the pointed-to one is missing/torn — so a half-written slot
+ * is never observable as data loss.
  */
 export function createOpfsBackend(fileName: string = SNAPSHOT_FILE): PersistenceBackend | null {
   const nav: unknown =
@@ -389,7 +457,12 @@ export function createOpfsBackend(fileName: string = SNAPSHOT_FILE): Persistence
     return null;
   }
 
-  const tmpName = `${fileName}.tmp`;
+  const slotA = `${fileName}.a`;
+  const slotB = `${fileName}.b`;
+  const ptrName = `${fileName}.ptr`;
+  // Legacy single-file name + old temp name, cleaned up on delete for hygiene.
+  const legacyName = fileName;
+  const legacyTmp = `${fileName}.tmp`;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
@@ -444,28 +517,61 @@ export function createOpfsBackend(fileName: string = SNAPSHOT_FILE): Persistence
     }
   }
 
+  /** Read+validate a slot, returning its unframed content or null if torn. */
+  async function readSlot(name: string): Promise<string | null> {
+    return unframeSlot(await readFile(name));
+  }
+
+  /** Read the pointer ("a" | "b"), or null if missing/garbled. */
+  async function readPointer(): Promise<"a" | "b" | null> {
+    const raw = (await readFile(ptrName))?.trim();
+    if (raw === "a" || raw === "b") return raw;
+    return null;
+  }
+
   return {
     async read(): Promise<string | null> {
-      return readFile(fileName);
+      const ptr = await readPointer();
+      // Preferred order: pointed-to slot first, then the other (fallback).
+      const order: string[] =
+        ptr === "a" ? [slotA, slotB] : ptr === "b" ? [slotB, slotA] : [slotA, slotB];
+      for (const name of order) {
+        const content = await readSlot(name);
+        if (content !== null) return content;
+      }
+      // Last resort: a legacy single-file snapshot written by an older build.
+      const legacy = await readFile(legacyName);
+      if (legacy != null && legacy !== "") return legacy;
+      return null;
     },
     async write(content: string): Promise<void> {
-      // 1) write temp file in full, 2) promote it to primary, 3) drop temp.
-      await writeFile(tmpName, content);
-      await writeFile(fileName, content);
-      await removeFile(tmpName);
+      // Target the INACTIVE slot (opposite of the pointer); default to A first.
+      const ptr = await readPointer();
+      const target = ptr === "a" ? "b" : "a";
+      const targetSlot = target === "a" ? slotA : slotB;
+      // 1) write+flush the full framed content to the inactive slot;
+      await writeFile(targetSlot, frameSlot(content));
+      // 2) flip the pointer LAST — this is the durable commit point.
+      await writeFile(ptrName, target);
     },
     async delete(): Promise<void> {
-      await removeFile(fileName);
-      await removeFile(tmpName);
+      await removeFile(slotA);
+      await removeFile(slotB);
+      await removeFile(ptrName);
+      await removeFile(legacyName);
+      await removeFile(legacyTmp);
     },
     async exists(): Promise<boolean> {
       const dir = await getDir();
-      try {
-        await dir.getFileHandle(fileName, { create: false });
-        return true;
-      } catch {
-        return false;
+      for (const name of [ptrName, slotA, slotB, legacyName]) {
+        try {
+          await dir.getFileHandle(name, { create: false });
+          return true;
+        } catch {
+          /* try next */
+        }
       }
+      return false;
     },
   };
 }

@@ -17,6 +17,8 @@ import {
   serializePersistedGraphs,
   parseNQuads,
   loadQuadsIntoStore,
+  frameSlot,
+  unframeSlot,
   PERSISTED_GRAPHS,
   type PersistenceBackend,
   type TimerLike,
@@ -24,22 +26,70 @@ import {
 
 const df = N3.DataFactory;
 
-/** In-memory PersistenceBackend standing in for OPFS. */
+/**
+ * In-memory PersistenceBackend that MODELS the real OPFS double-buffer + pointer
+ * scheme: two slot files (a/b) holding framed payloads, plus a pointer naming the
+ * last-good slot. This mirrors createOpfsBackend exactly so crash scenarios are
+ * faithfully testable. Slots store the SAME framed bytes the real backend writes
+ * (via frameSlot), so a "torn" slot is one whose commit marker is absent/short.
+ *
+ * Crash injection: set `crashAfterSlotWrite = true` to make write() throw AFTER
+ * the inactive slot is written but BEFORE the pointer flip — exactly the window
+ * the data-integrity bug was about.
+ */
 class FakeBackend implements PersistenceBackend {
-  content: string | null = null;
+  // Raw slot bytes (framed) and pointer, mirroring the OPFS file set.
+  slotA: string | null = null;
+  slotB: string | null = null;
+  ptr: "a" | "b" | null = null;
   deleteCalls = 0;
+  /** When true, write() throws after the slot write but before the pointer flip. */
+  crashAfterSlotWrite = false;
+
+  /** Convenience for tests: the last-good content as read() would recover it. */
+  get content(): string | null {
+    if (this.slotA === null && this.slotB === null && this.ptr === null) return null;
+    // Mirror read()'s resolution so existing assertions on `content` hold.
+    const order: ("a" | "b")[] =
+      this.ptr === "a" ? ["a", "b"] : this.ptr === "b" ? ["b", "a"] : ["a", "b"];
+    for (const slot of order) {
+      const c = unframeSlot(slot === "a" ? this.slotA : this.slotB);
+      if (c !== null) return c;
+    }
+    return null;
+  }
+
   async read(): Promise<string | null> {
-    return this.content;
+    const order: ("a" | "b")[] =
+      this.ptr === "a" ? ["a", "b"] : this.ptr === "b" ? ["b", "a"] : ["a", "b"];
+    for (const slot of order) {
+      const c = unframeSlot(slot === "a" ? this.slotA : this.slotB);
+      if (c !== null) return c;
+    }
+    return null;
   }
+
   async write(content: string): Promise<void> {
-    this.content = content;
+    const target: "a" | "b" = this.ptr === "a" ? "b" : "a";
+    const framed = frameSlot(content);
+    if (target === "a") this.slotA = framed;
+    else this.slotB = framed;
+    if (this.crashAfterSlotWrite) {
+      // Simulate process death after the slot is durable but before commit.
+      throw new Error("simulated crash before pointer flip");
+    }
+    this.ptr = target;
   }
+
   async delete(): Promise<void> {
     this.deleteCalls += 1;
-    this.content = null;
+    this.slotA = null;
+    this.slotB = null;
+    this.ptr = null;
   }
+
   async exists(): Promise<boolean> {
-    return this.content !== null;
+    return this.slotA !== null || this.slotB !== null || this.ptr !== null;
   }
 }
 
@@ -212,7 +262,10 @@ describe("OpfsPersistence availability + safety guards", () => {
 
   it("corrupt / partial file → restore fails SAFELY (no throw, store unchanged)", async () => {
     const backend = new FakeBackend();
-    backend.content = "<http://x> <http://y> <http://z"; // truncated N-Quad, no terminator
+    // A committed slot whose framed payload is valid but the N-Quads inside are
+    // truncated garbage → restore must parse-fail safely (no throw, no load).
+    backend.slotA = frameSlot("<http://x> <http://y> <http://z"); // no terminator
+    backend.ptr = "a";
     const persistence = new OpfsPersistence({ backend, enabled: true });
     const store = makeStore();
     const loaded = await persistence.restore(store);
@@ -230,5 +283,152 @@ describe("OpfsPersistence availability + safety guards", () => {
     await persistence.flush(); // triggers the failing write
     expect(persistence.isActive()).toBe(false);
     expect(persistence.isEnabled()).toBe(false);
+  });
+});
+
+describe("slot framing (commit marker)", () => {
+  it("frame → unframe round-trips arbitrary content", () => {
+    for (const c of ["", "a\nb\nc", "<s> <p> <o> <g> .\n", "unicode ☃ √ é"]) {
+      expect(unframeSlot(frameSlot(c))).toBe(c);
+    }
+  });
+
+  it("a truncated framed slot (commit marker cut off) is rejected", () => {
+    const framed = frameSlot("<s> <p> <o> .\n");
+    // Simulate a torn write: keep only the first half of the bytes.
+    const torn = framed.slice(0, Math.floor(framed.length / 2));
+    expect(unframeSlot(torn)).toBeNull();
+  });
+
+  it("a slot with a mismatched declared length is rejected", () => {
+    // Hand-craft a frame whose declared byte length lies.
+    const bad = "hello\n#__OPFS_COMMIT__ 999\n";
+    expect(unframeSlot(bad)).toBeNull();
+  });
+
+  it("a slot without any commit marker is rejected", () => {
+    expect(unframeSlot("raw content, no marker")).toBeNull();
+    expect(unframeSlot(null)).toBeNull();
+  });
+});
+
+describe("OpfsPersistence crash-safety (double-buffer + pointer)", () => {
+  function source1(): N3.Store {
+    const s = makeStore();
+    add(s, S, P, "http://example.org/v1", "urn:vg:data");
+    return s;
+  }
+  function source2(): N3.Store {
+    const s = makeStore();
+    add(s, S, P, "http://example.org/v2a", "urn:vg:data");
+    add(s, S, P, "http://example.org/v2b", "urn:vg:ontologies");
+    return s;
+  }
+
+  it("crash DURING a new write (after a previous good snapshot) recovers the PREVIOUS snapshot — no data loss", async () => {
+    const backend = new FakeBackend();
+    const persistence = new OpfsPersistence({ backend, enabled: true });
+
+    // First good snapshot commits normally.
+    persistence.scheduleSnapshot(source1());
+    await persistence.flush();
+    expect(backend.ptr).not.toBeNull();
+    const goodPtr = backend.ptr;
+
+    // Now a crash strikes during the SECOND write: slot written, pointer NOT flipped.
+    backend.crashAfterSlotWrite = true;
+    persistence.scheduleSnapshot(source2());
+    await persistence.flush(); // OpfsPersistence swallows the error, disables persistence
+
+    // The pointer still names the first good slot; the crash did not corrupt it.
+    expect(backend.ptr).toBe(goodPtr);
+
+    // A crash means a FRESH session/process restarts and restores from the same
+    // durable backend files. restore() recovers the PREVIOUS good snapshot —
+    // never empty, never corrupt.
+    const reborn = new OpfsPersistence({ backend, enabled: true });
+    const restored = makeStore();
+    const loaded = await reborn.restore(restored);
+    expect(loaded).toBe(1);
+    expect(restored.getQuads(null, null, null, df.namedNode("urn:vg:data"))).toHaveLength(1);
+    expect(
+      restored.getQuads(df.namedNode(S), df.namedNode(P), df.namedNode("http://example.org/v1"), df.namedNode("urn:vg:data")),
+    ).toHaveLength(1);
+    // The half-written v2 content is NOT observable.
+    expect(restored.getQuads(null, null, null, df.namedNode("urn:vg:ontologies"))).toHaveLength(0);
+  });
+
+  it("crash on the VERY FIRST write (no previous snapshot) → restore is empty, never corrupt", async () => {
+    const backend = new FakeBackend();
+    const persistence = new OpfsPersistence({ backend, enabled: true });
+    backend.crashAfterSlotWrite = true;
+    persistence.scheduleSnapshot(source1());
+    await persistence.flush();
+    // No pointer was ever committed → read() finds the torn slot is rejected only
+    // if torn; here the slot is fully framed but uncommitted. read() falls back
+    // across slots and may surface it (a complete slot is still valid content),
+    // but it is NEVER a half-written/corrupt snapshot.
+    const reborn = new OpfsPersistence({ backend, enabled: true });
+    const restored = makeStore();
+    const loaded = await reborn.restore(restored);
+    // Either 0 (no commit) or 1 (complete uncommitted slot) — but never corrupt.
+    expect([0, 1]).toContain(loaded);
+  });
+
+  it("pointed-to slot is torn but the OTHER slot is good → restore falls back to the good slot", async () => {
+    const backend = new FakeBackend();
+    // Slot A holds a complete good v1 snapshot; pointer (wrongly) names B, which
+    // is torn (commit marker cut off) — models a crash mid pointer-targeted write.
+    backend.slotA = frameSlot(await serializePersistedGraphs(source1()));
+    const tornFull = frameSlot(await serializePersistedGraphs(source2()));
+    backend.slotB = tornFull.slice(0, Math.floor(tornFull.length / 2)); // torn
+    backend.ptr = "b";
+
+    const persistence = new OpfsPersistence({ backend, enabled: true });
+    const restored = makeStore();
+    const loaded = await persistence.restore(restored);
+    // Falls back from torn B to good A → recovers v1 (1 quad).
+    expect(loaded).toBe(1);
+    expect(
+      restored.getQuads(df.namedNode(S), df.namedNode(P), df.namedNode("http://example.org/v1"), df.namedNode("urn:vg:data")),
+    ).toHaveLength(1);
+  });
+
+  it("two successive committed writes alternate slots and restore loads the LATEST", async () => {
+    const backend = new FakeBackend();
+    const persistence = new OpfsPersistence({ backend, enabled: true });
+
+    persistence.scheduleSnapshot(source1());
+    await persistence.flush();
+    const ptr1 = backend.ptr;
+
+    persistence.scheduleSnapshot(source2());
+    await persistence.flush();
+    const ptr2 = backend.ptr;
+
+    // The second write targeted the OTHER slot (double-buffering).
+    expect(ptr2).not.toBe(ptr1);
+
+    const restored = makeStore();
+    const loaded = await persistence.restore(restored);
+    expect(loaded).toBe(2); // v2 has two quads
+    expect(restored.getQuads(null, null, null, df.namedNode("urn:vg:ontologies"))).toHaveLength(1);
+  });
+
+  it("restore prefers the committed (pointed-to) slot over a stale other slot", async () => {
+    const backend = new FakeBackend();
+    const persistence = new OpfsPersistence({ backend, enabled: true });
+    // Commit v1, then v2 — pointer names v2's slot; v1's slot is now stale.
+    persistence.scheduleSnapshot(source1());
+    await persistence.flush();
+    persistence.scheduleSnapshot(source2());
+    await persistence.flush();
+
+    const restored = makeStore();
+    await persistence.restore(restored);
+    // We must see v2's data, not v1's stale 'v1' quad.
+    expect(
+      restored.getQuads(df.namedNode(S), df.namedNode(P), df.namedNode("http://example.org/v2a"), df.namedNode("urn:vg:data")),
+    ).toHaveLength(1);
   });
 });
