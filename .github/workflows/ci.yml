@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast quality gates that don't need a browser. Run once on Linux.
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install (reproducible)
+        run: npm ci
+      - name: Typecheck (ratchet — must not exceed baseline)
+        run: node scripts/typecheck-ratchet.mjs
+      - name: MCP manifest drift check
+        run: npm run check:mcp
+      - name: Lint (hard gate — zero errors; warnings allowed)
+        # The error backlog was cleared to 0; eslint exits non-zero only on errors,
+        # so this is now a real gate. Drive warnings down over time too.
+        run: npm run lint
+
+  # Unit/integration tests across the OS matrix so Windows-only breakage
+  # (e.g. dev scripts, path resolution) is caught before it reaches users.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install (reproducible)
+        run: npm ci
+      - name: Run unit/integration tests
+        # REQUIRE_KONCLUDE makes the reasoner integration tests HARD-FAIL if the
+        # Konclude WASM reasoner can't initialize, instead of silently skipping.
+        env:
+          REQUIRE_KONCLUDE: '1'
+        run: npm test -- --run
+
+  # End-to-end functional specs (reasoning / SHACL / SPARQL / MCP relay).
+  # Demo recording specs are excluded by playwright.config.ts (testIgnore).
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install (reproducible)
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - name: Build
+        run: npm run build
+      - name: Run e2e
+        run: npm run test:e2e
