@@ -26,4 +26,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 )
 Button.displayName = "Button"
 
+// buttonVariants is a re-exported cva() const (not declared here, so allowConstantExport
+// does not cover it); the co-export with Button is the shadcn-ui convention.
+// eslint-disable-next-line react-refresh/only-export-components
 export { Button, buttonVariants }

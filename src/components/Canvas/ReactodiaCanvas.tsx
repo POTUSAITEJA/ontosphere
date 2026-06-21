@@ -60,7 +60,9 @@ const Layouts = Reactodia.defineLayoutWorker(() =>
   new Worker(new URL('@reactodia/workspace/layout.worker', import.meta.url), { type: 'module' })
 );
 
-// Singletons — one per app lifetime
+// Singletons — one per app lifetime. dataProvider is an exported app-lifetime
+// singleton (not a component); it must live alongside the canvas that wires it up.
+// eslint-disable-next-line react-refresh/only-export-components
 export const dataProvider = new N3DataProvider();
 const metadataProvider = new RdfMetadataProvider(rdfManager, dataProvider);
 const validationProvider = new RdfValidationProvider();
@@ -182,7 +184,9 @@ async function flushAuthoringState(
 
   // Write to RDF store — deleteIris go via removeAllQuadsForIri (hits all graphs),
   // add/change/relationDelete triples go via syncBatch on urn:vg:data.
-  const rdfOps: Promise<void>[] = [];
+  // applyBatch now resolves to the actual store delta ({added, removed}); we
+  // only await completion here, so widen the op list to ignore the value.
+  const rdfOps: Promise<unknown>[] = [];
   if (removes.length > 0 || adds.length > 0) {
     rdfOps.push(rdfManager.applyBatch({ removes, adds }, 'urn:vg:data'));
   }
@@ -557,6 +561,9 @@ export default function ReactodiaCanvas() {
   const [ontologyListOpen, setOntologyListOpen] = React.useState(false);
   const [layoutPanelOpen, setLayoutPanelOpen] = React.useState(false);
   const [isReasoning, setIsReasoning] = React.useState(false);
+  // Ref mirror of isReasoning so closure callbacks (onSubjectsChange handler) can
+  // read the latest value without capturing stale state.
+  const isReasoningRef = React.useRef(false);
   const [isInconsistentDetected, setIsInconsistentDetected] = React.useState(false);
   const [isClustered, setIsClustered] = React.useState(false);
   const levelSnapshot = React.useSyncExternalStore(
@@ -960,6 +967,11 @@ export default function ReactodiaCanvas() {
 
     rdfManager.onSubjectsChange(handler as any);
     return () => rdfManager.offSubjectsChange(handler as any);
+    // Mount-only: this registers a single rdfManager subscription for the component's
+    // lifetime. `actions` (stable Zustand setters) and `defaultLayout` (stable prop) are
+    // read inside the handler; adding them would re-subscribe on every render and churn
+    // the incremental-sync handler. Live config is read via getState(), not via deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Clustering is manual-only (top bar Cluster button). No auto-trigger on algo/threshold change.
@@ -1067,6 +1079,11 @@ export default function ReactodiaCanvas() {
         ctx.editor.revalidateEntities(affected as ReadonlySet<Reactodia.ElementIri>);
       }
     });
+    // Keyed to view-mode transitions only. `actions` (stable Zustand setters) and
+    // `defaultLayout` (stable worker handle from module-scope Layouts) never change for
+    // the component lifetime, so omitting them cannot cause a stale closure; including
+    // them would only obscure that this effect models an ABox/TBox switch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasState.viewMode]);
 
   // Startup initialization: ontology autoload + rdfUrl parameter load
@@ -1390,7 +1407,9 @@ export default function ReactodiaCanvas() {
         ctx.model.removeElement(el.id);
       }
     });
-  }, []);
+    // `actions` is a stable reference (memoized in useCanvasState), so listing it keeps
+    // this callback's identity stable while satisfying the dependency check.
+  }, [actions]);
 
   const handleClearInferred = React.useCallback(() => {
     dataProvider.clearInferred();
@@ -1449,6 +1468,7 @@ export default function ReactodiaCanvas() {
 
   const handleRunReasoning = React.useCallback(async (reasonerBackend?: 'konclude' | 'n3') => {
     setIsReasoning(true);
+    isReasoningRef.current = true;
     setIsInconsistentDetected(false);
     try {
       const cfg = useAppConfigStore.getState().config;
@@ -1490,6 +1510,7 @@ export default function ReactodiaCanvas() {
       return result;
     } finally {
       setIsReasoning(false);
+      isReasoningRef.current = false;
       setIsInconsistentDetected(false);
     }
   }, [handleApplyInferred]);
@@ -1513,6 +1534,100 @@ export default function ReactodiaCanvas() {
   React.useEffect(() => {
     registerSetViewMode(actions.setViewMode);
   }, [actions.setViewMode]);
+
+  // ─── Auto-reasoning: trigger handleRunReasoning on urn:vg:data edits ─────────
+  // Read autoReasoning from settings store. Using getState() inside the handler
+  // avoids re-registering the subscription on every settings change.
+  const autoReasoningDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    const handler = (
+      _subjects: string[],
+      _quads?: unknown,
+      _snapshot?: unknown,
+      meta?: Record<string, unknown> | null,
+    ) => {
+      // Guard 1: only react to explicit urn:vg:data writes — NOT to inferred-graph
+      // writes that handleRunReasoning itself makes. This is the primary infinite-loop
+      // break: every emitSubjects call from the reasoner carries graphName=urn:vg:inferred,
+      // so it is unconditionally ignored here.
+      const graphName = meta && typeof meta.graphName === 'string' ? meta.graphName : null;
+      const isDataGraphWrite = graphName === 'urn:vg:data' || graphName === null;
+      const isInferredGraphWrite = graphName === 'urn:vg:inferred';
+      if (!isDataGraphWrite || isInferredGraphWrite) return;
+
+      // Guard 2: skip full-refresh (initial load / view-mode switch) — those are not
+      // user edits; firing reasoning on startup would be noisy.
+      if (meta?.reason === 'emitAllSubjects') return;
+
+      // Guard 3: only proceed when autoReasoning is enabled (read live from store).
+      if (!useSettingsStore.getState().settings.autoReasoning) return;
+
+      // Guard 4: do not trigger while a run is already in progress.
+      if (isReasoningRef.current) return;
+
+      // Debounce: coalesce rapid successive edits into a single reasoning run.
+      if (autoReasoningDebounceRef.current) clearTimeout(autoReasoningDebounceRef.current);
+      autoReasoningDebounceRef.current = setTimeout(() => {
+        autoReasoningDebounceRef.current = null;
+        // Re-check guards inside the timeout in case state changed while waiting.
+        if (!useSettingsStore.getState().settings.autoReasoning) return;
+        if (isReasoningRef.current) return;
+        void handleRunReasoning();
+      }, 1500);
+    };
+
+    rdfManager.onSubjectsChange(handler as any);
+    return () => {
+      rdfManager.offSubjectsChange(handler as any);
+      if (autoReasoningDebounceRef.current) {
+        clearTimeout(autoReasoningDebounceRef.current);
+        autoReasoningDebounceRef.current = null;
+      }
+    };
+  }, [handleRunReasoning]);
+
+  // ─── Undo / Redo keyboard shortcuts (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y) ──
+  React.useEffect(() => {
+    const handleUndoRedo = (e: KeyboardEvent) => {
+      // Skip when focus is inside a text input/textarea/contenteditable so that
+      // native browser undo (for typed text) is not hijacked.
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable
+      ) return;
+
+      const modKey = /mac/i.test(navigator.userAgent) ? e.metaKey : e.ctrlKey;
+      if (!modKey) return;
+
+      const model = modelRef.current;
+      if (!model) return;
+
+      if (e.key === 'z' && !e.shiftKey && !e.altKey) {
+        // Ctrl/Cmd+Z → undo
+        e.preventDefault();
+        e.stopPropagation();
+        if (model.history.undoStack.length > 0) {
+          model.history.undo();
+        }
+      } else if (
+        (e.key === 'z' && e.shiftKey && !e.altKey) ||
+        (e.key === 'y' && !e.shiftKey && !e.altKey)
+      ) {
+        // Ctrl/Cmd+Shift+Z or Ctrl+Y → redo
+        e.preventDefault();
+        e.stopPropagation();
+        if (model.history.redoStack.length > 0) {
+          model.history.redo();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleUndoRedo, { capture: true });
+    return () => document.removeEventListener('keydown', handleUndoRedo, { capture: true });
+  }, []);
 
   const handleFileChange = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1546,12 +1661,26 @@ export default function ReactodiaCanvas() {
     setLoadOntologyOpen(true);
   }, []);
 
-  const handleExportRdf = React.useCallback(async (format: 'turtle' | 'json-ld' | 'rdf-xml') => {
+  const handleExportRdf = React.useCallback(async (format: 'turtle' | 'json-ld' | 'rdf-xml' | 'nquads' | 'trig') => {
     try {
       const { exportGraph, dataFilename } = useOntologyStore.getState();
       const content = await exportGraph(format);
-      const ext = format === 'turtle' ? 'ttl' : format === 'json-ld' ? 'jsonld' : 'rdf';
-      const mime = format === 'turtle' ? 'text/turtle' : format === 'json-ld' ? 'application/ld+json' : 'application/rdf+xml';
+      const extByFormat: Record<typeof format, string> = {
+        'turtle': 'ttl',
+        'json-ld': 'jsonld',
+        'rdf-xml': 'rdf',
+        'nquads': 'nq',
+        'trig': 'trig',
+      };
+      const mimeByFormat: Record<typeof format, string> = {
+        'turtle': 'text/turtle',
+        'json-ld': 'application/ld+json',
+        'rdf-xml': 'application/rdf+xml',
+        'nquads': 'application/n-quads',
+        'trig': 'application/trig',
+      };
+      const ext = extByFormat[format];
+      const mime = mimeByFormat[format];
       const baseName = dataFilename || 'knowledgegraph';
       const blob = new Blob([content], { type: mime });
       const url = URL.createObjectURL(blob);

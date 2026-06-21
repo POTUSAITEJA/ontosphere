@@ -59,6 +59,9 @@ const App = () => {
     // Load after a short delay to not block initial render
     const timeoutId = setTimeout(loadCatalog, 1500);
     return () => clearTimeout(timeoutId);
+    // Mount-only: the catalog is a one-time startup load. `config` is read for its values
+    // at fire time; adding it would reload the catalog and re-toast on every config edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount
 
   return (

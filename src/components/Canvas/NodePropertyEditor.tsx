@@ -876,6 +876,9 @@ export const NodePropertyEditorContent = ({
   const initialRdfTypesRef = useRef<string[]>([]);
   const ontologiesVersion = useOntologyStore(s => s.ontologiesVersion);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- Intentional: this effect initializes
+     local form state from the external nodeData prop whenever it changes. All setState calls
+     here are initializations driven by external data, not cascading reactions to our own state. */
   useEffect(() => {
     const sourceNode =
       nodeData && typeof nodeData === "object"
@@ -913,6 +916,7 @@ export const NodePropertyEditorContent = ({
     setProperties(normalizedProps);
     initialPropertiesRef.current = normalizedProps.map(cloneLiteralProperty);
   }, [nodeData]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleAddType = (e?: React.MouseEvent) => {
     e?.preventDefault();

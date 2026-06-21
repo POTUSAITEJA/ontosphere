@@ -67,7 +67,7 @@ describe('filterTreeByKeyword', () => {
     const roots = buildClassTree(graph, makeLabel);
     const filtered = filterTreeByKeyword(roots, 'poodle');
     const animal = filtered.find(n => n.iri === 'urn:Animal')!;
-    const dog = animal?.derived.find(n => n.iri === 'urn:Dog')!;
+    const dog = animal.derived.find(n => n.iri === 'urn:Dog')!;
     expect(dog?.derived.some(n => n.iri === 'urn:Poodle')).toBe(true);
   });
 
