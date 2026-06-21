@@ -22,6 +22,7 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
 - [Reasoning](#reasoning)
 - [Reasoning demo](#reasoning-demo)
 - [SHACL validation](#shacl-validation)
+- [Persistence (crash recovery)](#persistence-crash-recovery)
 - [CORS and proxies](#cors-and-proxies)
 - [Using the UI](#using-the-ui)
 - [Developer utilities](#developer-utilities-window-globals)
@@ -52,10 +53,11 @@ Key capabilities
 - **Layout engine**: multiple algorithms — Dagre (horizontal/vertical), ELK (layered, force, stress, radial), and Reactodia-default — all running in Web Workers so the UI stays responsive. Spacing is adjustable via a slider; re-layout triggers automatically when spacing changes.
 - **Hierarchical fold levels**: graphs load with two levels of structural folding already applied — L2 (subclass chains and OWL collection axioms collapsed into representative group nodes) and L1 (per-node annotation properties hidden). A level badge in the toolbar shows the current depth (`L3`/`L2`/`∅`). Fold/Unfold buttons for each level let users progressively reveal detail. L3 (community-detection clustering — Label Propagation, Louvain, K-Means) applies automatically on load above a configurable node threshold (default 100). Each view (TBox / ABox) tracks its fold state independently.
 - **DL reasoning (Konclude)**: run OWL 2 DL inference in the browser and see inferred triples rendered as amber dashed edges; inferred types/annotations appear in amber italic. A reasoning report lists all inferred triples. Includes automatic OWL DL consistency checking — the Errors tab shows per-entity clash details when the ontology is contradictory. Clear inferred triples any time without affecting asserted data.
+- **One-click repair suggestions**: when the reasoner finds a contradiction (or SHACL reports a violation) the reasoning report shows a **Repairs** tab with reasoner-computed, ranked fixes — the same minimal hitting-set repairs the `explainDiagnostics` MCP tool hands an agent. Each suggestion shows its rationale and the concrete triple it removes/adds, with a “verified consistent” badge when removing it restores consistency. Click **Apply fix** to apply a single repair (with an undo toast), or **Apply all verified** to apply the whole verified repair set in one batch; you are then prompted to re-run reasoning to confirm.
 - **Namespace management**: edit namespace URIs directly in the legend panel (rename propagates across all stored triples). Colour-coded namespace badges on nodes and edges.
-- Export the current graph as Turtle, RDF/XML, or JSON-LD.
+- Export the current graph as Turtle, RDF/XML, or JSON-LD (single-graph), or as **N-Quads** / **TriG** for a dataset-faithful export that preserves the named-graph partition (data, inferred, shapes, ontologies, workflows) so it round-trips on re-import.
 - **Workflow catalog**: drag reusable workflow template cards from the sidebar onto the canvas to instantiate connected subgraphs.
-- **MCP support**: exposes a Model Context Protocol server (via the browser's `navigator.modelContext` API) for AI-agent integration with 35 tools across seven categories: graph management (`loadRdf`, `loadOntology`, `suggestOntologiesForTask`, `queryGraph`, `exportGraph`, `exportImage`, `setViewMode`, `getCapabilities`, `getGraphState`, `help`), node operations (`addNode`, `removeNode`, `expandNode`, `getNodes`, `getNodeDetails`, `updateNode`), link operations (`addTriple`, `removeLink`, `getLinks`), layout and navigation (`runLayout`, `clusterNodes`, `layoutNodes`, `focusNode`, `fitCanvas`, `getNeighbors`, `findPath`), reasoning (`runReasoning`, `clearInferred`, `explainDiagnostics`), namespace management (`setNamespace`, `removeNamespace`, `listNamespaces`), and SHACL validation (`loadShacl`, `validateGraph`, `loadShaclFromUrl`). MCP manifest at `/.well-known/mcp.json`.
+- **MCP support**: exposes a Model Context Protocol server (via the browser's `navigator.modelContext` API) for AI-agent integration with 42 tools across nine categories: graph management (`loadRdf`, `loadOntology`, `suggestOntologiesForTask`, `queryGraph`, `exportGraph`, `exportImage`, `setViewMode`, `getCapabilities`, `getGraphState`, `help`), node operations (`addNode`, `removeNode`, `expandNode`, `getNodes`, `getNodeDetails`, `updateNode`, `searchTerms`), link operations (`addTriple`, `removeLink`, `getLinks`), layout and navigation (`runLayout`, `clusterNodes`, `layoutNodes`, `focusNode`, `fitCanvas`, `getNeighbors`, `findPath`), reasoning (`runReasoning`, `clearInferred`, `explainDiagnostics`, `explainEntailment`, `extractModule` — locality-based module extraction with a Σ-entailment conformance guarantee; the building block for incremental/modular reasoning), namespace management (`setNamespace`, `removeNamespace`, `listNamespaces`), SHACL validation (`loadShacl`, `validateGraph`, `loadShaclFromUrl`), edit provenance / undo (`listAgentEdits`, `diffAgentEdits`, `revertAgentBatch`), and dataset metadata (`generateDatasetMetadata` — VoID + DCAT description with triple/class/property counts, partitions and vocabularies used, for FAIR publishing). MCP manifest at `/.well-known/mcp.json`.
 
 Quick start (development)
 -------------------------
@@ -193,9 +195,15 @@ Reasoning
 
 Ontosphere runs OWL reasoning entirely in the browser via a pluggable backend. The default is **Konclude** (full OWL 2 DL). Inferred triples appear as amber dashed edges; inferred types and annotations appear in amber italic. A reasoning report lists all inferred triples. Reasoning is idempotent — running it again produces no additional triples. Use **Clear inferred** to remove all inferred triples without affecting asserted data. See the [feat-reasoning demo video](https://thhanke.github.io/ontosphere/demo-videos/feat-reasoning.mp4) for a walkthrough of all 15 supported OWL 2 DL construct patterns.
 
+**Why was this inferred?** Each inferred type and inferred annotation on a node carries a small **“?”** affordance. Clicking (or focusing and pressing it) opens a popover that explains the entailment on demand: for `rdfs:subClassOf` / `rdf:type` inferences it lists the supporting axioms (e.g. `Person ⊑ Agent`, `Alice rdf:type Person`), showing alternative supports when more than one justification exists; it also reports when an inference holds vacuously (unsatisfiable subject class), when the ontology is inconsistent (fix consistency first), or when only a generic justification is available. The explanation is computed lazily — the reasoner is only queried the first time you open a given popover.
+
 **OWL DL consistency checking** runs automatically alongside inference (Konclude only). If the ontology is logically contradictory, reasoning is skipped and the report's **Errors** tab shows per-entity clash details (affected individual, violated axiom, description). When inconsistent, the reasoner computes the **minimal justification** (MIPS) — the smallest set of axioms whose conjunction causes the contradiction — and attaches the complete axiom set to the error so the exact cause is inspectable. An "OWL DL inconsistency detected" banner appears in the report. Common inconsistencies: an individual in two `owl:disjointWith` classes, an `owl:allValuesFrom` restriction violated by an asserted type, or an `owl:AsymmetricProperty` / `owl:IrreflexiveProperty` cycle. The N3 backend does not perform consistency checking (`isConsistent` is always `null`).
 
 **Structured diagnostics for agents (`explainDiagnostics`).** The MCP tool `explainDiagnostics` runs the full symbolic verifier (OWL 2 DL reasoning + SHACL) and returns a single structured object — `{ isConsistent, justifications, unsatisfiableClasses, profile, shaclViolations, repairBrief }` — designed for AI agents to act on. `justifications` are the minimal contradictory axiom sets; `profile` reports OWL 2 DL profile violations (e.g. a literal value on an object property); `repairBrief` is a ranked, plain-language summary. This makes the in-browser reasoner usable as an automatic verifier in an author → verify → repair loop.
+
+**Entailment explanation for agents (`explainEntailment`).** The MCP tool `explainEntailment` answers "why is this inferred?" for an arbitrary entailed axiom — not just inconsistency. Given `{ subjectIri, predicateIri, objectIri }` it returns `{ isEntailed, justifications, summary }`, where each justification is a minimal set of asserted axioms whose conjunction logically entails the queried axiom (Horridge-style justification), and `summary` is a plain-language "Inferred because: …" explanation. It uses an entailment-as-unsatisfiability reduction over the same OWL 2 DL consistency oracle (the queried axiom is negated, and a minimal subset of the ontology that makes the result unsatisfiable is the justification). Supported axiom shapes: `rdfs:subClassOf` and `rdf:type` with an IRI object (e.g. transitive subclass A ⊑ B, B ⊑ C ⟹ A ⊑ C, or domain/range-driven type inference). Read-only: it never mutates asserted data.
+
+**Module extraction for modular reasoning (`extractModule`).** The MCP tool `extractModule` extracts a self-contained **locality-based module** (sub-ontology) over a signature Σ of class/property IRIs — the standard syntactic-locality module of Cuenca Grau, Horrocks, Kazakov & Sattler (JAIR 2008), the same algorithm the OWL API `SyntacticLocalityModuleExtractor` uses. Given `{ signature, moduleType?: "bot"|"star", includeOntologies? }` it returns `{ moduleTriples, moduleTurtle, moduleSize, fullSize, reductionPercent, signature }`. The module satisfies the **conformance guarantee**: for every axiom α expressible using only the terms in Σ, the full ontology entails α iff the module entails α (soundness + completeness over Σ). For a focused signature the module is typically much smaller than the whole ontology, so a reasoner can classify the module instead of the entire ontology — the building block for **incremental / modular reasoning**. The conformance guarantee is proved against the real Konclude reasoner in `src/mcp/__tests__/moduleConformance.integration.test.ts`: it classifies the full ontology and the extracted module and asserts they agree on Σ-subsumptions and Σ-unsatisfiable classes. *Honest scope:* this delivers module **extraction** plus the conformance guarantee. Full **auto-incremental-reasoning-on-edit** (re-reason only the changed module on every edit) is a documented follow-up — a module preserves Σ-entailments but a global inconsistency outside Σ needs separate handling, so live incremental reasoning is not yet wired. Read-only: it never mutates asserted data.
 
 ### Konclude (default — OWL 2 DL)
 
@@ -285,6 +293,36 @@ After loading, click **▶** (Run Reasoning) in the toolbar. The report will sho
 
 Each finding links to the affected node — click to close the dialog and navigate to it on the canvas. Error and warning badges appear directly on affected nodes.
 
+Agent edit provenance
+---------------------
+Every mutating MCP tool call (`addNode`, `updateNode`, `removeNode`, `addTriple`, `removeLink`, and `loadRdf`) is recorded as a [PROV-O](https://www.w3.org/TR/prov-o/) `prov:Activity` in a dedicated `urn:vg:provenance` sidecar named graph. Each activity captures the tool name, agent (`mcp-agent` by default), timestamp, and the concrete added/removed triples, so agent edits are auditable and reversible.
+
+| MCP tool | Purpose |
+|----------|---------|
+| `listAgentEdits` | List recorded edit batches (most recent first) with `batchId`, `tool`, `agent`, `timestamp`, `addedCount`, `removedCount`, `reverted` |
+| `diffAgentEdits` | Inspect the exact triples a batch added and removed |
+| `revertAgentBatch` | Undo a batch — re-removes its added triples and re-adds its removed triples in `urn:vg:data`; idempotent and best-effort. Returns `reverted:{addedRemoved, removedRestored}` (the **actual** store deltas) alongside `requested:{addedToRemove, removedToRestore}` (the batch's recorded counts); when `reverted < requested` the revert was partial because a later edit had already removed/re-added some of those triples |
+
+The sidebar **Agent Edits** panel surfaces the same journal in the UI: it lists edit batches most-recent-first (tool, timestamp, `+added`/`−removed` counts, agent, and a *reverted* badge), expands each batch to show its added (green) and removed (struck-through red) triples with abbreviated IRIs, and offers a one-click **Revert** button per batch. The panel refreshes automatically as agents make or revert edits, and also has a manual refresh control.
+
+The `urn:vg:provenance` graph is excluded from OWL reasoning, consistency checking, SHACL validation, and the data export, so provenance metadata never pollutes the ontology. The edit journal is held in memory and mirrored into `urn:vg:provenance`; like the rest of the in-memory store it is volatile and cleared on page reload. To keep memory and the sidecar graph bounded during long autonomous sessions, only the most recent `MAX_BATCHES` (default 5000) edits are retained — older batches are evicted (and their PROV-O quads purged from `urn:vg:provenance`) and can no longer be listed or reverted. A provenance failure never affects the underlying mutation: the mutating tool reports success based on the store write alone, recording is best-effort.
+
+Persistence (crash recovery)
+----------------------------
+Ontosphere keeps your graph across page reloads using the browser's **Origin Private File System (OPFS)** — entirely client-side, with no backend. After the store stops changing for a moment (a ~2s debounce), the durable graphs are serialized to N-Quads and written to a private OPFS file (`ontosphere-store.nq`); on the next load they are read back and merged into the store so the canvas reflects your recovered graph.
+
+**What is persisted:** `urn:vg:data`, `urn:vg:ontologies`, `urn:vg:shapes`, and `urn:vg:workflows` — the named-graph partition is preserved.
+
+**What is NOT persisted (by design):**
+- `urn:vg:inferred` — recomputable at any time by re-running reasoning, so persisting it would only risk staleness.
+- `urn:vg:provenance` — session-scoped edit metadata that should not survive into a fresh session.
+
+**Controls:** persistence is **enabled by default**. The enable/disable preference is stored in `localStorage` (`ontosphere.persistence.enabled`) so your choice survives a reload. You can disable it (`rdfManager.setPersistenceEnabled(false)`), check it (`rdfManager.isPersistenceEnabled()`), or forget the saved graph (`rdfManager.clearPersistedStore()`).
+
+**Safety:** writes are atomic (a temp file is written and flushed in full before replacing the primary file), so a crash mid-write never corrupts the snapshot; a corrupt or partial file is detected on load and ignored (the app simply starts clean). If the browser's storage quota is exceeded, persistence disables itself for the session and the in-memory graph is never affected.
+
+**Limitations:** persistence assumes a **single tab** — there is no multi-tab locking, so only one tab persists at a time (the others no-op safely). OPFS requires a recent Chromium-based browser or recent Firefox/Safari; where it is unavailable, persistence silently no-ops and the app works normally without crash recovery.
+
 CORS and proxies
 ----------------
 Ontosphere fetches remote RDF directly from the browser. If the remote host does not allow cross-origin requests, the fetch will be blocked.
@@ -362,13 +400,17 @@ The annotated diagram below identifies the numbered UI elements described in thi
 
 **21** **Clear** — remove all loaded graphs and reset the canvas.
 
-**22** **Export** — export as Turtle, JSON-LD, or RDF/XML (dropdown). Generated entirely in the browser.
+**22** **Export** — export as Turtle, JSON-LD, or RDF/XML (single-graph), or N-Quads / TriG (dataset-faithful, preserves named graphs) via the dropdown. Generated entirely in the browser.
 
 **23** **Settings** — open the settings panel for default layout, clustering algorithm, large-graph threshold, ontology autoload URLs, workflow catalog, and other preferences.
 
 ### Sidebar content (expanded)
 
-When the sidebar is expanded (click the **›** toggle), the file operation buttons are shown in a compact grid. A **Workflows** accordion appears below when the workflow catalog is enabled in Settings. Drag a template card onto the canvas to instantiate it as a connected subgraph.
+When the sidebar is expanded (click the **›** toggle), the file operation buttons are shown in a compact grid. Below them are collapsible accordion sections: **Workflows** (when the workflow catalog is enabled in Settings — drag a template card onto the canvas to instantiate it as a connected subgraph), **SHACL Shapes**, **Agent Edits** (the provenance inspector for agent-made edits — see [Agent edit provenance](#agent-edit-provenance)), **SPARQL**, **Metrics**, **AI Relay**, and **Documentation**.
+
+The **SPARQL** panel is a human-facing query editor (the same engine the AI relay uses via the `queryGraph` tool). It prefills the registered namespace `PREFIX` declarations plus a starter `SELECT * WHERE { ?s ?p ?o } LIMIT 50`, runs on **Run** or **Ctrl/⌘+Enter**, and renders results by type: SELECT bindings as a table (IRIs abbreviated, capped at 200 displayed rows with a "showing N of M" note), CONSTRUCT/DESCRIBE as an s/p/o triples table, ASK as a true/false badge, and INSERT/DELETE updates with a success toast. A **Prefixes** dropdown inserts any registered `PREFIX` line at the cursor, and example-query buttons fill the editor. Queries are read-only unless an INSERT/DELETE keyword is used.
+
+The **Metrics** panel is an ontology metrics dashboard. It computes structural counts via small SPARQL `COUNT` queries against the asserted data graph (`urn:vg:data`) — total triples, distinct subjects, classes, object properties, datatype properties, and named individuals — shown as compact stat cards. A **Subjects by namespace** table breaks down distinct subjects per registered prefix (sorted by count). A **Quality heuristics** block derives a few OQuaRE-flavored ratios — average properties per class, class:property ratio, percentage of classes carrying an `rdfs:label`, and the inferred:asserted triple ratio (using `urn:vg:inferred` vs `urn:vg:data` graph counts). These ratios are clearly labelled as simple directional heuristics, **not** a certified OQuaRE assessment. The panel computes on open, refreshes automatically when the graph changes, and has a manual **Refresh** control.
 
 ### Node authoring halo (visible on selected node)
 
