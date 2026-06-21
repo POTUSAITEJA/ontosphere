@@ -20,11 +20,42 @@ import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { CheckCircle2, Wrench, ShieldQuestion, AlertTriangle, Sparkles } from 'lucide-react';
 import { toPrefixed } from '../../utils/termUtils';
-import { computeRepairs, type RepairSuggestion } from '../../mcp/tools/computeRepairs';
+import {
+  computeRepairs,
+  addWeakeningRepairs,
+  type RepairSuggestion,
+  type WeakeningContext,
+} from '../../mcp/tools/computeRepairs';
+import { buildClassHierarchy, buildDirectEdgeMap } from '../../mcp/tools/axiomWeakening';
 import type { DiagnosticsData } from '../../mcp/tools/diagnosticsBrief';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 
 const DATA_GRAPH = 'urn:vg:data';
+const RDFS_SUBCLASS_OF = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
+
+/**
+ * Read the classified subClassOf hierarchy (asserted + inferred) for axiom
+ * weakening, mirroring reasoning.ts's loadWeakeningContext so the human UI offers
+ * the SAME weakening alternatives an agent receives. Best-effort: an empty
+ * hierarchy simply yields no weakenings.
+ */
+async function loadWeakeningContext(): Promise<WeakeningContext> {
+  try {
+    const res = await rdfManager.sparqlQuery(
+      `SELECT ?sub ?sup WHERE { ?sub <${RDFS_SUBCLASS_OF}> ?sup . FILTER(isIRI(?sub) && isIRI(?sup)) }`,
+      { limit: 5000 },
+    );
+    const edges: Array<{ sub: string; sup: string }> = [];
+    if (res?.type === 'select' && Array.isArray(res.rows)) {
+      for (const row of res.rows as Array<Record<string, string>>) {
+        if (row.sub && row.sup) edges.push({ sub: row.sub, sup: row.sup });
+      }
+    }
+    return { hierarchy: buildClassHierarchy(edges), direct: buildDirectEdgeMap(edges) };
+  } catch {
+    return { hierarchy: buildClassHierarchy([]) };
+  }
+}
 
 /**
  * C1: pick the graph a repair must be applied in. The MIPS axiom may physically
@@ -61,11 +92,17 @@ function repairObjectTerm(
 }
 
 /**
- * BUG B: project a repair into a verifyRepair removal carrying the object-term
- * metadata + source graph so VERIFY excludes the IDENTICAL triple the apply path
- * removes — not a same-lexical sibling in another graph / with another datatype
- * (which would yield a false 'verifiedConsistent'). Optional fields are only set
- * when present (back-compat with the legacy lexical/all-graph match).
+ * BUG B + BUG C: project a repair into a verifyRepair removal carrying the
+ * object-term metadata + source graph so VERIFY excludes the IDENTICAL triple the
+ * apply path removes — not a same-lexical sibling in another graph / with another
+ * datatype (which would yield a false 'verifiedConsistent').
+ *
+ * BUG C — VERIFY and APPLY MUST use the SAME graph. The apply path resolves the
+ * graph via `repairGraph` (which DEFAULTS to urn:vg:data when the MIPS axiom has
+ * no graph metadata). If VERIFY instead omitted the graph it would do an all-graph
+ * match, targeting a DIFFERENT quad set than apply → a false `verifiedConsistent`
+ * or an apply no-op. So we pin VERIFY to the IDENTICAL `repairGraph(a)` value the
+ * apply path uses — verify and apply always target the same triple+graph.
  */
 function repairToRemoval(r: RepairSuggestion): VerifyRepairRemoval {
   const a = r.action.args;
@@ -76,7 +113,9 @@ function repairToRemoval(r: RepairSuggestion): VerifyRepairRemoval {
     ...(a.objectTermType ? { objectTermType: a.objectTermType } : {}),
     ...(a.objectDatatype ? { objectDatatype: a.objectDatatype } : {}),
     ...(a.objectLanguage ? { objectLanguage: a.objectLanguage } : {}),
-    ...(a.graph ? { graph: a.graph } : {}),
+    // BUG C: same graph resolution as the apply path (never absent) so verify
+    // and apply agree on the exact quad set.
+    graph: repairGraph(a),
   };
 }
 
@@ -146,7 +185,15 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
         };
 
         // 2. Shared, deterministic repair computation — identical to the agent path.
-        const repairs = computeRepairs(diagnostics);
+        let repairs = computeRepairs(diagnostics);
+
+        // 2b. AXIOM WEAKENING alternatives (Troquard et al. 2018; Li & Lambrix
+        //     2024) for subClassOf culprits — the SAME augmentation explainDiagnostics
+        //     applies, so the human UI shows the same delete-vs-weaken choice.
+        if (isConsistent === false) {
+          const wctx = await loadWeakeningContext();
+          repairs = addWeakeningRepairs(repairs, { ...wctx, justifications });
+        }
 
         // 3. Symbolic verification (read-only, on a store copy) — per-axiom and full set.
         let repairSetVerifiedConsistent: boolean | null = null;
@@ -165,14 +212,20 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
                 // BUG B: VERIFY the SAME triple APPLY removes (graph + exact
                 // typed/lang literal), not a bare lexical/all-graph match.
                 r.verifiedConsistent = await rdfManager.verifyRepair([repairToRemoval(r)]);
+                // Weakening soundness transfers from the removal verdict: the
+                // weaker A ⊑ D′ is entailed by the removed A ⊑ D (D ⊑ D′).
+                if (r.kind === 'weaken') r.weakeningVerified = r.verifiedConsistent === true;
               } catch { /* oracle unavailable — leave undefined */ }
             }),
           );
-          if (actionable.length > 0) {
-            const removals: VerifyRepairRemoval[] = actionable.map(repairToRemoval);
+          // Full-set verification uses DELETION repairs only (weakenings are
+          // alternatives to a deletion, not extra hitting-set members).
+          const deletionSet = actionable.filter((r) => r.kind !== 'weaken');
+          if (deletionSet.length > 0) {
+            const removals: VerifyRepairRemoval[] = deletionSet.map(repairToRemoval);
             try {
               repairSetVerifiedConsistent = await rdfManager.verifyRepair(removals);
-              for (const r of actionable) r.verifiedSet = repairSetVerifiedConsistent ?? undefined;
+              for (const r of deletionSet) r.verifiedSet = repairSetVerifiedConsistent ?? undefined;
             } catch { /* oracle unavailable */ }
           }
         }
@@ -240,6 +293,52 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
     setApplying((s) => ({ ...s, [r.id]: true }));
     const graph = repairGraph(r.action.args);
     try {
+      // AXIOM WEAKENING (Troquard et al. 2018; Li & Lambrix 2024): apply the
+      // remove+add BATCH (remove the culprit A ⊑ D, add the weaker A ⊑ D′) in
+      // one applyBatch so the weaker axiom is preserved — less destructive than
+      // a plain deletion. Undo restores the original (re-add culprit, remove D′).
+      if (r.kind === 'weaken' && r.batch) {
+        const removes = r.batch.removes.map((t) => ({
+          subject: t.subject,
+          predicate: t.predicate,
+          object: t.object,
+          graph: t.graph || graph,
+        }));
+        const adds = r.batch.adds.map((t) => ({
+          subject: t.subject,
+          predicate: t.predicate,
+          object: t.object,
+          graph: t.graph || graph,
+        }));
+        const { removed, added } = await rdfManager.applyBatch({ removes, adds }, graph);
+        if (removed < 1) {
+          toast.warning(
+            `${r.id} matched no triples — the axiom may live in a different graph or was already weakened/removed.`,
+          );
+          return;
+        }
+        setApplied((s) => ({ ...s, [r.id]: true }));
+        const addedLabel = adds.length > 0 ? `, added ${added} weaker axiom(s)` : '';
+        toast.success(`Applied ${r.id} (weaken): removed ${removed} axiom(s)${addedLabel}`, {
+          action: {
+            label: 'Undo',
+            onClick: async () => {
+              try {
+                // Reverse the batch: re-add what we removed, remove what we added.
+                await rdfManager.applyBatch({ removes: adds, adds: removes }, graph);
+                setApplied((s) => ({ ...s, [r.id]: false }));
+                toast.success(`Undid ${r.id}`);
+              } catch (err) {
+                console.error('Undo weaken repair failed', err);
+                toast.error('Undo failed (see console).');
+              }
+            },
+          },
+          duration: 8000,
+        });
+        offerRerun();
+        return;
+      }
       if (r.action.tool === 'removeLink') {
         const object = repairObjectTerm(objectIri ?? '', r.action.args);
         const removal = { subject: subjectIri, predicate: predicateIri, object, graph };
@@ -338,6 +437,10 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
       (r) =>
         r.issue === 'inconsistency' &&
         !r.needsManualReview &&
+        // Weakenings are per-axiom ALTERNATIVES to a deletion, not members of the
+        // deletion hitting set — exclude them from "apply all" (the deletion of
+        // the same culprit is already included).
+        r.kind !== 'weaken' &&
         r.action.tool === 'removeLink' &&
         r.action.args.subjectIri &&
         r.action.args.predicateIri &&
@@ -465,15 +568,27 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
         const isApplying = !!applying[r.id];
         const verifiedAlone = r.verifiedConsistent === true;
         const verifiedAsSet = !verifiedAlone && r.verifiedSet === true;
+        const isWeaken = r.kind === 'weaken';
+        // For a weakening, show the BEFORE → AFTER axiom transition.
+        const weakenBefore = isWeaken && r.batch?.removes[0];
+        const weakenAfter = isWeaken && r.batch && r.batch.adds.length > 0 ? r.batch.adds[0] : null;
         return (
           <Card
             key={r.id}
-            className={r.needsManualReview ? 'border-warning/30' : 'border-border'}
+            className={
+              r.needsManualReview
+                ? 'border-warning/30'
+                : isWeaken
+                  ? 'border-primary/40 bg-primary/5'
+                  : 'border-border'
+            }
           >
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
                 {r.needsManualReview ? (
                   <ShieldQuestion className="w-4 h-4 text-warning shrink-0" aria-hidden="true" />
+                ) : isWeaken ? (
+                  <Sparkles className="w-4 h-4 text-primary shrink-0" aria-hidden="true" />
                 ) : (
                   <Wrench className="w-4 h-4 text-primary shrink-0" aria-hidden="true" />
                 )}
@@ -481,12 +596,22 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
                 <Badge variant={r.issue === 'shacl' ? 'outline' : 'secondary'} className="text-[10px]">
                   {r.issue === 'shacl' ? 'SHACL' : 'OWL'}
                 </Badge>
-                {verifiedAlone && (
+                {isWeaken && (
+                  <Badge variant="default" className="text-[10px] bg-primary text-primary-foreground">
+                    Weaken {r.alternativeTo ? `(alt to ${r.alternativeTo})` : ''}
+                  </Badge>
+                )}
+                {!isWeaken && verifiedAlone && (
                   <Badge variant="default" className="text-[10px] bg-success text-success-foreground">
                     Verified consistent
                   </Badge>
                 )}
-                {verifiedAsSet && (
+                {isWeaken && r.weakeningVerified && (
+                  <Badge variant="default" className="text-[10px] bg-success text-success-foreground">
+                    Weakening verified
+                  </Badge>
+                )}
+                {!isWeaken && verifiedAsSet && (
                   <Badge variant="outline" className="text-[10px]">
                     Part of verified set
                   </Badge>
@@ -500,20 +625,32 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
             </CardHeader>
             <CardContent className="space-y-2">
               <p className="text-sm">{r.rationale}</p>
-              {label && (
+              {isWeaken && weakenBefore ? (
+                <code className="block text-xs font-mono break-all rounded bg-muted px-2 py-1 text-muted-foreground">
+                  <span className="text-destructive">− {toPrefixed(weakenBefore.subject)} {toPrefixed(weakenBefore.predicate)} {toPrefixed(weakenBefore.object)}</span>
+                  {weakenAfter && (
+                    <>
+                      <br />
+                      <span className="text-success">+ {toPrefixed(weakenAfter.subject)} {toPrefixed(weakenAfter.predicate)} {toPrefixed(weakenAfter.object)}</span>
+                    </>
+                  )}
+                </code>
+              ) : label ? (
                 <code className="block text-xs font-mono break-all rounded bg-muted px-2 py-1 text-muted-foreground">
                   {r.action.tool === 'removeLink' ? '− ' : '+ '}{label}
                 </code>
-              )}
+              ) : null}
               {!r.needsManualReview && (
                 <p className="text-xs text-muted-foreground flex items-center gap-1">
-                  {verifiedAlone
-                    ? 'Removing this alone restores consistency.'
-                    : verifiedAsSet
-                      ? 'Apply all to restore consistency (this is part of the verified set).'
-                      : r.issue === 'shacl'
-                        ? 'Satisfies the violated shape constraint.'
-                        : 'Resolves at least one contradiction.'}
+                  {isWeaken
+                    ? 'Less destructive than deletion — replaces the axiom with a logically weaker one, preserving more knowledge.'
+                    : verifiedAlone
+                      ? 'Removing this alone restores consistency.'
+                      : verifiedAsSet
+                        ? 'Apply all to restore consistency (this is part of the verified set).'
+                        : r.issue === 'shacl'
+                          ? 'Satisfies the violated shape constraint.'
+                          : 'Resolves at least one contradiction.'}
                 </p>
               )}
               {r.needsManualReview ? (
@@ -533,6 +670,11 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
                     <>
                       <CheckCircle2 className="w-4 h-4 mr-1.5" aria-hidden="true" />
                       Applied
+                    </>
+                  ) : isWeaken ? (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-1.5" aria-hidden="true" />
+                      Apply weakening
                     </>
                   ) : (
                     <>

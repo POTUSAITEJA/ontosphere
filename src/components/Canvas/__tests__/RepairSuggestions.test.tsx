@@ -25,6 +25,7 @@ const hoisted = vi.hoisted(() => ({
     removeTriple: vi.fn(),
     addTriple: vi.fn(),
     applyBatch: vi.fn(),
+    sparqlQuery: vi.fn(),
   },
   runReasoning: vi.fn(),
 }));
@@ -70,11 +71,15 @@ function primeConsistentInconsistency() {
   // Removing the single repair restores consistency.
   hoisted.rdf.verifyRepair.mockResolvedValue(true);
   hoisted.rdf.applyBatch.mockResolvedValue({ added: 0, removed: 1 });
+  // No subClassOf hierarchy → no weakenings (default for ABox-only justifications).
+  hoisted.rdf.sparqlQuery.mockResolvedValue({ type: 'select', rows: [] });
 }
 
 describe('RepairSuggestions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: empty hierarchy (no weakenings) unless a test overrides it.
+    hoisted.rdf.sparqlQuery.mockResolvedValue({ type: 'select', rows: [] });
   });
 
   afterEach(() => {
@@ -196,6 +201,77 @@ describe('RepairSuggestions', () => {
     // removed >= 1 ⇒ success, NOT a warning.
     await waitFor(() => expect(hoisted.toast.success).toHaveBeenCalled());
     expect(hoisted.toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('BUG C: a graphless repair makes VERIFY and APPLY target the IDENTICAL graph', async () => {
+    // The justification axiom carries NO graph metadata. Previously VERIFY did an
+    // all-graph match (graph field omitted) while APPLY defaulted to urn:vg:data —
+    // they targeted different quad sets → false verifiedConsistent / apply no-op.
+    // After the fix BOTH resolve to the SAME default graph (urn:vg:data).
+    primeConsistentInconsistency(); // JUSTIFICATION has no graph metadata
+    const expected = computeRepairs({
+      isConsistent: false,
+      justifications: JUSTIFICATION,
+      unsatisfiableClasses: [],
+      profile: { owl2dl: true, violations: [] },
+      shaclViolations: [],
+    });
+    // Sanity: computeRepairs left graph undefined (genuinely graphless axiom).
+    expect(expected[0].action.args.graph).toBeUndefined();
+
+    render(<RepairSuggestions reasoningId="rbc" isConsistent={false} />);
+
+    // VERIFY (fired on load) must pin the SAME default graph the apply path uses.
+    await waitFor(() => expect(hoisted.rdf.verifyRepair).toHaveBeenCalled());
+    const verifyRemovals = hoisted.rdf.verifyRepair.mock.calls[0][0];
+    expect(verifyRemovals[0].graph).toBe('urn:vg:data');
+
+    // APPLY must target the IDENTICAL graph.
+    const applyBtn = await screen.findByRole('button', { name: /Apply repair/i });
+    fireEvent.click(applyBtn);
+    await waitFor(() => expect(hoisted.rdf.applyBatch).toHaveBeenCalled());
+    const [changes, applyGraph] = hoisted.rdf.applyBatch.mock.calls[0];
+    expect(applyGraph).toBe('urn:vg:data');
+    expect(changes.removes[0].graph).toBe('urn:vg:data');
+    // The invariant: verify graph === apply graph for this repair.
+    expect(verifyRemovals[0].graph).toBe(changes.removes[0].graph);
+  });
+
+  it('BUG C: a graph-bearing repair makes VERIFY and APPLY both target THAT graph', async () => {
+    // When the MIPS axiom carries graph='urn:vg:ontologies', verify AND apply must
+    // both target it (not diverge to urn:vg:data).
+    const ontologyGraphJustif = [
+      [
+        {
+          subject: `${EX}A`,
+          predicate: OWL_DISJOINT,
+          object: `${EX}B`,
+          objectTermType: 'NamedNode',
+          graph: 'urn:vg:ontologies',
+        },
+      ],
+    ];
+    hoisted.rdf.explainInconsistency.mockResolvedValue(ontologyGraphJustif);
+    hoisted.rdf.getUnsatisfiableClasses.mockResolvedValue([]);
+    hoisted.rdf.runShaclValidation.mockResolvedValue({ conforms: true, violations: [], shapeCount: 0 });
+    hoisted.rdf.verifyRepair.mockResolvedValue(true);
+    hoisted.rdf.applyBatch.mockImplementation((changes: { removes?: { graph?: string }[] }, fallback: string) => {
+      const g = changes.removes?.[0]?.graph ?? fallback;
+      return Promise.resolve({ added: 0, removed: g === 'urn:vg:ontologies' ? 1 : 0 });
+    });
+
+    render(<RepairSuggestions reasoningId="rbc2" isConsistent={false} />);
+
+    await waitFor(() => expect(hoisted.rdf.verifyRepair).toHaveBeenCalled());
+    const verifyRemovals = hoisted.rdf.verifyRepair.mock.calls[0][0];
+    expect(verifyRemovals[0].graph).toBe('urn:vg:ontologies');
+
+    const applyBtn = await screen.findByRole('button', { name: /Apply repair/i });
+    fireEvent.click(applyBtn);
+    await waitFor(() => expect(hoisted.rdf.applyBatch).toHaveBeenCalled());
+    const [changes] = hoisted.rdf.applyBatch.mock.calls[0];
+    expect(changes.removes[0].graph).toBe('urn:vg:ontologies');
+    expect(verifyRemovals[0].graph).toBe(changes.removes[0].graph);
   });
 
   it('H1: a repair that matches 0 triples shows a warning and does NOT mark applied', async () => {
@@ -449,5 +525,60 @@ describe('RepairSuggestions', () => {
     });
     // No inconsistency justification lookup when consistent.
     expect(hoisted.rdf.explainInconsistency).not.toHaveBeenCalled();
+  });
+
+  it('renders an axiom-WEAKENING alternative and applies it as a remove+add batch', async () => {
+    const RDFS_SUBCLASS = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
+    // A subClassOf culprit: A ⊑ B is the only axiom in the justification.
+    const subClassJustif = [
+      [{ subject: `${EX}A`, predicate: RDFS_SUBCLASS, object: `${EX}B` }],
+    ];
+    hoisted.rdf.explainInconsistency.mockResolvedValue(subClassJustif);
+    hoisted.rdf.getUnsatisfiableClasses.mockResolvedValue([]);
+    hoisted.rdf.runShaclValidation.mockResolvedValue({ conforms: true, violations: [], shapeCount: 0 });
+    hoisted.rdf.verifyRepair.mockResolvedValue(true);
+    // Hierarchy: B ⊑ C → A ⊑ B can weaken to A ⊑ C.
+    hoisted.rdf.sparqlQuery.mockResolvedValue({
+      type: 'select',
+      rows: [{ sub: `${EX}B`, sup: `${EX}C` }],
+    });
+    // The weakening batch removes A⊑B and adds A⊑C.
+    hoisted.rdf.applyBatch.mockResolvedValue({ added: 1, removed: 1 });
+
+    render(<RepairSuggestions reasoningId="rweak" isConsistent={false} />);
+
+    // The weakening repair (id W1) is rendered. Its button's accessible name is
+    // the aria-label "Apply repair W1: …"; the visible label is "Apply weakening".
+    const weakenBtn = await screen.findByRole('button', { name: /Apply repair W1/i });
+    expect(weakenBtn).toBeTruthy();
+    expect(weakenBtn.textContent).toMatch(/Apply weakening/);
+    // The "Weaken" badge is shown.
+    expect(screen.getAllByText(/Weaken/).length).toBeGreaterThan(0);
+
+    fireEvent.click(weakenBtn);
+
+    await waitFor(() => expect(hoisted.rdf.applyBatch).toHaveBeenCalled());
+    // The weakening apply is a remove+add batch (NOT a bare removal).
+    const batchCall = hoisted.rdf.applyBatch.mock.calls.find(
+      (c: [{ removes: unknown[]; adds: unknown[] }]) => c[0].adds && c[0].adds.length > 0,
+    );
+    expect(batchCall).toBeTruthy();
+    const changes = batchCall![0];
+    expect(changes.removes[0]).toMatchObject({ subject: `${EX}A`, predicate: RDFS_SUBCLASS, object: `${EX}B` });
+    expect(changes.adds[0]).toMatchObject({ subject: `${EX}A`, predicate: RDFS_SUBCLASS, object: `${EX}C` });
+
+    // A success toast with an Undo action (which reverses the batch) was shown.
+    await waitFor(() => expect(hoisted.toast.success).toHaveBeenCalled());
+    const call = hoisted.toast.success.mock.calls.find((c) => c[1] && c[1].action);
+    expect(call).toBeTruthy();
+    expect(call![1].action.label).toBe('Undo');
+
+    // Undo re-adds A⊑B and removes A⊑C (the reverse batch).
+    hoisted.rdf.applyBatch.mockClear();
+    await call![1].action.onClick();
+    expect(hoisted.rdf.applyBatch).toHaveBeenCalled();
+    const undoChanges = hoisted.rdf.applyBatch.mock.calls[0][0];
+    expect(undoChanges.adds[0]).toMatchObject({ subject: `${EX}A`, object: `${EX}B` });
+    expect(undoChanges.removes[0]).toMatchObject({ subject: `${EX}A`, object: `${EX}C` });
   });
 });

@@ -17,12 +17,42 @@
 // a store copy with the axioms removed) is layered on top in reasoning.ts.
 
 import type { DiagnosticsData } from './diagnosticsBrief';
+import {
+  enumerateWeakenings,
+  type ClassHierarchy,
+  type CulpritAxiom,
+  type WeakeningTriple,
+} from './axiomWeakening';
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
 export type RepairIssue = 'inconsistency' | 'shacl';
+
+/**
+ * How a repair changes the ontology:
+ *  - 'delete'  — remove the culprit axiom outright (maximally destructive; the
+ *                original, default behaviour).
+ *  - 'weaken'  — replace the culprit `A ⊑ D` with a logically weaker axiom
+ *                `A ⊑ D′` (D′ ⊒ D) or drop a conjunct — preserves more knowledge
+ *                (Troquard et al. AAAI 2018; Li & Lambrix ISWC 2024).
+ *
+ * Repairs without an explicit kind are 'delete' (back-compat: existing tests and
+ * callers that don't set it treat every repair as a deletion).
+ */
+export type RepairKind = 'delete' | 'weaken';
+
+/**
+ * A remove+add batch for a WEAKENING repair: remove the original culprit
+ * axiom triple(s) AND add the weaker replacement triple(s). Adds may be empty
+ * when the weakening degenerates to a deletion (A ⊑ owl:Thing, or dropping the
+ * last conjunct). Mirrors rdfManager.applyBatch's { removes, adds } shape.
+ */
+export interface RepairBatch {
+  removes: WeakeningTriple[];
+  adds: WeakeningTriple[];
+}
 
 export interface RepairAction {
   /**
@@ -72,10 +102,42 @@ export interface RepairAction {
 }
 
 export interface RepairSuggestion {
-  /** Stable, human-referenceable id, e.g. "R1", "R2", "S1". */
+  /** Stable, human-referenceable id, e.g. "R1", "R2", "S1", "W1". */
   id: string;
   issue: RepairIssue;
   action: RepairAction;
+  /**
+   * Repair kind. Absent ⇒ 'delete' (back-compat). 'weaken' repairs carry a
+   * `batch` (remove original + add weaker) and a `weakerThan` description.
+   */
+  kind?: RepairKind;
+  /**
+   * For kind:'weaken' — the remove+add batch to apply (the deletion `action`
+   * above still removes the culprit, so an apply path that only understands
+   * `action` degrades gracefully to a deletion; a weakening-aware path applies
+   * the full batch to also ADD the weaker axiom).
+   */
+  batch?: RepairBatch;
+  /**
+   * For kind:'weaken' — "A ⊑ D" (the original, stronger axiom) so the UI/agent
+   * can show "A ⊑ D → A ⊑ D′".
+   */
+  weakerThan?: string;
+  /**
+   * For kind:'weaken' — the id of the deletion repair this weakening is an
+   * alternative to (same culprit axiom). Lets the UI group "delete vs weaken".
+   */
+  alternativeTo?: string;
+  /**
+   * For kind:'weaken' — set by the caller after symbolic verification: true when
+   * removing the original culprit axiom restores consistency. Because the added
+   * weaker axiom `A ⊑ D′` is ENTAILED by the removed `A ⊑ D` (D ⊑ D′), the
+   * removal verdict transfers to the weakening (re-adding an entailment of a
+   * removed axiom cannot re-break a satisfied model). Undefined when not verified.
+   */
+  weakeningVerified?: boolean;
+  /** For kind:'weaken' — human-readable verification note (honest about the add-side). */
+  weakeningNote?: string;
   /** Plain-language explanation of why this repair was chosen. */
   rationale: string;
   /**
@@ -501,6 +563,171 @@ function buildShaclRepairs(
       needsValue: true,
     });
   }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Axiom weakening — less-destructive alternatives to deletion (R-weaken)
+// ---------------------------------------------------------------------------
+
+/**
+ * Context the weakening enumerator needs from the (async) caller: the classified
+ * subsumption hierarchy and, for intersection-typed superclasses, the resolved
+ * owl:intersectionOf members keyed by the intersection node IRI. The caller in
+ * reasoning.ts / RepairSuggestions.tsx reads these once via rdfManager.sparqlQuery
+ * (this module stays pure/reasoner-free).
+ */
+export interface WeakeningContext {
+  hierarchy: ClassHierarchy;
+  /** Direct subClassOf edges (for hop-distance specificity ranking). */
+  direct?: Map<string, Set<string>>;
+  /** intersectionNodeIri → resolved conjunct member IRIs (A ⊑ B ⊓ C). */
+  intersections?: Map<string, string[]>;
+  /**
+   * The inconsistency justifications (MIPS). When provided, weakenings are
+   * enumerated for EVERY `rdfs:subClassOf` axiom appearing in a justification —
+   * not only the axiom the deletion hitting-set happened to pick. This matters
+   * because the hitting set prefers ABox removals (least destructive), so a
+   * subClassOf culprit you could WEAKEN may not be the chosen deletion. Each
+   * resulting weakening is tied (alternativeTo) to the deletion repair whose
+   * justification contains the weakened axiom. Optional: when absent, weakenings
+   * are derived only from the deletion repairs themselves (back-compat).
+   */
+  justifications?: Array<
+    Array<{ subject: string; predicate: string; object: string; graph?: string }>
+  >;
+}
+
+const RDFS_SUBCLASS_OF = `${RDFS}subClassOf`;
+
+/**
+ * For each DELETION repair whose culprit axiom is an `A rdfs:subClassOf D`,
+ * enumerate logically-weaker replacements and append them as kind:'weaken'
+ * repairs (ids W1, W2, …). The original deletion repairs are kept UNCHANGED —
+ * weakening is offered as an ALTERNATIVE, ranked above deletion because it
+ * preserves more knowledge (Troquard et al. 2018; Li & Lambrix 2024).
+ *
+ * Pure & deterministic given the same deletion repairs + context. The trivial
+ * `A ⊑ owl:Thing` weakening (≡ deletion) is suppressed here to avoid duplicating
+ * the deletion repair the agent already has.
+ *
+ * Returns the augmented list: original repairs followed by their weakening
+ * alternatives (each annotated with `alternativeTo` = the deletion repair id).
+ */
+export function addWeakeningRepairs(
+  repairs: RepairSuggestion[],
+  ctx: WeakeningContext,
+): RepairSuggestion[] {
+  const out: RepairSuggestion[] = [...repairs];
+  let wCount = 0;
+  // Deduplicate culprit axioms already weakened (avoid duplicate W-repairs when
+  // a subClassOf axiom is both the deletion target AND present across MIPS).
+  const weakenedCulprits = new Set<string>();
+
+  const deletionRepairs = repairs.filter(
+    (r) => r.issue === 'inconsistency' && !r.needsManualReview,
+  );
+
+  // For each subClassOf culprit, find the deletion repair to tie it to: prefer a
+  // deletion that targets the SAME axiom; else the deletion covering the same
+  // justification; else the first inconsistency deletion (so alternativeTo is set).
+  const findOwner = (
+    s: string,
+    p: string,
+    o: string,
+    jIdx: number | null,
+  ): RepairSuggestion | undefined => {
+    const exact = deletionRepairs.find(
+      (r) =>
+        r.action.args.subjectIri === s &&
+        r.action.args.predicateIri === p &&
+        r.action.args.objectIri === o,
+    );
+    if (exact) return exact;
+    if (jIdx !== null) {
+      const byJust = deletionRepairs.find((r) => r.justificationsCovered?.includes(jIdx));
+      if (byJust) return byJust;
+    }
+    return deletionRepairs[0];
+  };
+
+  const emitWeakenings = (
+    culprit: CulpritAxiom,
+    owner: RepairSuggestion | undefined,
+    covered: number[] | undefined,
+  ) => {
+    const key = `${culprit.subject} ${culprit.predicate} ${culprit.object} ${culprit.graph ?? ''}`;
+    if (weakenedCulprits.has(key)) return;
+    weakenedCulprits.add(key);
+    const weakenings = enumerateWeakenings(culprit, ctx.hierarchy, {
+      direct: ctx.direct,
+      // Suppress A ⊑ owl:Thing — that IS the deletion of the axiom.
+      includeThing: false,
+    });
+    for (const w of weakenings) {
+      wCount += 1;
+      out.push({
+        id: `W${wCount}`,
+        issue: 'inconsistency',
+        kind: 'weaken',
+        ...(owner ? { alternativeTo: owner.id } : {}),
+        // `action` removes the culprit so a weakening-naive apply path still
+        // removes it; `batch` carries the full remove+add (weakening-aware path).
+        action: {
+          tool: 'removeLink',
+          args: {
+            subjectIri: culprit.subject,
+            predicateIri: culprit.predicate,
+            objectIri: culprit.object,
+            ...(culprit.graph ? { graph: culprit.graph } : {}),
+          },
+        },
+        batch: { removes: w.removes, adds: w.adds },
+        weakerThan: w.weakerThan,
+        rationale: w.rationale + ' (less destructive than deletion — apply as a remove+add batch).',
+        ...(covered ? { justificationsCovered: covered } : {}),
+      });
+    }
+  };
+
+  // Path A: weaken subClassOf axioms present in the JUSTIFICATIONS (preferred —
+  // catches culprits the deletion hitting set skipped in favour of an ABox).
+  if (ctx.justifications && ctx.justifications.length > 0) {
+    ctx.justifications.forEach((mips, jIdx) => {
+      for (const ax of mips) {
+        if (ax.predicate !== RDFS_SUBCLASS_OF) continue;
+        const culprit: CulpritAxiom = {
+          subject: ax.subject,
+          predicate: RDFS_SUBCLASS_OF,
+          object: ax.object,
+          ...(ax.graph ? { graph: ax.graph } : {}),
+          ...(ctx.intersections?.has(ax.object)
+            ? { intersectionMembers: ctx.intersections.get(ax.object) }
+            : {}),
+        };
+        const owner = findOwner(ax.subject, RDFS_SUBCLASS_OF, ax.object, jIdx);
+        emitWeakenings(culprit, owner, owner?.justificationsCovered ?? [jIdx]);
+      }
+    });
+  }
+
+  // Path B: also weaken any subClassOf axiom the deletion hitting set itself
+  // chose (covers the back-compat case where no justifications were supplied).
+  for (const del of deletionRepairs) {
+    const a = del.action.args;
+    if (a.predicateIri !== RDFS_SUBCLASS_OF || !a.subjectIri || !a.objectIri) continue;
+    const culprit: CulpritAxiom = {
+      subject: a.subjectIri,
+      predicate: RDFS_SUBCLASS_OF,
+      object: a.objectIri,
+      ...(a.graph ? { graph: a.graph } : {}),
+      ...(ctx.intersections?.has(a.objectIri)
+        ? { intersectionMembers: ctx.intersections.get(a.objectIri) }
+        : {}),
+    };
+    emitWeakenings(culprit, del, del.justificationsCovered);
+  }
+
   return out;
 }
 

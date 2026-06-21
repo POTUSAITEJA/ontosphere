@@ -163,6 +163,14 @@ export interface BriefRepair {
   verifiedSet?: boolean;
   needsValue?: boolean;
   needsManualReview?: boolean;
+  /** 'weaken' for axiom-weakening alternatives; absent/'delete' for deletions. */
+  kind?: string;
+  /** For weakenings: the deletion repair id this is an alternative to. */
+  alternativeTo?: string;
+  /** For weakenings: "A ⊑ D" — the original, stronger axiom. */
+  weakerThan?: string;
+  /** For weakenings: true when the weakening is symbolically verified. */
+  weakeningVerified?: boolean;
 }
 
 /** Extra verification context surfaced alongside the ranked repair list. */
@@ -186,9 +194,23 @@ function buildSuggestedRepairsSection(
   const hasMultiple =
     repairs.filter((r) => r.issue === 'inconsistency' && !r.needsManualReview).length > 1;
 
+  const hasWeakenings = repairs.some((r) => r.kind === 'weaken');
+
   repairs.forEach((r) => {
     if (r.needsManualReview) {
       lines.push(`   ${r.id}. [manual review] — ${r.rationale}`);
+      return;
+    }
+    // Axiom-weakening alternatives (Troquard et al. 2018; Li & Lambrix 2024):
+    // a LESS-destructive replacement of the culprit `A ⊑ D` with a weaker
+    // `A ⊑ D′` — preserves more knowledge than deletion. Rendered distinctly.
+    if (r.kind === 'weaken') {
+      const wv =
+        r.weakeningVerified === true
+          ? ' [verified: removal restores consistency; weaker axiom is entailed by it]'
+          : '';
+      const alt = r.alternativeTo ? ` (alternative to deletion ${r.alternativeTo})` : '';
+      lines.push(`   ${r.id}. [weaken]${alt} — ${r.rationale}${wv}`);
       return;
     }
     // A per-axiom `false` does NOT mean the repair is wrong: with multiple
@@ -203,8 +225,18 @@ function buildSuggestedRepairsSection(
             : ' [verified: does NOT alone restore consistency]'
           : '';
     const value = r.needsValue ? ' [you must supply a value]' : '';
-    lines.push(`   ${r.id}. ${r.action.tool} — ${r.rationale}${verify}${value}`);
+    const kindTag = hasWeakenings ? ' [delete]' : '';
+    lines.push(`   ${r.id}. ${r.action.tool}${kindTag} — ${r.rationale}${verify}${value}`);
   });
+
+  if (hasWeakenings) {
+    lines.push(
+      '   ⇒ NOTE: [weaken] repairs replace a culprit A ⊑ D with a logically weaker ' +
+        'A ⊑ D′ (D′ ⊒ D) — they PRESERVE MORE KNOWLEDGE than the [delete] alternative. ' +
+        'Prefer the most-specific weakening that restores consistency; fall back to ' +
+        'deletion only when no weakening suffices (Troquard et al. 2018; Li & Lambrix 2024).',
+    );
+  }
 
   // Full-set verdict (M2): the union of the suggested repairs is the actual fix.
   if (options.repairSetVerifiedConsistent === true) {

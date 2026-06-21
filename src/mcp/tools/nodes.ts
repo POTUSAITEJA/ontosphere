@@ -154,9 +154,15 @@ const removeNode: McpTool = {
             ...(ot === 'literal' && language ? { lang: language } : {}),
           };
         };
+        // BUG A: capture with serialize:false so the worker returns STRUCTURED
+        // terms ({value, termType, datatype, language}) via serializeQuad. With
+        // serialize:true the object is a flat lexical string (termToString), so
+        // termType/datatype/language are always undefined — making the typed/lang
+        // capture dead code and mis-tagging colon/IRI-like literals (e.g.
+        // "a:b", "2026-..."^^xsd:dateTime) as 'iri' on revert (data corruption).
         const [outgoing, incoming] = await Promise.all([
-          rdfManager.fetchQuadsPage({ graphName: 'urn:vg:data', filter: { subject: iri }, limit: 0, serialize: true }),
-          rdfManager.fetchQuadsPage({ graphName: 'urn:vg:data', filter: { object: iri }, limit: 0, serialize: true }),
+          rdfManager.fetchQuadsPage({ graphName: 'urn:vg:data', filter: { subject: iri }, limit: 0, serialize: false }),
+          rdfManager.fetchQuadsPage({ graphName: 'urn:vg:data', filter: { object: iri }, limit: 0, serialize: false }),
         ]);
         type RawQuad = Parameters<typeof toProvQuad>[0];
         const seen = new Set<string>();
@@ -469,11 +475,15 @@ const updateNode: McpTool = {
       const touchedPredicates = new Set(changes.keys());
       const provRemoved: ProvQuad[] = [];
       try {
+        // BUG A: serialize:false → structured terms so the datatype/language and
+        // real termType (literal vs iri vs bnode) are populated. With serialize:true
+        // the object is a flat lexical string and the prior-value revert would lose
+        // the datatype/language and mis-classify colon-bearing literals as IRIs.
         const page = await rdfManager.fetchQuadsPage({
           graphName: 'urn:vg:data',
           filter: { subject: iri },
           limit: 0,
-          serialize: true,
+          serialize: false,
         });
         const items = (page?.items ?? []) as Array<{
           predicate: { value: string } | string;

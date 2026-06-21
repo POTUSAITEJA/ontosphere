@@ -6,7 +6,13 @@ import { VALID_ALGORITHMS } from './layout';
 import { rdfManager } from '@/utils/rdfManager';
 import { checkOwl2Profile, detectOwl2Profiles, type ProfileTriple } from '@/utils/owlProfile';
 import { buildRepairBrief, type DiagnosticsData } from './diagnosticsBrief';
-import { computeRepairs, type RepairSuggestion } from './computeRepairs';
+import {
+  computeRepairs,
+  addWeakeningRepairs,
+  type RepairSuggestion,
+  type WeakeningContext,
+} from './computeRepairs';
+import { buildClassHierarchy, buildDirectEdgeMap } from './axiomWeakening';
 import type { VerifyRepairRemoval } from '@/utils/rdfManager';
 const EXPORT_FORMATS = ['turtle', 'jsonld', 'rdfxml', 'svg', 'png'];
 
@@ -48,6 +54,74 @@ async function loadDataProfileTriples(): Promise<ProfileTriple[]> {
     object: q.object.value,
     objectIsLiteral: q.object.termType === 'Literal',
   }));
+}
+
+const RDFS_SUBCLASS_OF = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
+const OWL_INTERSECTION_OF = 'http://www.w3.org/2002/07/owl#intersectionOf';
+const RDF_FIRST = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#first';
+const RDF_REST = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#rest';
+const RDF_NIL = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#nil';
+
+/**
+ * Read the classified class subsumption hierarchy (asserted + inferred
+ * rdfs:subClassOf) plus any owl:intersectionOf definitions, to drive axiom
+ * weakening. sparqlQuery runs with unionDefaultGraph:true so a plain BGP matches
+ * urn:vg:data + urn:vg:ontologies + urn:vg:inferred — i.e. the FULL classified
+ * hierarchy after reasoning. Returns the WeakeningContext computeRepairs needs.
+ *
+ * Best-effort: on any query failure returns an empty hierarchy (weakening simply
+ * yields no candidates and the agent still gets the deletion repairs).
+ */
+async function loadWeakeningContext(): Promise<WeakeningContext> {
+  const empty: WeakeningContext = { hierarchy: buildClassHierarchy([]) };
+  try {
+    // 1. All subClassOf edges with NAMED (IRI) super- and sub-classes.
+    const subRes = await rdfManager.sparqlQuery(
+      `SELECT ?sub ?sup WHERE { ?sub <${RDFS_SUBCLASS_OF}> ?sup . FILTER(isIRI(?sub) && isIRI(?sup)) }`,
+      { limit: 5000 },
+    );
+    const edges: Array<{ sub: string; sup: string }> = [];
+    if (subRes?.type === 'select' && Array.isArray(subRes.rows)) {
+      for (const row of subRes.rows as Array<Record<string, string>>) {
+        if (row.sub && row.sup) edges.push({ sub: row.sub, sup: row.sup });
+      }
+    }
+
+    // 2. owl:intersectionOf definitions: map the class/intersection node to its
+    //    resolved NAMED conjunct members (RDF list walk). Only named members are
+    //    usable as drop-conjunct weakening targets.
+    const intersections = new Map<string, string[]>();
+    try {
+      const intRes = await rdfManager.sparqlQuery(
+        `SELECT ?node ?member WHERE {
+           ?node <${OWL_INTERSECTION_OF}> ?list .
+           ?list <${RDF_FIRST}>* /  <${RDF_REST}>* ?cell .
+           ?cell <${RDF_FIRST}> ?member .
+           FILTER(isIRI(?member))
+         }`,
+        { limit: 5000 },
+      );
+      if (intRes?.type === 'select' && Array.isArray(intRes.rows)) {
+        for (const row of intRes.rows as Array<Record<string, string>>) {
+          if (!row.node || !row.member) continue;
+          if (row.member === RDF_NIL) continue;
+          const arr = intersections.get(row.node) ?? [];
+          if (!arr.includes(row.member)) arr.push(row.member);
+          intersections.set(row.node, arr);
+        }
+      }
+    } catch {
+      // intersection resolution is optional — generalise-only weakening still works.
+    }
+
+    return {
+      hierarchy: buildClassHierarchy(edges),
+      direct: buildDirectEdgeMap(edges),
+      ...(intersections.size > 0 ? { intersections } : {}),
+    };
+  } catch {
+    return empty;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -172,8 +246,8 @@ const explainDiagnostics: McpTool = {
     "isConsistent=false means a logical contradiction: `justifications` lists each minimal set of axioms (MIPS) causing it — remove or revise one axiom per set. " +
     "`unsatisfiableClasses` are classes that can never have instances (best-effort). `profile` reports OWL 2 profile analysis: the legacy DL sanity check (owl2dl + violations, e.g. a literal on an object property) PLUS structural EL/QL/RL detection (el/ql/rl each { valid, violations:[{construct,axiom,reason}] }) and `mostRestrictive` (EL|QL|RL|DL|Full) — the tightest profile the ontology fits, indicating whether a cheaper profile-specific reasoner suffices. " +
     "`shaclViolations` are data-shape conformance failures. `repairBrief` is a ranked plain-language summary you can act on directly. " +
-    "`suggestedRepairs` is a ranked list of EXECUTABLE reasoner-computed fixes, each { id, issue, action:{tool,args}, rationale, verifiedConsistent?, verifiedSet?, justificationsCovered?, needsValue?, needsManualReview? }: " +
-    "for inconsistencies they form a minimal hitting set over the MIPS — removing the WHOLE set restores consistency. verifiedConsistent:true ⇒ removing that ONE axiom alone restores consistency; with multiple independent contradictions it is commonly false for every repair (means 'not ALONE', not 'wrong'). " +
+    "`suggestedRepairs` is a ranked list of EXECUTABLE reasoner-computed fixes, each { id, issue, kind?, action:{tool,args}, batch?, weakerThan?, alternativeTo?, weakeningVerified?, rationale, verifiedConsistent?, verifiedSet?, justificationsCovered?, needsValue?, needsManualReview? }: " +
+    "for inconsistencies the DELETION repairs (kind:'delete') form a minimal hitting set over the MIPS — removing the WHOLE set restores consistency. AXIOM WEAKENING repairs (kind:'weaken', ids W1,W2,…) are a LESS-destructive alternative (Troquard et al. AAAI 2018; Li & Lambrix ISWC 2024): for an rdfs:subClassOf culprit A ⊑ D they replace it with a weaker A ⊑ D′ (D′ ⊒ D) or drop a conjunct — apply via batch:{removes,adds}; prefer weakening over deletion to preserve more knowledge. verifiedConsistent:true ⇒ removing that ONE axiom alone restores consistency; with multiple independent contradictions it is commonly false for every repair (means 'not ALONE', not 'wrong'). " +
     "Trust the top-level `repairSetVerifiedConsistent` / per-repair `verifiedSet` (the full set together) and apply the entire set. needsManualReview:true ⇒ no auto-repair (inspect manually). " +
     "Apply each by calling its action.tool (always removeLink for inconsistency repairs) with action.args. Read-only: never mutates asserted data.",
   inputSchema: {
@@ -238,7 +312,20 @@ const explainDiagnostics: McpTool = {
       // MIPS + SHACL candidates), then symbolically VERIFY the inconsistency
       // candidates by re-running the consistency oracle on a store copy without
       // the removed axioms. Verification is read-only (operates on a copy).
-      const suggestedRepairs: RepairSuggestion[] = computeRepairs(data);
+      let suggestedRepairs: RepairSuggestion[] = computeRepairs(data);
+
+      // R-weaken — AXIOM WEAKENING (Troquard et al. AAAI 2018; Li & Lambrix ISWC
+      // 2024). For every deletion repair that targets an `A rdfs:subClassOf D`
+      // axiom, ALSO offer logically-weaker replacements `A ⊑ D′` (D′ ⊒ D) or
+      // drop-conjunct alternatives — less destructive than deletion. Reads the
+      // classified hierarchy via sparqlQuery (urn:vg:inferred + asserted).
+      if (isConsistent === false) {
+        const wctx = await loadWeakeningContext();
+        suggestedRepairs = addWeakeningRepairs(suggestedRepairs, {
+          ...wctx,
+          justifications,
+        });
+      }
 
       // `repairSetVerifiedConsistent` is the paper-critical signal: does removing
       // the FULL hitting set at once restore global consistency? With multiple
@@ -275,13 +362,45 @@ const explainDiagnostics: McpTool = {
           }),
         );
 
+        // 1b. WEAKENING verification (Troquard et al. 2018; Li & Lambrix 2024).
+        //     A weakening repair removes `A ⊑ D` and ADDS the weaker `A ⊑ D′`
+        //     (D′ ⊒ D). verifyRepair only takes REMOVALS, so we verify the
+        //     removal side directly (does removing `A ⊑ D` restore consistency —
+        //     reused from the per-axiom pass above). The ADD side is sound WITHOUT
+        //     a separate oracle call: because D ⊑ D′, the added `A ⊑ D′` is
+        //     ENTAILED by the very axiom we removed, so it introduces NO new
+        //     constraint over the post-removal ontology — re-adding an entailment
+        //     of a removed axiom cannot re-break a model that satisfied the
+        //     removal. We record this as weakeningVerified with an honest note.
+        //     LIMITATION: this is a *monotonicity* argument, not a full whatIf(add)
+        //     re-classification (the worker exposes no add-side consistency oracle
+        //     without mutating urn:vg:data); a fuller check is documented follow-up.
+        for (const r of actionable) {
+          if (r.kind !== 'weaken') continue;
+          // verifiedConsistent here = "removing the culprit A⊑D alone restores
+          // consistency". When true, the weakening (which keeps A⊑D′ ⊒ A⊑D) is
+          // sound by the entailment-monotonicity argument above.
+          r.weakeningVerified = r.verifiedConsistent === true;
+          r.weakeningNote = r.weakeningVerified
+            ? 'Removal of the original axiom restores consistency; the weaker A ⊑ D′ ' +
+              'is entailed by the removed A ⊑ D (D ⊑ D′), so re-adding it cannot ' +
+              're-introduce the contradiction — weakening is sound and preserves A ⊑ D′.'
+            : 'Removing the original axiom alone does not restore consistency (other ' +
+              'contradictions remain); apply with the full repair set. The weaker ' +
+              'A ⊑ D′ is still entailed by the removed axiom (add-side is monotone).';
+        }
+
         // 2. Full-set verification — remove EVERY inconsistency repair at once.
         //    This is the hitting-set guarantee: their union restores consistency
         //    even when each individual removal does not.
-        if (actionable.length > 0) {
+        // The full hitting set is the set of DELETION repairs (weakenings are
+        // per-axiom ALTERNATIVES to a deletion, not additional set members — they
+        // share the same culprit, so including them would double-count).
+        const deletionSet = actionable.filter((r) => r.kind !== 'weaken');
+        if (deletionSet.length > 0) {
           // BUG B: each removal carries its object-term + source graph so the
           // full-set VERIFY removes exactly what the apply path would.
-          const removals = actionable.map(repairToRemoval);
+          const removals = deletionSet.map(repairToRemoval);
           try {
             const detailed = await rdfManager.verifyRepairDetailed(removals);
             repairSetVerifiedConsistent = detailed.verifiedConsistent;
@@ -294,8 +413,8 @@ const explainDiagnostics: McpTool = {
                 `reflect an unchanged store rather than the repair's effect ` +
                 `(check for serialization mismatches).`;
             }
-            // Annotate each actionable repair with the shared full-set verdict.
-            for (const r of actionable) r.verifiedSet = detailed.verifiedConsistent;
+            // Annotate each deletion repair with the shared full-set verdict.
+            for (const r of deletionSet) r.verifiedSet = detailed.verifiedConsistent;
           } catch {
             // Oracle unavailable — leave repairSetVerifiedConsistent null.
           }

@@ -165,4 +165,44 @@ describe('buildRepairBrief', () => {
     expect(idxUnsatisfiable).toBeLessThan(idxProfile);
     expect(idxProfile).toBeLessThan(idxShacl);
   });
+
+  it('renders axiom-weakening repairs distinctly and notes they preserve more knowledge', () => {
+    const RDFS_SUBCLASS = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
+    const d: DiagnosticsData = {
+      ...cleanData,
+      isConsistent: false,
+      justifications: [
+        [{ subject: 'http://ex/A', predicate: RDFS_SUBCLASS, object: 'http://ex/B' }],
+      ],
+    };
+    const repairs = [
+      {
+        id: 'R1',
+        issue: 'inconsistency',
+        action: { tool: 'removeLink', args: { subjectIri: 'http://ex/A', predicateIri: RDFS_SUBCLASS, objectIri: 'http://ex/B' } },
+        rationale: 'Remove A subClassOf B',
+        verifiedConsistent: true,
+      },
+      {
+        id: 'W1',
+        issue: 'inconsistency',
+        kind: 'weaken',
+        alternativeTo: 'R1',
+        weakerThan: 'A ⊑ B',
+        weakeningVerified: true,
+        action: { tool: 'removeLink', args: { subjectIri: 'http://ex/A', predicateIri: RDFS_SUBCLASS, objectIri: 'http://ex/B' } },
+        rationale: 'Weaken A ⊑ B to A ⊑ C (C ⊒ B).',
+      },
+    ];
+    const result = buildRepairBrief(d, repairs);
+    // Weakening rendered with [weaken] tag + alternative-to + verified note.
+    expect(result).toContain('W1. [weaken]');
+    expect(result).toContain('alternative to deletion R1');
+    expect(result).toContain('weaker axiom is entailed by it');
+    // Deletion tagged [delete] when weakenings are present.
+    expect(result).toContain('R1. removeLink [delete]');
+    // The preserve-more-knowledge note + citation.
+    expect(result).toContain('PRESERVE MORE KNOWLEDGE');
+    expect(result).toContain('Troquard');
+  });
 });
