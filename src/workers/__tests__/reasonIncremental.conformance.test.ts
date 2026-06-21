@@ -22,7 +22,12 @@
 //       inferred, then REMOVE `p ⊑ q` WITHOUT an intervening full run and assert
 //       `a q b` is gone (incremental == full);
 //   (e) an edit whose effect is far from Σ_Δ leaves distant inferred triples
-//       untouched AND equal to full.
+//       untouched AND equal to full;
+//   (f) BUG A (OVER-PURGE): a valid inferred `y rdf:type Sup` exists whose support
+//       (`y rdf:type Sub`, `Sub ⊑ Sup`) is NOT in the edited module; an edit adds
+//       `W ⊑ Sup` so Sup ∈ sig(M) but y is NOT an M-subject. The OLD any-position
+//       purge would drop `y rdf:type Sup` and never re-derive it (incremental <
+//       full); the subject-based purge KEEPS it. Asserted via incremental == full.
 //
 // REQUIRE_KONCLUDE-gated: when set (CI) a WASM/init failure FAILS the test.
 // Run with: REQUIRE_KONCLUDE=1 npx vitest run --pool=threads <this file>
@@ -209,6 +214,14 @@ describe('reasonIncremental — auto-incremental ≡ full over an edit trace (re
           qd(C('P'), RDFS_SUBCLASS_OF, C('Q')),
           qd(C('ind'), RDF_TYPE, C('A')),
           qd(C('indP'), RDF_TYPE, C('P')),
+          // BUG A over-purge fixture: Sub ⊑ Sup with y : Sub ⇒ y : Sup inferred.
+          // The support (y : Sub, Sub ⊑ Sup) is far from the later W ⊑ Sup edit.
+          qd(C('Sub'), RDF_TYPE, OWL_CLASS),
+          qd(C('Sup'), RDF_TYPE, OWL_CLASS),
+          qd(C('Wc'), RDF_TYPE, OWL_CLASS),
+          qd(C('y'), RDF_TYPE, OWL_NAMED_INDIVIDUAL),
+          qd(C('Sub'), RDFS_SUBCLASS_OF, C('Sup')),
+          qd(C('y'), RDF_TYPE, C('Sub')),
         ];
         await cmd('syncLoad', { graphName: DATA, quads: base.map((q) => serializeQuad(q)) });
 
@@ -224,8 +237,11 @@ describe('reasonIncremental — auto-incremental ≡ full over an edit trace (re
           expect(incKeys).toEqual(fullKeys);
           expect(incKeys).toContain(keyOf({ subject: C('ind'), predicate: RDF_TYPE, object: C('Cc') }));
           expect(incKeys).toContain(keyOf({ subject: C('indP'), predicate: RDF_TYPE, object: C('Q') }));
+          // BUG A fixture entailment established at the baseline.
+          expect(incKeys).toContain(keyOf({ subject: C('y'), predicate: RDF_TYPE, object: C('Sup') }));
         }
         const indPQ = keyOf({ subject: C('indP'), predicate: RDF_TYPE, object: C('Q') });
+        const ySup = keyOf({ subject: C('y'), predicate: RDF_TYPE, object: C('Sup') });
 
         // ── STEP (a): add Cc ⊑ D — new transitive entailment ind : D. ────────────
         {
@@ -341,7 +357,205 @@ describe('reasonIncremental — auto-incremental ≡ full over an edit trace (re
           expect(incKeys).toContain(keyOf({ subject: C('indP'), predicate: RDF_TYPE, object: C('Q') }));
           // The new far entailment indE:F is present.
           expect(incKeys).toContain(keyOf({ subject: C('indE'), predicate: RDF_TYPE, object: C('F') }));
+          // The BUG A fixture entailment y:Sup is STILL present (untouched by far edits).
+          expect(incKeys).toContain(ySup);
         }
+
+        // ── STEP (f): an edit adds `Wc ⊑ Sup` where Sup is ALSO the superclass of an
+        //    earlier individual y (y : Sub, Sub ⊑ Sup ⇒ y : Sup). Sup ∈ sig(M). With
+        //    the ⊤⊥*-module's ⊤-pass keeping the `Sub ⊑ Sup` support, y IS pulled
+        //    into M and `y : Sup` is correctly RE-DERIVED — so incremental == full
+        //    and `y : Sup` is retained. This guards the subject-based purge against
+        //    REGRESSING the kept-and-rederived case. (The genuine over-purge
+        //    divergence — where the purge predicate itself differs — is isolated in
+        //    reasonIncremental.unit.test.ts's direct purge-predicate test, since the
+        //    locality ⊤-pass always pulls subsumption support into M end-to-end.) ──
+        {
+          const e = qd(C('Wc'), RDFS_SUBCLASS_OF, C('Sup'));
+          const changed = await syncAdds([e], [C('Wc')]);
+          const r = (await cmd('reasonIncremental', {
+            changedSubjects: changed,
+            changedSignature: sigOf(e),
+          })) as { mode: string; isConsistent: boolean | null };
+          expect(r.mode).toBe('incremental');
+          expect(r.isConsistent).toBe(true);
+          const incKeys = inferredKeys(await readInferred());
+          const fullKeys = await fullReferenceKeys(base);
+          expect(incKeys).toEqual(fullKeys);
+          expect(incKeys).toContain(ySup);
+        }
+      } finally {
+        runtime.terminate();
+        setKoncludeReasonerFactoryForTest(null);
+      }
+    },
+    300000,
+  );
+
+  it(
+    'BUG A: an inferred triple whose OBJECT ∈ sig(M) but whose SUBJECT ∉ M-subjects is KEPT (subject-based purge, not any-position)',
+    async () => {
+      // This isolates the BUG A purge-predicate divergence directly. We inject a
+      // VALID-looking inferred triple `distant : Sup` whose subject `distant` does
+      // NOT occur in the edited module M, while Sup DOES occur in sig(M) (object
+      // position). The OLD any-position purge (remove if subject OR predicate OR
+      // object ∈ sig(M)) would DELETE `distant : Sup` (Sup ∈ sig(M)) and — since
+      // `distant` is not in M — NEVER re-derive it, UNDER-approximating full. The
+      // subject-based purge (remove iff SUBJECT ∈ M-subjects) KEEPS it. We assert it
+      // survives the incremental step. (The end-to-end conformance trace cannot
+      // surface this because the ⊤⊥*-module's ⊤-pass always pulls real subsumption
+      // support into M; this test injects the distant inferred triple to exercise
+      // the purge predicate in isolation.)
+      try {
+        const probe = new RdfReasoner();
+        await probe.ready;
+        probe.terminate();
+      } catch (e) {
+        if (REQUIRE_KONCLUDE) {
+          throw new Error(`REQUIRE_KONCLUDE set but Konclude failed to init: ${String(e)}`);
+        }
+        console.warn('[TEST][SKIP] Konclude WASM unavailable — skipping BUG A purge:', String(e));
+        return;
+      }
+
+      setKoncludeReasonerFactoryForTest(() => createNodeKoncludeReasoner());
+      const responses = new Map<string, { ok: boolean; result?: unknown; error?: string }>();
+      const runtime = createRdfWorkerRuntime((message: unknown) => {
+        const m = message as { type?: string; id?: string; ok?: boolean; result?: unknown; error?: string };
+        if (m && m.type === 'response' && typeof m.id === 'string') {
+          responses.set(m.id, { ok: !!m.ok, result: m.result, error: m.error });
+        }
+      });
+      let nextId = 0;
+      const cmd = (command: string, payload: unknown) =>
+        runCommand(runtime, responses, `pa${nextId++}`, command, payload);
+      const readInferred = async (): Promise<WQ[]> =>
+        (await cmd('getQuads', { graphName: INFERRED })) as WQ[];
+
+      try {
+        // Base: Wc, Sup classes; a fresh `distant` individual with NO axioms tying it
+        // into any module the Wc/Sup edit induces.
+        const base0 = [
+          qd(C('Wc'), RDF_TYPE, OWL_CLASS),
+          qd(C('Sup'), RDF_TYPE, OWL_CLASS),
+          qd(C('distant'), RDF_TYPE, OWL_NAMED_INDIVIDUAL),
+        ];
+        await cmd('syncLoad', { graphName: DATA, quads: base0.map((q) => serializeQuad(q)) });
+        // Establish a CONSISTENT baseline (first call falls back to full).
+        const r0 = (await cmd('reasonIncremental', { changedSubjects: [C('Wc')] })) as {
+          mode: string; isConsistent: boolean | null;
+        };
+        expect(r0.mode).toBe('full');
+        expect(r0.isConsistent).toBe(true);
+
+        // Inject the distant inferred triple `distant : Sup` directly into
+        // urn:vg:inferred. Its SUBJECT (distant) is not in any module M the next
+        // edit induces; its OBJECT (Sup) WILL be in sig(M).
+        await cmd('syncBatch', {
+          graphName: INFERRED,
+          adds: [qd(C('distant'), RDF_TYPE, C('Sup'), INFERRED)].map((q) => serializeQuad(q)),
+          removes: [],
+        });
+        const distantSup = keyOf({ subject: C('distant'), predicate: RDF_TYPE, object: C('Sup') });
+        expect(inferredKeys(await readInferred())).toContain(distantSup);
+
+        // Edit: add `Wc ⊑ Sup` — Sup ∈ sig(M), but the module's subjects are {Wc,Sup}
+        // (and their declarations), NOT `distant`.
+        const e = qd(C('Wc'), RDFS_SUBCLASS_OF, C('Sup'));
+        await cmd('syncBatch', {
+          graphName: DATA,
+          adds: [e].map((q) => serializeQuad(q)),
+          removes: [],
+        });
+        const r = (await cmd('reasonIncremental', {
+          changedSubjects: [C('Wc')],
+          // changedSignature carries Sup (the edited axiom's object).
+          changedSignature: [C('Wc'), RDFS_SUBCLASS_OF, C('Sup')],
+        })) as { mode: string; isConsistent: boolean | null };
+        expect(r.mode).toBe('incremental');
+        expect(r.isConsistent).toBe(true);
+
+        // The crux of BUG A: `distant : Sup` (subject ∉ M) is KEPT, even though
+        // Sup ∈ sig(M). The OLD any-position purge would have removed it.
+        const after = inferredKeys(await readInferred());
+        expect(after).toContain(distantSup);
+      } finally {
+        runtime.terminate();
+        setKoncludeReasonerFactoryForTest(null);
+      }
+    },
+    300000,
+  );
+
+  it(
+    'BUG B: a MANUAL full run after a retraction CLEARS the stale inferred triple',
+    async () => {
+      try {
+        const probe = new RdfReasoner();
+        await probe.ready;
+        probe.terminate();
+      } catch (e) {
+        if (REQUIRE_KONCLUDE) {
+          throw new Error(`REQUIRE_KONCLUDE set but Konclude failed to init: ${String(e)}`);
+        }
+        console.warn('[TEST][SKIP] Konclude WASM unavailable — skipping BUG B:', String(e));
+        return;
+      }
+
+      setKoncludeReasonerFactoryForTest(() => createNodeKoncludeReasoner());
+      const responses = new Map<string, { ok: boolean; result?: unknown; error?: string }>();
+      const runtime = createRdfWorkerRuntime((message: unknown) => {
+        const m = message as { type?: string; id?: string; ok?: boolean; result?: unknown; error?: string };
+        if (m && m.type === 'response' && typeof m.id === 'string') {
+          responses.set(m.id, { ok: !!m.ok, result: m.result, error: m.error });
+        }
+      });
+      let nextId = 0;
+      const cmd = (command: string, payload: unknown) =>
+        runCommand(runtime, responses, `b${nextId++}`, command, payload);
+      const readInferred = async (): Promise<WQ[]> =>
+        (await cmd('getQuads', { graphName: INFERRED })) as WQ[];
+
+      try {
+        // a p b with p ⊑ q (object properties) ⇒ a q b inferred via a FULL run.
+        const init = [
+          qd(C('p'), RDF_TYPE, OWL_OBJECT_PROPERTY),
+          qd(C('q'), RDF_TYPE, OWL_OBJECT_PROPERTY),
+          qd(C('a'), RDF_TYPE, OWL_NAMED_INDIVIDUAL),
+          qd(C('b'), RDF_TYPE, OWL_NAMED_INDIVIDUAL),
+          qd(C('a'), C('p'), C('b')),
+          qd(C('p'), RDFS_SUBPROPERTY_OF, C('q')),
+        ];
+        await cmd('syncLoad', { graphName: DATA, quads: init.map((q) => serializeQuad(q)) });
+
+        // MANUAL full run (the `runReasoning` command, NOT reasonIncremental).
+        await cmd('runReasoning', { reasoningId: 'b-run-1', reasonerBackend: 'konclude' });
+        {
+          const incKeys = inferredKeys(await readInferred());
+          expect(incKeys).toContain(keyOf({ subject: C('a'), predicate: C('q'), object: C('b') }));
+        }
+
+        // Retract `p ⊑ q` (the supporting axiom). NO reasoning yet.
+        await cmd('syncBatch', {
+          graphName: DATA,
+          adds: [],
+          removes: [
+            {
+              subject: { termType: 'NamedNode', value: C('p') },
+              predicate: { termType: 'NamedNode', value: RDFS_SUBPROPERTY_OF },
+              object: { termType: 'NamedNode', value: C('q') },
+              graph: { termType: 'NamedNode', value: DATA },
+            },
+          ],
+        });
+
+        // A SECOND MANUAL full run. The ADD-ONLY bug would leave the stale `a q b`
+        // in urn:vg:inferred (the working copy never had it ⇒ never re-derived ⇒
+        // never removed). The fix CLEARS urn:vg:inferred before writing the fresh
+        // set, so the full run reflects the retraction: `a q b` is GONE.
+        await cmd('runReasoning', { reasoningId: 'b-run-2', reasonerBackend: 'konclude' });
+        const after = inferredKeys(await readInferred());
+        expect(after).not.toContain(keyOf({ subject: C('a'), predicate: C('q'), object: C('b') }));
       } finally {
         runtime.terminate();
         setKoncludeReasonerFactoryForTest(null);

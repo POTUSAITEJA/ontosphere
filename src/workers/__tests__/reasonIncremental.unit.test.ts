@@ -46,10 +46,17 @@ function computeChangedSignature(
   const seeds = new Set(changedSubjects.filter(Boolean));
   for (const s of seeds) sigma.add(s);
   if (seeds.size === 0) return sigma;
+  // Batched signatureOf over the matching neighbour triples (one index build) —
+  // identical to per-triple signatureOf([t]) because signatureOf harvests each
+  // triple independently. Mirrors the runtime's Finding-3 implementation.
+  const neighbours: LocalityTriple[] = [];
   for (const t of base) {
     if (seeds.has(t.subject) || (!t.objectIsLiteral && seeds.has(t.object))) {
-      for (const sym of signatureOf([t])) sigma.add(sym);
+      neighbours.push(t);
     }
+  }
+  if (neighbours.length > 0) {
+    for (const sym of signatureOf(neighbours)) sigma.add(sym);
   }
   return sigma;
 }

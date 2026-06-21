@@ -159,6 +159,11 @@ const OWL_NAMED_INDIVIDUAL = OWL.NamedIndividual;
 const OWL_ONTOLOGY = OWL.Ontology;
 
 const OWL_ON_DATA_RANGE = `${OWL.namespace}onDataRange`;
+const OWL_DATATYPE = `${OWL.namespace}Datatype`;
+const RDFS_DATATYPE = `${RDFS.namespace}Datatype`;
+const OWL_DATA_RANGE = `${OWL.namespace}DataRange`;
+const OWL_WITH_RESTRICTIONS = `${OWL.namespace}withRestrictions`;
+const OWL_ON_DATATYPE = `${OWL.namespace}onDatatype`;
 // NOTE on owl:propertyChainAxiom: it is NOT a recognised principal predicate, so
 // in buildAxiomUnits a `R owl:propertyChainAxiom (…)` triple (named subject,
 // blank-node list object) falls through to the CONSERVATIVE branch and is kept
@@ -170,26 +175,95 @@ const OWL_ON_DATA_RANGE = `${OWL.namespace}onDataRange`;
  * owl:X ∈ this set is a LOGICAL axiom about the property R (not a declaration):
  * Transitive/Functional/InverseFunctional/Symmetric/Asymmetric/Reflexive/
  * Irreflexive. Per syntactic locality (Cuenca Grau et al., JAIR 2008; the OWL API
- * `SyntacticLocalityEvaluator.AxiomLocalityVisitor`), such an axiom is LOCAL iff
- * the property R is NOT in Σ (it is replaced by the empty/universal property and
- * the characteristic holds trivially), and NON-LOCAL iff R ∈ Σ — in BOTH the ⊥
- * and ⊤ locality modes. Treating these as declarations would DROP them from every
- * module, which is UNSOUND when R ∈ Σ (e.g. Transitive(R) derives new Σ-entailed
- * subsumptions / instances).
+ * `SyntacticLocalityEvaluator.AxiomLocalityVisitor`), such an axiom is NON-LOCAL
+ * whenever R ∈ Σ — in BOTH the ⊥ and ⊤ locality modes — because it constrains a
+ * kept property and can derive new Σ-entailments (e.g. Transitive(R) derives new
+ * Σ-entailed subsumptions / instances). When R ∉ Σ the property is replaced by the
+ * empty role (⊥-mode) or the universal role (⊤-mode); whether the characteristic
+ * then holds TRIVIALLY is CHARACTERISTIC- AND MODE-SPECIFIC — see
+ * `isCharacteristicLocalWhenPropOutOfSigma` for the exact per-mode table (e.g.
+ * Reflexive is NEVER ⊥-local because the empty role is not reflexive, and
+ * Functional/InverseFunctional/Asymmetric/Irreflexive are NEVER ⊤-local because
+ * the universal role violates them). Treating these as plain declarations would
+ * DROP them from every module — UNSOUND.
  */
+const OWL_TRANSITIVE_PROPERTY = `${OWL.namespace}TransitiveProperty`;
+const OWL_FUNCTIONAL_PROPERTY = `${OWL.namespace}FunctionalProperty`;
+const OWL_INVERSE_FUNCTIONAL_PROPERTY = `${OWL.namespace}InverseFunctionalProperty`;
+const OWL_SYMMETRIC_PROPERTY = `${OWL.namespace}SymmetricProperty`;
+const OWL_ASYMMETRIC_PROPERTY = `${OWL.namespace}AsymmetricProperty`;
+const OWL_REFLEXIVE_PROPERTY = `${OWL.namespace}ReflexiveProperty`;
+const OWL_IRREFLEXIVE_PROPERTY = `${OWL.namespace}IrreflexiveProperty`;
+
 const PROPERTY_CHARACTERISTIC_TYPES = new Set<string>([
-  `${OWL.namespace}TransitiveProperty`,
-  `${OWL.namespace}FunctionalProperty`,
-  `${OWL.namespace}InverseFunctionalProperty`,
-  `${OWL.namespace}SymmetricProperty`,
-  `${OWL.namespace}AsymmetricProperty`,
-  `${OWL.namespace}ReflexiveProperty`,
-  `${OWL.namespace}IrreflexiveProperty`,
+  OWL_TRANSITIVE_PROPERTY,
+  OWL_FUNCTIONAL_PROPERTY,
+  OWL_INVERSE_FUNCTIONAL_PROPERTY,
+  OWL_SYMMETRIC_PROPERTY,
+  OWL_ASYMMETRIC_PROPERTY,
+  OWL_REFLEXIVE_PROPERTY,
+  OWL_IRREFLEXIVE_PROPERTY,
 ]);
 
 /** Returns true when `obj` is a property-characteristic rdf:type object. */
 function isPropertyCharacteristicType(obj: string): boolean {
   return PROPERTY_CHARACTERISTIC_TYPES.has(obj);
+}
+
+/**
+ * Mode-aware, per-characteristic syntactic locality for a property-characteristic
+ * axiom `R rdf:type owl:<Characteristic>` whose property R is NOT in Σ (so R is
+ * replaced by the EMPTY role ∅ in ⊥-mode, or the UNIVERSAL role in ⊤-mode). The
+ * axiom is LOCAL iff the characteristic holds TRIVIALLY of the substituted role.
+ *
+ * The single shared rule `R∉Σ ⇒ local` (used previously for ALL characteristics
+ * in BOTH modes) is UNSOUND: it dropped Reflexive in ⊥-mode and Functional /
+ * InverseFunctional / Asymmetric / Irreflexive in ⊤-mode, all of which are NOT
+ * satisfied by the empty / universal role and must be KEPT. The per-mode table
+ * below mirrors the OWL API `SyntacticLocalityEvaluator.AxiomLocalityVisitor`
+ * handlers for the property-characteristic axioms (and Cuenca Grau et al.,
+ * JAIR 2008). `local` here is evaluated ONLY when R∉Σ; when R∈Σ the caller already
+ * returns NON-local in both modes.
+ *
+ * ┌───────────────────┬───────────────────────────┬───────────────────────────┐
+ * │ characteristic    │ ⊥-mode (R→∅, empty role)  │ ⊤-mode (R→Δ², univ. role) │
+ * ├───────────────────┼───────────────────────────┼───────────────────────────┤
+ * │ Transitive        │ LOCAL  (∅∘∅ ⊆ ∅)          │ LOCAL  (Δ²∘Δ² ⊆ Δ²)       │
+ * │ Symmetric         │ LOCAL  (∅⁻ = ∅)           │ LOCAL  ((Δ²)⁻ = Δ²)       │
+ * │ Functional        │ LOCAL  (∅ functional)     │ KEEP   (Δ² not functional)│
+ * │ InverseFunctional │ LOCAL  (∅ inv-functional) │ KEEP   (Δ² not inv-func.) │
+ * │ Asymmetric        │ LOCAL  (∅ asymmetric)     │ KEEP   (Δ² not asymmetric)│
+ * │ Irreflexive       │ LOCAL  (∅ irreflexive)    │ KEEP   (Δ² not irreflexive)│
+ * │ Reflexive         │ KEEP   (∅ not reflexive)  │ LOCAL  (Δ² reflexive)     │
+ * └───────────────────┴───────────────────────────┴───────────────────────────┘
+ *
+ * Justification of the two KEEP-asymmetries (the soundness fix):
+ *   • Reflexive(R) ≈ ⊤ ⊑ ∃R.Self. Under R→∅ this becomes ⊤ ⊑ ⊥ — FALSE over any
+ *     non-empty domain, so the empty role is NOT reflexive ⇒ the axiom is NOT a
+ *     tautology ⇒ NOT ⊥-local. Under R→Δ² (universal) every element relates to
+ *     itself ⇒ Δ² IS reflexive ⇒ ⊤-local.
+ *   • Functional / InverseFunctional / Asymmetric / Irreflexive: the UNIVERSAL role
+ *     Δ² relates every pair, so over a domain with ≥2 elements it is NOT functional
+ *     (one subject, many objects), NOT inverse-functional, NOT asymmetric (it has
+ *     ⟨x,y⟩ and ⟨y,x⟩), and NOT irreflexive (it has ⟨x,x⟩). None are tautologies
+ *     under the ⊤-substitution ⇒ NOT ⊤-local ⇒ KEEP. The empty role ∅ vacuously
+ *     satisfies all four ⇒ ⊥-local.
+ */
+function isCharacteristicLocalWhenPropOutOfSigma(
+  characteristic: string,
+  mode: "bot" | "top",
+): boolean {
+  if (mode === "bot") {
+    // Empty role ∅: vacuously satisfies every characteristic EXCEPT reflexivity.
+    return characteristic !== OWL_REFLEXIVE_PROPERTY;
+  }
+  // mode === "top": universal role Δ² satisfies only Transitive / Symmetric /
+  // Reflexive; the rest are NOT tautologies under R→Δ² and must be KEPT.
+  return (
+    characteristic === OWL_TRANSITIVE_PROPERTY ||
+    characteristic === OWL_SYMMETRIC_PROPERTY ||
+    characteristic === OWL_REFLEXIVE_PROPERTY
+  );
 }
 
 /**
@@ -300,6 +374,15 @@ interface TripleIndex {
   objectProps: Set<string>;
   /** declared data-property IRIs */
   dataProps: Set<string>;
+  /** IRIs declared owl:Class (used to confirm a restriction filler IS a class) */
+  classDecls: Set<string>;
+  /**
+   * IRIs declared owl:Datatype / rdfs:Datatype, OR appearing as the subject of a
+   * data-range builder (owl:onDatatype / owl:withRestrictions / a owl:DataRange
+   * type). These are DATA RANGES — never classes — and must NOT be substituted
+   * to ⊥/⊤ as a restriction filler (BUG 2 conservative data-range detection).
+   */
+  datatypeDecls: Set<string>;
 }
 
 // ───────────────────────────── Term helpers ─────────────────────────────────
@@ -352,6 +435,8 @@ function buildIndex(triples: LocalityTriple[]): TripleIndex {
   const types = new Map<string, Set<string>>();
   const objectProps = new Set<string>();
   const dataProps = new Set<string>();
+  const classDecls = new Set<string>();
+  const datatypeDecls = new Set<string>();
 
   for (const t of triples) {
     let arr = out.get(t.subject);
@@ -370,10 +455,21 @@ function buildIndex(triples: LocalityTriple[]): TripleIndex {
       set.add(t.object);
       if (t.object === OWL_OBJECT_PROPERTY) objectProps.add(t.subject);
       if (t.object === OWL_DATATYPE_PROPERTY) dataProps.add(t.subject);
+      if (t.object === OWL_CLASS) classDecls.add(t.subject);
+      // owl:Datatype / rdfs:Datatype / owl:DataRange declarations mark a DATA range.
+      if (t.object === OWL_DATATYPE || t.object === RDFS_DATATYPE || t.object === OWL_DATA_RANGE) {
+        datatypeDecls.add(t.subject);
+      }
+    }
+
+    // Data-range BUILDERS (owl:onDatatype facet restriction, owl:withRestrictions)
+    // identify their SUBJECT as a data range even without an explicit type triple.
+    if (t.predicate === OWL_ON_DATATYPE || t.predicate === OWL_WITH_RESTRICTIONS) {
+      datatypeDecls.add(t.subject);
     }
   }
 
-  return { triples, out, types, objectProps, dataProps };
+  return { triples, out, types, objectProps, dataProps, classDecls, datatypeDecls };
 }
 
 /** First outgoing object value for a predicate, if any. */
@@ -398,6 +494,53 @@ function resolveList(idx: TripleIndex, head: string): string[] {
     cur = rest?.object;
   }
   return items;
+}
+
+/**
+ * True when the (typically blank) node `n` is a DATA RANGE expression: it is in
+ * the index's datatypeDecls (declared owl:Datatype / rdfs:Datatype / owl:DataRange,
+ * or carries a data-range facet via owl:onDatatype / owl:withRestrictions). Such a
+ * node is a filler for a DATA restriction and must NOT be substituted to ⊥/⊤.
+ */
+function isDataRangeNode(idx: TripleIndex, n: string): boolean {
+  if (idx.datatypeDecls.has(n)) return true;
+  const arr = idx.out.get(n);
+  if (!arr) return false;
+  for (const t of arr) {
+    if (t.predicate === OWL_ON_DATATYPE || t.predicate === OWL_WITH_RESTRICTIONS) return true;
+    if (
+      t.predicate === RDF_TYPE &&
+      !t.objectIsLiteral &&
+      (t.object === OWL_DATATYPE || t.object === RDFS_DATATYPE || t.object === OWL_DATA_RANGE)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when the (typically blank) node `n` is recognisably a CLASS-EXPRESSION
+ * builder: an owl:Restriction, or a boolean connective / nominal
+ * (intersectionOf / unionOf / complementOf / oneOf). Used to confirm a restriction
+ * filler is a class (and thus safe to substitute) when the property is undeclared.
+ */
+function isClassExprNode(idx: TripleIndex, n: string): boolean {
+  const arr = idx.out.get(n);
+  if (!arr) return false;
+  for (const t of arr) {
+    if (
+      t.predicate === OWL_INTERSECTION_OF ||
+      t.predicate === OWL_UNION_OF ||
+      t.predicate === OWL_COMPLEMENT_OF ||
+      t.predicate === OWL_ONE_OF ||
+      t.predicate === OWL_ON_PROPERTY // a restriction
+    ) {
+      return true;
+    }
+    if (t.predicate === RDF_TYPE && !t.objectIsLiteral && t.object === OWL_RESTRICTION) return true;
+  }
+  return false;
 }
 
 // ─────────────────────────── Signature extraction ───────────────────────────
@@ -714,38 +857,74 @@ function evalClassExpr(
     const maxCard = has(OWL_MAX_CARDINALITY) ?? has(OWL_MAX_QUALIFIED_CARDINALITY);
     const onDataRange = has(OWL_ON_DATA_RANGE);
 
-    // BUG 3 FIX — DATA vs OBJECT restriction.
+    // BUG 2/3 FIX — DATA vs OBJECT restriction (CONSERVATIVE).
     // For a DATA restriction (`∃dataProp.dataRange`, `∀dataProp.dataRange`, a
     // qualified cardinality with owl:onDataRange, …) the filler is a DATA RANGE,
-    // never a class. A datatype (xsd:integer, rdfs:Literal, …) is NOT a class
-    // name, is never in Σ, and must NOT be substituted to ⊥/⊤. The locality of a
-    // data restriction depends ONLY on the data property: `∃dataProp.dr` is
-    // ⊥-local iff dataProp∉Σ (∃∅.dr = ⊥), `∀dataProp.dr` → ⊤ iff dataProp∉Σ. We
-    // detect a data restriction by: a declared data property, a datatype/literal
-    // filler, or an explicit owl:onDataRange. (Cuenca Grau et al. JAIR 2008; OWL
-    // API SyntacticLocalityEvaluator treats data ranges outside the class
-    // substitution.) Object fillers keep the original D ≡⊥ / D ≡⊤ propagation.
-    const fillerOf = (t: LocalityTriple | undefined): string | undefined => t?.object;
-    const fillerLit = (t: LocalityTriple | undefined): boolean => !!t?.objectIsLiteral;
-    const isDataFiller = (filler: string | undefined, lit: boolean): boolean => {
-      if (lit) return true; // a literal filler is data, never a class
-      if (filler !== undefined && isDatatypeIri(filler)) return true;
-      return false;
-    };
+    // never a class. A datatype (xsd:integer, a custom owl:Datatype, rdfs:Literal,
+    // …) is NOT a class name, is never in Σ, and must NOT be substituted to ⊥/⊤.
+    // The locality of a data restriction depends ONLY on the data property:
+    // `∃dataProp.dr` is ⊥-local iff dataProp∉Σ (∃∅.dr = ⊥), `∀dataProp.dr` → ⊤ iff
+    // dataProp∉Σ. (Cuenca Grau et al. JAIR 2008; OWL API SyntacticLocalityEvaluator
+    // treats data ranges outside the class substitution.)
+    //
+    // BUG 2 (SOUNDNESS): we must NEVER substitute a filler to ⊥ unless we are
+    // CERTAIN it is a class expression. Previously a filler was treated as a class
+    // (recursed → possibly ⊥) UNLESS it was a literal / recognised xsd datatype /
+    // owl:onDataRange. An UNDECLARED data property with a CUSTOM datatype filler
+    // (e.g. ex:CustomAgeRange declared owl:Datatype, or simply an unknown IRI)
+    // then slipped through, was substituted to ⊥, collapsed ∃R.filler to ⊥, and the
+    // SubClassOf was wrongly judged ⊥-local and DROPPED. Now we INVERT the test:
+    // only `isCertainlyClassFiller` fillers recurse (and may yield ⊥/⊤); every
+    // other filler is treated as a DATA RANGE → "other" (no ⊥/⊤ contribution), so
+    // the only way the restriction can collapse is via the PROPERTY (R∉Σ). When in
+    // doubt → KEEP (sound).
     const propIsData =
       !onProp.objectIsLiteral && !isBlankNode(onProp.object) && idx.dataProps.has(onProp.object);
+    const propIsObject =
+      !onProp.objectIsLiteral && !isBlankNode(onProp.object) && idx.objectProps.has(onProp.object);
+
+    /**
+     * True only when `filler` is CERTAINLY a class expression — the sole case in
+     * which substituting it to ⊥/⊤ is sound. Everything else (datatypes, unknown
+     * IRIs, data-range blank nodes, anything when the property is a data property)
+     * is treated conservatively as a data range.
+     */
+    const isCertainlyClassFiller = (t: LocalityTriple): boolean => {
+      if (t.objectIsLiteral) return false; // a literal is data
+      const f = t.object;
+      if (f === OWL_THING || f === OWL_NOTHING) return true; // class builtins
+      if (isDatatypeIri(f)) return false; // xsd:* / rdfs:Literal / …
+      if (idx.datatypeDecls.has(f)) return false; // declared owl:Datatype / data range
+      // The PROPERTY decides when declared: a data property NEVER has a class filler;
+      // an object property's filler is a class expression.
+      if (propIsData) return false;
+      if (propIsObject) {
+        // Object property → the filler is an object (class) expression. A blank node
+        // is an anonymous class expression UNLESS it is a data-range builder.
+        if (isBlankNode(f)) return !isDataRangeNode(idx, f);
+        return true; // a named IRI filler of an object property is a class
+      }
+      // Property NOT declared (or declared as BOTH) → we cannot be sure the filler
+      // is a class. Only commit when the filler is itself an explicit, KNOWN class:
+      //   • a blank-node CLASS-expression builder (restriction / boolean / oneOf),
+      //     not a data-range builder, OR
+      //   • a named IRI explicitly declared owl:Class.
+      if (isBlankNode(f)) return isClassExprNode(idx, f) && !isDataRangeNode(idx, f);
+      return idx.classDecls.has(f);
+    };
 
     /**
      * Evaluate a restriction filler for the ⊥/⊤ propagation. Returns "other" (no
-     * ⊥/⊤ contribution) when the filler is a DATA RANGE — datatypes are never
-     * substituted. Only OBJECT (class) fillers recurse through evalClassExpr.
+     * ⊥/⊤ contribution) UNLESS the filler is CERTAINLY a class expression — only
+     * then do we recurse through evalClassExpr (which may yield ⊥/⊤). Data ranges
+     * and any uncertain filler contribute nothing, keeping the module sound.
      */
     const evalFiller = (t: LocalityTriple | undefined): ExprValue => {
       if (!t) return "other";
-      const f = fillerOf(t);
-      const lit = fillerLit(t);
-      if (onDataRange !== undefined || propIsData || isDataFiller(f, lit)) return "other";
-      return evalClassExpr(idx, t.object, sigma, mode, lit, seen);
+      // An explicit owl:onDataRange filler is always a data range.
+      if (onDataRange !== undefined && t === onDataRange) return "other";
+      if (!isCertainlyClassFiller(t)) return "other";
+      return evalClassExpr(idx, t.object, sigma, mode, !!t.objectIsLiteral, seen);
     };
 
     if (mode === "bot") {
@@ -958,15 +1137,19 @@ function isLocalUnit(idx: TripleIndex, unit: AxiomUnit, sigma: Set<string>, mode
   }
 
   // ── Property-characteristic axiom  (R rdf:type owl:TransitiveProperty, …) ────
-  // BUG 1/2 FIX. These are LOGICAL axioms about the property R. Per syntactic
-  // locality (Cuenca Grau et al., JAIR 2008; OWL API SyntacticLocalityEvaluator):
-  // when R ∉ Σ it is replaced by the empty property (⊥-mode) or the universal
-  // property (⊤-mode) and the characteristic (Transitive/Functional/Symmetric/
-  // …) holds trivially — so the axiom is LOCAL. When R ∈ Σ it constrains a kept
-  // property and is NON-LOCAL (it can derive new Σ-entailments, e.g. transitivity
-  // ⇒ extra subsumptions). The rule is the same in both modes: LOCAL iff R ∉ Σ.
+  // BUG 1 FIX (SOUNDNESS). These are LOGICAL axioms about the property R. When
+  // R ∈ Σ the axiom constrains a kept property → NON-LOCAL in BOTH modes (it can
+  // derive new Σ-entailments, e.g. transitivity ⇒ extra subsumptions). When R ∉ Σ
+  // R is replaced by the empty role (⊥-mode) or the universal role (⊤-mode), and
+  // whether the characteristic then holds trivially is CHARACTERISTIC- AND MODE-
+  // SPECIFIC — NOT the single `R∉Σ ⇒ local` rule used before. The previous code
+  // wrongly dropped Reflexive in ⊥-mode (the empty role is not reflexive) and
+  // Functional/InverseFunctional/Asymmetric/Irreflexive in ⊤-mode (the universal
+  // role violates them), making the module unsound. Delegate to the per-mode
+  // table (OWL API SyntacticLocalityEvaluator; Cuenca Grau et al., JAIR 2008).
   if (p === RDF_TYPE && !t.objectIsLiteral && isPropertyCharacteristicType(t.object)) {
-    return !propInSigma(t.subject, sigma);
+    if (propInSigma(t.subject, sigma)) return false; // R ∈ Σ → non-local in both modes
+    return isCharacteristicLocalWhenPropOutOfSigma(t.object, mode);
   }
 
   // ── ClassAssertion(C, a)  [rdf:type] ────────────────────────────────────────

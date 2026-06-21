@@ -8,6 +8,7 @@
 // ontologies whose ⊥-modules are known by the JAIR-2008 locality definitions.
 
 import { describe, it, expect } from "vitest";
+import * as N3 from "n3";
 import {
   extractBotModule,
   extractTopModule,
@@ -17,6 +18,8 @@ import {
   signatureOf,
   type LocalityTriple,
 } from "../localityModule.ts";
+
+const REQUIRE_KONCLUDE = !!process.env.REQUIRE_KONCLUDE;
 
 // ───────────────────────────── Vocabulary shortcuts ─────────────────────────
 const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -55,7 +58,13 @@ const OWL_OBJ_PROP = `${OWL}ObjectProperty`;
 const OWL_DATA_PROP = `${OWL}DatatypeProperty`;
 const TRANSITIVE_PROP = `${OWL}TransitiveProperty`;
 const FUNCTIONAL_PROP = `${OWL}FunctionalProperty`;
+const INVERSE_FUNCTIONAL_PROP = `${OWL}InverseFunctionalProperty`;
 const SYMMETRIC_PROP = `${OWL}SymmetricProperty`;
+const ASYMMETRIC_PROP = `${OWL}AsymmetricProperty`;
+const REFLEXIVE_PROP = `${OWL}ReflexiveProperty`;
+const IRREFLEXIVE_PROP = `${OWL}IrreflexiveProperty`;
+
+const OWL_DATATYPE = `${OWL}Datatype`;
 
 const XSD = "http://www.w3.org/2001/XMLSchema#";
 const XSD_INTEGER = `${XSD}integer`;
@@ -534,23 +543,111 @@ describe("signatureOf", () => {
 // Σ-subsumptions/instances).
 // ============================================================================
 describe("property-characteristic axioms (BUG 1/2)", () => {
-  it("isBottomLocal(R a owl:TransitiveProperty): NON-local iff R ∈ Σ", () => {
-    // R ∈ Σ → the transitivity constrains a kept property → MUST be kept.
-    expect(isBottomLocal([t(R, RDF_TYPE, TRANSITIVE_PROP)], new Set([R]))).toBe(false);
-    // R ∉ Σ → R replaced by ∅ → transitive(∅) holds trivially → local.
-    expect(isBottomLocal([t(R, RDF_TYPE, TRANSITIVE_PROP)], new Set<string>())).toBe(true);
+  // R ∈ Σ → the characteristic constrains a kept property → NON-local in BOTH modes
+  // for EVERY characteristic (it can derive new Σ-entailments).
+  it("ANY characteristic with R ∈ Σ is NON-local in BOTH modes", () => {
+    for (const ch of [
+      TRANSITIVE_PROP,
+      FUNCTIONAL_PROP,
+      INVERSE_FUNCTIONAL_PROP,
+      SYMMETRIC_PROP,
+      ASYMMETRIC_PROP,
+      REFLEXIVE_PROP,
+      IRREFLEXIVE_PROP,
+    ]) {
+      expect(isBottomLocal([t(R, RDF_TYPE, ch)], new Set([R]))).toBe(false);
+      expect(isTopLocal([t(R, RDF_TYPE, ch)], new Set([R]))).toBe(false);
+    }
   });
 
-  it("isTopLocal(R a owl:TransitiveProperty): same rule — NON-local iff R ∈ Σ", () => {
-    expect(isTopLocal([t(R, RDF_TYPE, TRANSITIVE_PROP)], new Set([R]))).toBe(false);
-    expect(isTopLocal([t(R, RDF_TYPE, TRANSITIVE_PROP)], new Set<string>())).toBe(true);
+  // ── BUG 1: per-characteristic, per-mode locality when R ∉ Σ. ──────────────────
+  // The corrected OWL API SyntacticLocalityEvaluator table (R∉Σ; `true` = LOCAL =
+  // may be dropped, `false` = KEEP):
+  //
+  //   characteristic     | ⊥-mode (R→∅) | ⊤-mode (R→Δ²)
+  //   ───────────────────┼──────────────┼──────────────
+  //   Transitive         |  LOCAL        |  LOCAL
+  //   Symmetric          |  LOCAL        |  LOCAL
+  //   Functional         |  LOCAL        |  KEEP
+  //   InverseFunctional  |  LOCAL        |  KEEP
+  //   Asymmetric         |  LOCAL        |  KEEP
+  //   Irreflexive        |  LOCAL        |  KEEP
+  //   Reflexive          |  KEEP         |  LOCAL
+  //
+  // (Previously ALL characteristics used `LOCAL iff R∉Σ` in BOTH modes — UNSOUND:
+  // it dropped Reflexive in ⊥ and Functional/InvFunc/Asym/Irrefl in ⊤.)
+  const charTable: Array<{ ch: string; name: string; bot: boolean; top: boolean }> = [
+    { ch: TRANSITIVE_PROP, name: "Transitive", bot: true, top: true },
+    { ch: SYMMETRIC_PROP, name: "Symmetric", bot: true, top: true },
+    { ch: FUNCTIONAL_PROP, name: "Functional", bot: true, top: false },
+    { ch: INVERSE_FUNCTIONAL_PROP, name: "InverseFunctional", bot: true, top: false },
+    { ch: ASYMMETRIC_PROP, name: "Asymmetric", bot: true, top: false },
+    { ch: IRREFLEXIVE_PROP, name: "Irreflexive", bot: true, top: false },
+    { ch: REFLEXIVE_PROP, name: "Reflexive", bot: false, top: true },
+  ];
+
+  for (const { ch, name, bot, top } of charTable) {
+    it(`${name} with R ∉ Σ: ⊥-local=${bot}, ⊤-local=${top}`, () => {
+      const empty = new Set<string>();
+      expect(isBottomLocal([t(R, RDF_TYPE, ch)], empty)).toBe(bot);
+      expect(isTopLocal([t(R, RDF_TYPE, ch)], empty)).toBe(top);
+    });
+  }
+
+  // ── BUG 1 IMPACT: the reflexive ∧ irreflexive clash must survive the module. ──
+  it("Reflexive(R), Σ∌R → extractBotModule KEEPS it (non-local in ⊥)", () => {
+    const onto: LocalityTriple[] = [t(R, RDF_TYPE, REFLEXIVE_PROP)];
+    const mod = extractBotModule(onto, []); // Σ = ∅ ⇒ R ∉ Σ
+    expect(has(mod, R, RDF_TYPE, REFLEXIVE_PROP)).toBe(true);
   });
 
-  it("Functional / Symmetric characteristics follow the same R ∈ Σ rule", () => {
-    expect(isBottomLocal([t(R, RDF_TYPE, FUNCTIONAL_PROP)], new Set([R]))).toBe(false);
-    expect(isBottomLocal([t(R, RDF_TYPE, FUNCTIONAL_PROP)], new Set<string>())).toBe(true);
-    expect(isBottomLocal([t(R, RDF_TYPE, SYMMETRIC_PROP)], new Set([R]))).toBe(false);
-    expect(isBottomLocal([t(R, RDF_TYPE, SYMMETRIC_PROP)], new Set<string>())).toBe(true);
+  it("Irreflexive(R), Σ∌R → extractTopModule KEEPS it (non-local in ⊤)", () => {
+    const onto: LocalityTriple[] = [t(R, RDF_TYPE, IRREFLEXIVE_PROP)];
+    // ⊤-module: the universal role is NOT irreflexive → Irreflexive is ⊤-non-local
+    // → KEPT (the OLD shared rule wrongly dropped it).
+    expect(has(extractTopModule(onto, []), R, RDF_TYPE, IRREFLEXIVE_PROP)).toBe(true);
+    // ⊥-module: the empty role IS irreflexive → ⊥-local → dropped (sound: with
+    // Σ ∌ R nothing pulls R into the signature, so the lone axiom carries no
+    // Σ-entailment). Documents the asymmetry rather than asserting a keep.
+    expect(has(extractBotModule(onto, []), R, RDF_TYPE, IRREFLEXIVE_PROP)).toBe(false);
+    // For Σ ∋ R the irreflexivity is Σ-relevant and the ⊤ module keeps it.
+    expect(has(extractTopModule(onto, [R]), R, RDF_TYPE, IRREFLEXIVE_PROP)).toBe(true);
+  });
+
+  it("Functional(R), Σ∌R → ⊤ KEEPS, ⊥ DROPS", () => {
+    const onto: LocalityTriple[] = [t(R, RDF_TYPE, FUNCTIONAL_PROP)];
+    expect(has(extractTopModule(onto, []), R, RDF_TYPE, FUNCTIONAL_PROP)).toBe(true);
+    expect(has(extractBotModule(onto, []), R, RDF_TYPE, FUNCTIONAL_PROP)).toBe(false);
+  });
+
+  it("{R a Reflexive; R a Irreflexive}, Σ∌R: the ⊥-module keeps BOTH (signature growth)", () => {
+    // Crucial fixpoint subtlety: in the ⊥-module the Reflexive axiom is non-local
+    // (the empty role is NOT reflexive), so it is kept and PULLS R into the working
+    // signature Σ_M. Once R ∈ Σ_M the Irreflexive axiom is non-local too (R ∈ Σ in
+    // both modes) → also kept. So both survive — the clash is preserved even though
+    // R ∉ the requested Σ. (The OLD shared rule dropped Reflexive entirely, so R
+    // never entered Σ_M and BOTH were lost — the unsoundness.)
+    const onto: LocalityTriple[] = [
+      t(R, RDF_TYPE, REFLEXIVE_PROP),
+      t(R, RDF_TYPE, IRREFLEXIVE_PROP),
+    ];
+    const bot = extractBotModule(onto, []);
+    expect(has(bot, R, RDF_TYPE, REFLEXIVE_PROP)).toBe(true);
+    expect(has(bot, R, RDF_TYPE, IRREFLEXIVE_PROP)).toBe(true);
+  });
+
+  it("{R a Reflexive; R a Irreflexive}, Σ∋R → STAR module preserves the clash (NOT empty)", () => {
+    // When R ∈ Σ the reflexive ∧ irreflexive inconsistency is EXPRESSIBLE over Σ,
+    // so the locality module MUST preserve it. Both characteristics are non-local
+    // in BOTH modes (R ∈ Σ) → the ⊤⊥* star module keeps BOTH and is never empty.
+    const onto: LocalityTriple[] = [
+      t(R, RDF_TYPE, REFLEXIVE_PROP),
+      t(R, RDF_TYPE, IRREFLEXIVE_PROP),
+    ];
+    const star = extractStarModule(onto, [R]);
+    expect(star.length).toBeGreaterThan(0);
+    expect(has(star, R, RDF_TYPE, REFLEXIVE_PROP)).toBe(true);
+    expect(has(star, R, RDF_TYPE, IRREFLEXIVE_PROP)).toBe(true);
   });
 
   it("a pure property/class DECLARATION is still always ⊥-local", () => {
@@ -681,6 +778,63 @@ describe("data restrictions (BUG 3)", () => {
     ];
     expect(isBottomLocal(onto, new Set([hasAge, Person]))).toBe(false);
   });
+
+  // ── BUG 2 (SOUNDNESS): UNDECLARED data property + CUSTOM datatype filler. ─────
+  // ex:hasAge is NOT declared owl:DatatypeProperty and ex:CustomAgeRange is a
+  // declared owl:Datatype. Before the fix, hasAge being undeclared and
+  // CustomAgeRange not being a known xsd: IRI made evalClassExpr treat the filler
+  // as a CLASS, substitute it (∉Σ) to ⊥, collapse ∃hasAge.⊥ to ⊥, judge the
+  // SubClassOf ⊥-local and DROP it — UNSOUND (the data existential is non-empty).
+  // The fix recognises CustomAgeRange as a data range (declared owl:Datatype) and,
+  // failing that, refuses to substitute an uncertain filler.
+  it("(∃ hasAge . ex:CustomAgeRange) ⊑ Person — undeclared prop + owl:Datatype filler is KEPT", () => {
+    const customRange = `${EX}CustomAgeRange`;
+    const REST = "_:dr6";
+    const onto: LocalityTriple[] = [
+      t(customRange, RDF_TYPE, OWL_DATATYPE), // declared a custom data range
+      t(REST, RDF_TYPE, RESTRICTION),
+      t(REST, ON_PROPERTY, hasAge), // hasAge UNDECLARED
+      t(REST, SOME_VALUES, customRange),
+      t(REST, SUBCLASS, Person),
+    ];
+    // Σ = {hasAge, Person}: hasAge ∈ Σ → ∃hasAge.CustomAgeRange is NOT ⊥ (the data
+    // range is unsubstituted) → C is "other"; Person ∈ Σ → "other" → NON-local.
+    expect(isBottomLocal(onto, new Set([hasAge, Person]))).toBe(false);
+    const mod = extractBotModule(onto, [hasAge, Person]);
+    expect(has(mod, REST, SUBCLASS, Person)).toBe(true);
+    expect(has(mod, REST, ON_PROPERTY, hasAge)).toBe(true);
+    expect(has(mod, REST, SOME_VALUES, customRange)).toBe(true);
+  });
+
+  it("(∃ hasAge . ex:Unknown) ⊑ Person — undeclared prop + UNKNOWN filler is KEPT (conservative)", () => {
+    // Neither hasAge nor the filler is declared; we cannot be CERTAIN the filler is
+    // a class, so we must NOT substitute it to ⊥. KEEP (sound).
+    const unknown = `${EX}Unknown`;
+    const REST = "_:dr7";
+    const onto: LocalityTriple[] = [
+      t(REST, RDF_TYPE, RESTRICTION),
+      t(REST, ON_PROPERTY, hasAge),
+      t(REST, SOME_VALUES, unknown),
+      t(REST, SUBCLASS, Person),
+    ];
+    expect(isBottomLocal(onto, new Set([hasAge, Person]))).toBe(false);
+  });
+
+  it("(∃ p . B) ⊑ A with p declared owl:ObjectProperty + B owl:Class still collapses to ⊥ (local)", () => {
+    // Regression guard for the inverted test: a CERTAIN class filler (B declared
+    // owl:Class, p an object property) under an OBJECT existential must STILL be
+    // substituted. Σ = {A}: p ∉ Σ, B ∉ Σ → ∃p.B = ⊥ → C ≡⊥ → ⊥⊑A tautology → local.
+    const REST = "_:dr8";
+    const onto: LocalityTriple[] = [
+      t(p, RDF_TYPE, OWL_OBJ_PROP),
+      t(B, RDF_TYPE, OWL_CLASS),
+      t(REST, RDF_TYPE, RESTRICTION),
+      t(REST, ON_PROPERTY, p),
+      t(REST, SOME_VALUES, B),
+      t(REST, SUBCLASS, A),
+    ];
+    expect(isBottomLocal(onto, new Set([A]))).toBe(true);
+  });
 });
 
 // ============================================================================
@@ -694,4 +848,95 @@ describe("isTopLocal — ⊤-locality mirror", () => {
   it("A ⊑ B with Σ={B}: A→⊤, B∈Σ → ⊤⊑B NOT tautology → ⊤-non-local", () => {
     expect(isTopLocal([t(A, SUBCLASS, B)], new Set([B]))).toBe(false);
   });
+});
+
+// ============================================================================
+// 13. BUG 1 CONFORMANCE (real Konclude) — reflexive ∧ irreflexive clash survives.
+//
+// O = { R a owl:ObjectProperty ; R a owl:ReflexiveProperty ; R a owl:Irreflexive
+// Property } is INCONSISTENT (the empty/universal models aside, over any non-empty
+// domain a role cannot be both reflexive and irreflexive). With Σ ∋ R the clash is
+// expressible over Σ, so the locality module MUST preserve the inconsistency.
+//
+// Before the BUG 1 fix the single shared rule `local iff R∉Σ` kept these axioms
+// only via R∈Σ — which still worked for R∈Σ — but the per-characteristic table is
+// what makes the module sound for the harder Σ∌R growth cases proven above. This
+// real-reasoner case nails the headline claim: module ⊨ ⊥ ⇔ full ⊨ ⊥.
+//
+// REQUIRE_KONCLUDE-gated: when set a WASM/init failure FAILS the test.
+// ============================================================================
+function localityTriplesToStore(triples: LocalityTriple[]): N3.Store {
+  const store = new N3.Store();
+  const { namedNode, blankNode, literal } = N3.DataFactory;
+  const term = (v: string, isLiteral?: boolean) => {
+    if (isLiteral) return literal(v);
+    if (v.startsWith("_:") || /^(_:)?b\d+$/.test(v) || v.startsWith("n3-")) {
+      return blankNode(v.replace(/^_:/, ""));
+    }
+    return namedNode(v);
+  };
+  for (const x of triples) {
+    store.addQuad(
+      N3.DataFactory.quad(
+        term(x.subject) as N3.Quad_Subject,
+        namedNode(x.predicate),
+        term(x.object, x.objectIsLiteral) as N3.Quad_Object,
+      ),
+    );
+  }
+  return store;
+}
+
+describe("BUG 1 conformance — reflexive ∧ irreflexive clash preserved by module (real Konclude)", () => {
+  it(
+    "module is INCONSISTENT iff full is INCONSISTENT for Σ={R}",
+    async () => {
+      let RdfReasoner: typeof import("rdf-reasoner-konclude").RdfReasoner;
+      try {
+        ({ RdfReasoner } = await import("rdf-reasoner-konclude"));
+      } catch (e) {
+        if (REQUIRE_KONCLUDE) throw e;
+        console.warn("[TEST][SKIP] rdf-reasoner-konclude unavailable:", String(e));
+        return;
+      }
+      let r: import("rdf-reasoner-konclude").RdfReasoner;
+      try {
+        r = new RdfReasoner();
+        await r.ready;
+      } catch (e) {
+        if (REQUIRE_KONCLUDE) {
+          throw new Error(`REQUIRE_KONCLUDE set but Konclude failed to init: ${String(e)}`);
+        }
+        console.warn("[TEST][SKIP] Konclude WASM init failed:", String(e));
+        return;
+      }
+      try {
+        const onto: LocalityTriple[] = [
+          t(R, RDF_TYPE, OWL_OBJ_PROP),
+          t(R, RDF_TYPE, REFLEXIVE_PROP),
+          t(R, RDF_TYPE, IRREFLEXIVE_PROP),
+        ];
+        const fullStore = localityTriplesToStore(onto);
+
+        // The full ontology is INCONSISTENT (reflexive ∧ irreflexive on a non-empty
+        // domain). Konclude must agree.
+        const fullConsistent = await r.checkConsistency(fullStore);
+        expect(fullConsistent).toBe(false);
+
+        // The ⊤⊥* (star) module for Σ={R} must PRESERVE the inconsistency: both
+        // characteristic axioms are non-local in both modes (R∈Σ) → kept.
+        const star = extractStarModule(onto, [R], { includeDeclarationsForSignature: true });
+        expect(has(star, R, RDF_TYPE, REFLEXIVE_PROP)).toBe(true);
+        expect(has(star, R, RDF_TYPE, IRREFLEXIVE_PROP)).toBe(true);
+        const starStore = localityTriplesToStore(star);
+        const starConsistent = await r.checkConsistency(starStore);
+        console.log("[TEST][BUG1] consistency — full:", fullConsistent, "star-module:", starConsistent);
+        // module ⊨ ⊥ ⇔ full ⊨ ⊥ — the conformance claim.
+        expect(starConsistent).toBe(fullConsistent);
+      } finally {
+        r.terminate();
+      }
+    },
+    120000,
+  );
 });

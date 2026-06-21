@@ -16,6 +16,7 @@
 // language} surface this matcher reads).
 
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
+const RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 /** A repair removal request, optionally carrying object-term + source-graph metadata. */
 export interface RepairRemoval {
@@ -74,12 +75,28 @@ export function quadMatchesRemoval(q: MatchQuad, removal: RepairRemoval): boolea
   if (removal.objectTermType) {
     if ((q.object.termType ?? "") !== removal.objectTermType) return false;
     if (removal.objectTermType === "Literal") {
-      const wantDatatype =
-        removal.objectDatatype ?? (removal.objectLanguage ? "" : XSD_STRING);
-      const dtVal = q.object.datatype?.value ?? XSD_STRING;
-      if ((dtVal || XSD_STRING) !== (wantDatatype || XSD_STRING)) return false;
-      const lang = q.object.language ?? "";
-      if ((removal.objectLanguage ?? "") && lang !== removal.objectLanguage) return false;
+      // BUG B — datatype resolution must agree with REAL N3 term shapes:
+      //  • language-tagged literal  → datatype is rdf:langString (NOT xsd:string)
+      //    and the language tag must match. A plain-literal/xsd:string default
+      //    would make verify reject a @lang literal that apply DOES remove.
+      //  • explicit datatype        → exact datatype match.
+      //  • neither lang nor datatype → plain literal (xsd:string).
+      if (removal.objectLanguage) {
+        // A real langString quad: datatype.value === rdf:langString and the tag
+        // must match. Default the quad datatype to rdf:langString when a language
+        // tag is present (some factories omit the redundant datatype on a lang
+        // literal), so the match is driven by the language tag.
+        const lang = q.object.language ?? "";
+        if (lang !== removal.objectLanguage) return false;
+        const dtVal = q.object.datatype?.value ?? (lang ? RDF_LANG_STRING : XSD_STRING);
+        if (dtVal !== RDF_LANG_STRING) return false;
+      } else {
+        const wantDatatype = removal.objectDatatype ?? XSD_STRING;
+        const dtVal = q.object.datatype?.value ?? XSD_STRING;
+        if (dtVal !== wantDatatype) return false;
+        // A plain/typed removal must NOT match a language-tagged quad.
+        if (q.object.language) return false;
+      }
     }
   }
   return true;

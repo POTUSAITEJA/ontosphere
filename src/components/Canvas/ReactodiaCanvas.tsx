@@ -1546,6 +1546,10 @@ export default function ReactodiaCanvas() {
   // of every added/removed triple) the worker emits, so predicate/object-position
   // edits are visible to Σ_Δ — not just the subjects.
   const pendingChangedSignatureRef = React.useRef<Set<string>>(new Set());
+  // BUG C: a stable scheduler the run-completion path can call to flush edits that
+  // accumulated WHILE a reasoning run was in flight. Assigned by the auto-reasoning
+  // effect; read by handleIncrementalReasoning's finally block.
+  const scheduleAutoReasoningRef = React.useRef<(() => void) | null>(null);
 
   // Module-scoped incremental reasoning: re-classify only the ⊤⊥*-module induced
   // by the changed subjects and splice the delta into urn:vg:inferred. The worker
@@ -1566,12 +1570,57 @@ export default function ReactodiaCanvas() {
       } finally {
         setIsReasoning(false);
         isReasoningRef.current = false;
+        // BUG C: if edits accumulated WHILE this run was in flight, flush them now
+        // by scheduling another debounced incremental run. Without this, pending
+        // edits would only be reasoned over on the next unrelated edit (staleness).
+        if (
+          (pendingChangedSubjectsRef.current.size > 0 ||
+            pendingChangedSignatureRef.current.size > 0) &&
+          useSettingsStore.getState().settings.autoReasoning
+        ) {
+          scheduleAutoReasoningRef.current?.();
+        }
       }
     },
     [handleApplyInferred],
   );
 
   React.useEffect(() => {
+    const AUTO_REASONING_DEBOUNCE_MS = 1500;
+
+    // (Re)schedule the debounced incremental run. Factored out so BOTH a fresh edit
+    // AND a self-reschedule (when the debounce fires mid-run) AND the run-completion
+    // flush use the IDENTICAL scheduling path.
+    const schedule = () => {
+      if (autoReasoningDebounceRef.current) clearTimeout(autoReasoningDebounceRef.current);
+      autoReasoningDebounceRef.current = setTimeout(() => {
+        autoReasoningDebounceRef.current = null;
+        // Re-check guards inside the timeout in case state changed while waiting.
+        if (!useSettingsStore.getState().settings.autoReasoning) return;
+        // BUG C: if a run is in flight when the debounce fires, do NOT drop the
+        // pending edits — RE-SCHEDULE so they are reasoned over once the current run
+        // completes (the run-completion flush also re-schedules; whichever fires
+        // first wins, the other is a harmless no-op once pending is drained).
+        if (isReasoningRef.current) {
+          schedule();
+          return;
+        }
+        // Nothing accumulated (already flushed) ⇒ no-op.
+        if (
+          pendingChangedSubjectsRef.current.size === 0 &&
+          pendingChangedSignatureRef.current.size === 0
+        ) {
+          return;
+        }
+        const changed = [...pendingChangedSubjectsRef.current];
+        const changedSig = [...pendingChangedSignatureRef.current];
+        pendingChangedSubjectsRef.current = new Set();
+        pendingChangedSignatureRef.current = new Set();
+        void handleIncrementalReasoning(changed, changedSig);
+      }, AUTO_REASONING_DEBOUNCE_MS);
+    };
+    scheduleAutoReasoningRef.current = schedule;
+
     const handler = (
       subjects: string[],
       _quads?: unknown,
@@ -1599,10 +1648,10 @@ export default function ReactodiaCanvas() {
       // Guard 3: only proceed when autoReasoning is enabled (read live from store).
       if (!useSettingsStore.getState().settings.autoReasoning) return;
 
-      // Guard 4: do not trigger while a run is already in progress.
-      if (isReasoningRef.current) return;
-
-      // Accumulate the changed subjects for Σ_Δ.
+      // BUG C: ALWAYS accumulate the changed subjects + signature into the pending
+      // refs FIRST — BEFORE any in-flight guard — so an edit landing while a run is
+      // in flight is never lost. (Previously the `if (isReasoningRef.current) return`
+      // guard sat before this accumulation, dropping such edits entirely.)
       for (const s of subjects) {
         if (typeof s === 'string' && s.length > 0) pendingChangedSubjectsRef.current.add(s);
       }
@@ -1615,24 +1664,16 @@ export default function ReactodiaCanvas() {
         if (typeof s === 'string' && s.length > 0) pendingChangedSignatureRef.current.add(s);
       }
 
-      // Debounce: coalesce rapid successive edits into a single reasoning run.
-      if (autoReasoningDebounceRef.current) clearTimeout(autoReasoningDebounceRef.current);
-      autoReasoningDebounceRef.current = setTimeout(() => {
-        autoReasoningDebounceRef.current = null;
-        // Re-check guards inside the timeout in case state changed while waiting.
-        if (!useSettingsStore.getState().settings.autoReasoning) return;
-        if (isReasoningRef.current) return;
-        const changed = [...pendingChangedSubjectsRef.current];
-        const changedSig = [...pendingChangedSignatureRef.current];
-        pendingChangedSubjectsRef.current = new Set();
-        pendingChangedSignatureRef.current = new Set();
-        void handleIncrementalReasoning(changed, changedSig);
-      }, 1500);
+      // Debounce: coalesce rapid successive edits into a single reasoning run. If a
+      // run is in flight, schedule() re-schedules itself until the run completes;
+      // the edit is safely held in the pending refs meanwhile.
+      schedule();
     };
 
     rdfManager.onSubjectsChange(handler as any);
     return () => {
       rdfManager.offSubjectsChange(handler as any);
+      scheduleAutoReasoningRef.current = null;
       if (autoReasoningDebounceRef.current) {
         clearTimeout(autoReasoningDebounceRef.current);
         autoReasoningDebounceRef.current = null;

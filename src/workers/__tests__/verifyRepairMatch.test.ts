@@ -10,6 +10,7 @@ import { quadMatchesRemoval, type MatchQuad, type RepairRemoval } from "../verif
 
 const XSD_INT = "http://www.w3.org/2001/XMLSchema#integer";
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
+const RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 function quad(
   s: string,
@@ -87,15 +88,44 @@ describe("quadMatchesRemoval — BUG B typed-literal precision", () => {
     expect(quadMatchesRemoval(intQuad, removal)).toBe(false);
   });
 
-  it("a language-tagged literal matches only its language tag", () => {
-    const enQuad = quad("http://ex/i", "http://www.w3.org/2000/01/rdf-schema#label", { value: "Pizza", termType: "Literal", language: "en" });
-    const deQuad = quad("http://ex/i", "http://www.w3.org/2000/01/rdf-schema#label", { value: "Pizza", termType: "Literal", language: "de" });
+  it("a language-tagged literal matches only its language tag (REAL N3 langString shape)", () => {
+    // BUG B — a real N3 lang literal carries datatype rdf:langString. The matcher
+    // MUST treat a lang removal as langString (not xsd:string), else verify would
+    // reject the very quad apply removes. These quads use the production term shape
+    // (datatype = rdf:langString) — not the prior masked fake that omitted it.
+    const LABEL = "http://www.w3.org/2000/01/rdf-schema#label";
+    const enQuad = quad("http://ex/i", LABEL, { value: "Pizza", termType: "Literal", language: "en", datatype: RDF_LANG_STRING });
+    const deQuad = quad("http://ex/i", LABEL, { value: "Pizza", termType: "Literal", language: "de", datatype: RDF_LANG_STRING });
     const removal: RepairRemoval = {
-      subject: "http://ex/i", predicate: "http://www.w3.org/2000/01/rdf-schema#label", object: "Pizza",
+      subject: "http://ex/i", predicate: LABEL, object: "Pizza",
       objectTermType: "Literal", objectLanguage: "en",
     };
     expect(quadMatchesRemoval(enQuad, removal)).toBe(true);
     expect(quadMatchesRemoval(deQuad, removal)).toBe(false);
+  });
+
+  it("a lang removal does NOT match a same-lexical plain xsd:string literal", () => {
+    // verify/apply agreement: a @en removal must select the langString quad, never
+    // the same-lexical plain-string sibling (which apply would not touch).
+    const LABEL = "http://www.w3.org/2000/01/rdf-schema#label";
+    const enQuad = quad("http://ex/i", LABEL, { value: "Pizza", termType: "Literal", language: "en", datatype: RDF_LANG_STRING });
+    const strQuad = quad("http://ex/i", LABEL, { value: "Pizza", termType: "Literal" }); // plain xsd:string, no lang
+    const removal: RepairRemoval = {
+      subject: "http://ex/i", predicate: LABEL, object: "Pizza",
+      objectTermType: "Literal", objectLanguage: "en",
+    };
+    expect(quadMatchesRemoval(enQuad, removal)).toBe(true);
+    expect(quadMatchesRemoval(strQuad, removal)).toBe(false);
+  });
+
+  it("a plain/typed removal does NOT match a language-tagged langString quad", () => {
+    const LABEL = "http://www.w3.org/2000/01/rdf-schema#label";
+    const enQuad = quad("http://ex/i", LABEL, { value: "Pizza", termType: "Literal", language: "en", datatype: RDF_LANG_STRING });
+    const stringRemoval: RepairRemoval = {
+      subject: "http://ex/i", predicate: LABEL, object: "Pizza",
+      objectTermType: "Literal", objectDatatype: XSD_STRING,
+    };
+    expect(quadMatchesRemoval(enQuad, stringRemoval)).toBe(false);
   });
 
   it("term-type guards an IRI removal against a same-lexical literal (and vice versa)", () => {
