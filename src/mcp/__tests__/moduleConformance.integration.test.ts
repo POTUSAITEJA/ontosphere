@@ -429,6 +429,104 @@ function buildFullRestrictionStore(): N3.Store {
   return store;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TRANSITIVE-PROPERTY CONFORMANCE (BUG 1/2 — property-characteristic axioms)
+// ─────────────────────────────────────────────────────────────────────────────
+// The ⊥-module MUST retain `R a owl:TransitiveProperty` when R ∈ Σ, because the
+// transitivity axiom carries a Σ-relevant entailment: with
+//
+//     A ⊑ ∃R.B ,  B ⊑ ∃R.C ,  ∃R.C ⊑ D ,  R transitive
+//
+// transitivity is what makes A ⊑ ∃R.C derivable, hence A ⊑ D. We assert the
+// module agrees with the FULL ontology on the A ⊑ D entailment over Σ. Before the
+// fix the transitivity axiom was treated as a declaration and DROPPED from the
+// module, so the module would NOT entail A ⊑ D while the full ontology does — the
+// test FAILS pre-fix and PASSES post-fix.
+//
+// We use a simpler, decisive fixture that isolates the transitive entailment:
+//
+//     R transitive ;  A ⊑ ∃R.B ;  B ⊑ ∃R.C ;  D ≡ ∃R.C (so ∃R.C ⊑ D) .
+//
+// Over Σ = {A, B, C, D, R}: full ⊨ A ⊑ D ONLY WITH transitivity. Dropping the
+// transitivity axiom breaks A ⊑ D in the module → conformance mismatch.
+const TRANS_TTL = `
+@prefix ex: <http://example.org/t/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:A a owl:Class . ex:B a owl:Class . ex:C a owl:Class . ex:D a owl:Class .
+ex:R a owl:ObjectProperty , owl:TransitiveProperty .
+
+ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:R ; owl:someValuesFrom ex:B ] .
+ex:B rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:R ; owl:someValuesFrom ex:C ] .
+[ a owl:Restriction ; owl:onProperty ex:R ; owl:someValuesFrom ex:C ] rdfs:subClassOf ex:D .
+
+# NOISE outside Σ — must not be needed.
+ex:N1 a owl:Class . ex:N2 a owl:Class .
+ex:N1 rdfs:subClassOf ex:N2 .
+`;
+
+const TA = 'http://example.org/t/A';
+const TB = 'http://example.org/t/B';
+const TC = 'http://example.org/t/C';
+const TD = 'http://example.org/t/D';
+const TR = 'http://example.org/t/R';
+const TRANS_SIGMA = [TA, TB, TC, TD, TR];
+const OWL_TRANSITIVE_PROPERTY = 'http://www.w3.org/2002/07/owl#TransitiveProperty';
+
+describe('module conformance — TRANSITIVE property characteristic (BUG 1/2, real Konclude)', () => {
+  it(
+    'the ⊥-module RETAINS `R a owl:TransitiveProperty` (without it the module is unsound)',
+    () => {
+      const full = storeToLocalityTriples(parseTtl(TRANS_TTL));
+      const bot = extractBotModule(full, TRANS_SIGMA, { includeDeclarationsForSignature: true });
+      const botBlob = bot.map((t) => `${t.subject} ${t.predicate} ${t.object}`).join('\n');
+      // The transitivity axiom MUST be present (R ∈ Σ → non-local).
+      expect(botBlob).toContain(`${TR} ${RDF_TYPE} ${OWL_TRANSITIVE_PROPERTY}`);
+    },
+  );
+
+  it(
+    'CONFORMANCE: full and ⊥-module AGREE on A ⊑ D — the transitive entailment is preserved',
+    async () => {
+      const r = await initReasonerOrSkip();
+      if (!r) return;
+      try {
+        const fullStore = parseTtl(TRANS_TTL);
+        const fullTriples = storeToLocalityTriples(fullStore);
+        const botModule = extractBotModule(fullTriples, TRANS_SIGMA, {
+          includeDeclarationsForSignature: true,
+        });
+        const moduleStore = localityTriplesToStore(botModule);
+
+        // Both must be consistent so the entailment-as-unsat reduction is valid.
+        expect(await r.checkConsistency(fullStore)).toBe(true);
+        expect(await r.checkConsistency(moduleStore)).toBe(true);
+
+        // The TRANSITIVE entailment A ⊑ D (derivable ONLY with R transitive).
+        const fullAD = await entailsSubClassOf(r, fullStore, TA, TD);
+        const moduleAD = await entailsSubClassOf(r, moduleStore, TA, TD);
+        console.log('[TEST][TRANS] A ⊑ D — full:', fullAD, 'module:', moduleAD);
+
+        // The full ontology entails A ⊑ D BECAUSE R is transitive.
+        expect(fullAD).toBe(true);
+        // The module MUST agree (it keeps the transitivity axiom). This FAILS if
+        // `R a owl:TransitiveProperty` is dropped from the module.
+        expect(moduleAD).toBe(fullAD);
+
+        // Sanity that the matrix is not degenerate: D ⊑ A is entailed by NEITHER.
+        const fullDA = await entailsSubClassOf(r, fullStore, TD, TA);
+        const moduleDA = await entailsSubClassOf(r, moduleStore, TD, TA);
+        expect(fullDA).toBe(false);
+        expect(moduleDA).toBe(false);
+      } finally {
+        r.terminate();
+      }
+    },
+    120000,
+  );
+});
+
 describe('module conformance — SKOLEMIZED production path (real worker + Konclude)', () => {
   it(
     'extractModule over an IMPORTED (skolemized) store preserves C ⊑ ∃r.D unsatisfiability for Σ={C,D}',

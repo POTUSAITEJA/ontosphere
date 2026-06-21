@@ -52,6 +52,13 @@ const MAX_CARD = `${OWL}maxCardinality`;
 
 const OWL_CLASS = `${OWL}Class`;
 const OWL_OBJ_PROP = `${OWL}ObjectProperty`;
+const OWL_DATA_PROP = `${OWL}DatatypeProperty`;
+const TRANSITIVE_PROP = `${OWL}TransitiveProperty`;
+const FUNCTIONAL_PROP = `${OWL}FunctionalProperty`;
+const SYMMETRIC_PROP = `${OWL}SymmetricProperty`;
+
+const XSD = "http://www.w3.org/2001/XMLSchema#";
+const XSD_INTEGER = `${XSD}integer`;
 
 // Test namespace.
 const EX = "http://example.org/";
@@ -63,6 +70,9 @@ const E = `${EX}E`;
 const F = `${EX}F`;
 const p = `${EX}p`;
 const q = `${EX}q`;
+const R = `${EX}R`;
+const hasAge = `${EX}hasAge`;
+const Person = `${EX}Person`;
 
 // ───────────────────────────── Triple helpers ───────────────────────────────
 function t(subject: string, predicate: string, object: string, objectIsLiteral = false): LocalityTriple {
@@ -510,6 +520,166 @@ describe("signatureOf", () => {
     expect(sig.has(OWL_CLASS)).toBe(false);
     expect(sig.has(RESTRICTION)).toBe(false);
     expect(sig.has(REST)).toBe(false);
+  });
+});
+
+// ============================================================================
+// 11. PROPERTY-CHARACTERISTIC AXIOMS (BUG 1/2) — Transitive/Functional/Symmetric.
+//
+// A `R rdf:type owl:TransitiveProperty` triple is a LOGICAL axiom about R, NOT a
+// declaration. Per syntactic locality (Cuenca Grau et al. JAIR 2008; OWL API
+// SyntacticLocalityEvaluator) it is LOCAL iff R ∉ Σ and NON-LOCAL iff R ∈ Σ, in
+// BOTH ⊥ and ⊤ modes. Before the fix these were treated as declarations →
+// DROPPED from every module (UNSOUND when R ∈ Σ, e.g. transitivity derives new
+// Σ-subsumptions/instances).
+// ============================================================================
+describe("property-characteristic axioms (BUG 1/2)", () => {
+  it("isBottomLocal(R a owl:TransitiveProperty): NON-local iff R ∈ Σ", () => {
+    // R ∈ Σ → the transitivity constrains a kept property → MUST be kept.
+    expect(isBottomLocal([t(R, RDF_TYPE, TRANSITIVE_PROP)], new Set([R]))).toBe(false);
+    // R ∉ Σ → R replaced by ∅ → transitive(∅) holds trivially → local.
+    expect(isBottomLocal([t(R, RDF_TYPE, TRANSITIVE_PROP)], new Set<string>())).toBe(true);
+  });
+
+  it("isTopLocal(R a owl:TransitiveProperty): same rule — NON-local iff R ∈ Σ", () => {
+    expect(isTopLocal([t(R, RDF_TYPE, TRANSITIVE_PROP)], new Set([R]))).toBe(false);
+    expect(isTopLocal([t(R, RDF_TYPE, TRANSITIVE_PROP)], new Set<string>())).toBe(true);
+  });
+
+  it("Functional / Symmetric characteristics follow the same R ∈ Σ rule", () => {
+    expect(isBottomLocal([t(R, RDF_TYPE, FUNCTIONAL_PROP)], new Set([R]))).toBe(false);
+    expect(isBottomLocal([t(R, RDF_TYPE, FUNCTIONAL_PROP)], new Set<string>())).toBe(true);
+    expect(isBottomLocal([t(R, RDF_TYPE, SYMMETRIC_PROP)], new Set([R]))).toBe(false);
+    expect(isBottomLocal([t(R, RDF_TYPE, SYMMETRIC_PROP)], new Set<string>())).toBe(true);
+  });
+
+  it("a pure property/class DECLARATION is still always ⊥-local", () => {
+    // Regression guard: ObjectProperty/Class/DatatypeProperty declarations are NOT
+    // property characteristics — they remain always-local.
+    expect(isBottomLocal([t(R, RDF_TYPE, OWL_OBJ_PROP)], new Set([R]))).toBe(true);
+    expect(isBottomLocal([t(R, RDF_TYPE, OWL_DATA_PROP)], new Set([R]))).toBe(true);
+    expect(isBottomLocal([t(A, RDF_TYPE, OWL_CLASS)], new Set([A]))).toBe(true);
+  });
+
+  it("⊥-module KEEPS `R a owl:TransitiveProperty` when R ∈ Σ (A ⊑ ∃R.B)", () => {
+    // Ontology: R a ObjectProperty, TransitiveProperty ; A ⊑ ∃R.B.  Σ = {A,B,R}.
+    // The transitivity axiom is non-local (R ∈ Σ) → MUST be in the ⊥-module.
+    const REST = "_:rc1";
+    const onto: LocalityTriple[] = [
+      t(R, RDF_TYPE, OWL_OBJ_PROP),
+      t(R, RDF_TYPE, TRANSITIVE_PROP),
+      t(A, SUBCLASS, REST),
+      t(REST, RDF_TYPE, RESTRICTION),
+      t(REST, ON_PROPERTY, R),
+      t(REST, SOME_VALUES, B),
+    ];
+    const mod = extractBotModule(onto, [A, B, R]);
+    expect(has(mod, R, RDF_TYPE, TRANSITIVE_PROP)).toBe(true);
+    // The A ⊑ ∃R.B axiom (which references R) is also kept.
+    expect(has(mod, A, SUBCLASS, REST)).toBe(true);
+  });
+
+  it("⊥-module MAY exclude `R a owl:TransitiveProperty` when R ∉ Σ", () => {
+    // Σ = {A,B}: R ∉ Σ. The A ⊑ ∃R.B axiom: ∃R.B with R∉Σ → ∃∅.B = ⊥, super side not
+    // ⊤ → still kept (it references A∈Σ). But the standalone transitivity axiom is
+    // ⊥-local (R∉Σ) and may be excluded.
+    const REST = "_:rc2";
+    const onto: LocalityTriple[] = [
+      t(R, RDF_TYPE, OWL_OBJ_PROP),
+      t(R, RDF_TYPE, TRANSITIVE_PROP),
+      t(A, SUBCLASS, REST),
+      t(REST, RDF_TYPE, RESTRICTION),
+      t(REST, ON_PROPERTY, R),
+      t(REST, SOME_VALUES, B),
+    ];
+    const mod = extractBotModule(onto, [A, B]);
+    // The A ⊑ ∃R.B axiom references A (∈Σ) so it is kept and pulls R into Σ_M,
+    // which in turn DOES make the transitivity axiom non-local. To observe the
+    // pure exclusion we test the isolated axiom against Σ that does not contain R.
+    expect(isBottomLocal([t(R, RDF_TYPE, TRANSITIVE_PROP)], new Set([A, B]))).toBe(true);
+    // The restriction axiom itself is still present (it constrains A∈Σ).
+    expect(has(mod, A, SUBCLASS, REST)).toBe(true);
+  });
+});
+
+// ============================================================================
+// 12. DATA RESTRICTIONS (BUG 3) — datatype fillers must NOT collapse to ⊥.
+//
+// For `(∃ hasAge . xsd:integer) ⊑ Person`, the filler xsd:integer is a DATATYPE,
+// not a class. It is never in Σ and must NOT be substituted to ⊥. Before the fix
+// evalClassExpr judged the data existential ⊥, made the SubClassOf local, and
+// DROPPED the axiom — UNSOUND (a data existential is non-empty and constrains its
+// subject).
+// ============================================================================
+describe("data restrictions (BUG 3)", () => {
+  it("(∃ hasAge . xsd:integer) ⊑ Person is NON-local for Σ={hasAge,Person}", () => {
+    const REST = "_:dr1";
+    const axiom: LocalityTriple[] = [
+      t(REST, RDF_TYPE, RESTRICTION),
+      t(REST, ON_PROPERTY, hasAge),
+      t(REST, SOME_VALUES, XSD_INTEGER),
+      t(REST, SUBCLASS, Person),
+    ];
+    // hasAge ∈ Σ → ∃hasAge.xsd:integer is NOT ⊥ (datatype unsubstituted) → C is
+    // "other"; Person ∈ Σ → "other" → neither C≡⊥ nor D≡⊤ → NON-local.
+    expect(isBottomLocal(axiom, new Set([hasAge, Person]))).toBe(false);
+  });
+
+  it("⊥-module KEEPS the data-existential axiom (not dropped)", () => {
+    const REST = "_:dr2";
+    const onto: LocalityTriple[] = [
+      t(hasAge, RDF_TYPE, OWL_DATA_PROP),
+      t(Person, RDF_TYPE, OWL_CLASS),
+      t(REST, RDF_TYPE, RESTRICTION),
+      t(REST, ON_PROPERTY, hasAge),
+      t(REST, SOME_VALUES, XSD_INTEGER),
+      t(REST, SUBCLASS, Person),
+    ];
+    const mod = extractBotModule(onto, [hasAge, Person]);
+    expect(has(mod, REST, SUBCLASS, Person)).toBe(true);
+    expect(has(mod, REST, ON_PROPERTY, hasAge)).toBe(true);
+    expect(has(mod, REST, SOME_VALUES, XSD_INTEGER)).toBe(true);
+  });
+
+  it("data existential IS ⊥-local when the data property ∉ Σ", () => {
+    // hasAge ∉ Σ → ∃∅.xsd:integer = ⊥ → C≡⊥ → ⊥⊑Person tautology → local.
+    const REST = "_:dr3";
+    const axiom: LocalityTriple[] = [
+      t(REST, RDF_TYPE, RESTRICTION),
+      t(REST, ON_PROPERTY, hasAge),
+      t(REST, SOME_VALUES, XSD_INTEGER),
+      t(REST, SUBCLASS, Person),
+    ];
+    expect(isBottomLocal(axiom, new Set([Person]))).toBe(true);
+  });
+
+  it("∀ data restriction: Person ⊑ ∀hasAge.xsd:integer is ⊥-local iff hasAge ∉ Σ", () => {
+    const REST = "_:dr4";
+    const axiom: LocalityTriple[] = [
+      t(Person, SUBCLASS, REST),
+      t(REST, RDF_TYPE, RESTRICTION),
+      t(REST, ON_PROPERTY, hasAge),
+      t(REST, ALL_VALUES, XSD_INTEGER),
+    ];
+    // hasAge ∉ Σ → ∀∅.dr = ⊤ → Person⊑⊤ tautology → local.
+    expect(isBottomLocal(axiom, new Set([Person]))).toBe(true);
+    // hasAge ∈ Σ → ∀hasAge.dr is "other" → non-local (kept).
+    expect(isBottomLocal(axiom, new Set([Person, hasAge]))).toBe(false);
+  });
+
+  it("a declared data property with a non-datatype filler is still treated as data", () => {
+    // hasAge declared owl:DatatypeProperty → data restriction even if the filler
+    // is not a recognised xsd: IRI. ∃hasAge.<filler> with hasAge∈Σ → non-local.
+    const dr = `${EX}MyDataRange`;
+    const REST = "_:dr5";
+    const onto: LocalityTriple[] = [
+      t(hasAge, RDF_TYPE, OWL_DATA_PROP),
+      t(REST, RDF_TYPE, RESTRICTION),
+      t(REST, ON_PROPERTY, hasAge),
+      t(REST, SOME_VALUES, dr),
+      t(REST, SUBCLASS, Person),
+    ];
+    expect(isBottomLocal(onto, new Set([hasAge, Person]))).toBe(false);
   });
 });
 

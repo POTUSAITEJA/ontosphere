@@ -111,7 +111,7 @@
  * identity preserved) so callers can map results straight back to their source.
  */
 
-import { RDF, RDFS, OWL } from "../constants/vocabularies.ts";
+import { RDF, RDFS, OWL, XSD } from "../constants/vocabularies.ts";
 
 // ───────────────────────────── Well-known IRIs ──────────────────────────────
 
@@ -157,6 +157,84 @@ const OWL_DATATYPE_PROPERTY = OWL.DatatypeProperty;
 const OWL_ANNOTATION_PROPERTY = OWL.AnnotationProperty;
 const OWL_NAMED_INDIVIDUAL = OWL.NamedIndividual;
 const OWL_ONTOLOGY = OWL.Ontology;
+
+const OWL_ON_DATA_RANGE = `${OWL.namespace}onDataRange`;
+// NOTE on owl:propertyChainAxiom: it is NOT a recognised principal predicate, so
+// in buildAxiomUnits a `R owl:propertyChainAxiom (…)` triple (named subject,
+// blank-node list object) falls through to the CONSERVATIVE branch and is kept
+// unconditionally (always NON-LOCAL). Property chains are therefore never dropped
+// — sound by the conservative fallback (a chain entailment may affect Σ).
+
+/**
+ * Property-characteristic rdf:type objects. A triple `R rdf:type owl:X` where
+ * owl:X ∈ this set is a LOGICAL axiom about the property R (not a declaration):
+ * Transitive/Functional/InverseFunctional/Symmetric/Asymmetric/Reflexive/
+ * Irreflexive. Per syntactic locality (Cuenca Grau et al., JAIR 2008; the OWL API
+ * `SyntacticLocalityEvaluator.AxiomLocalityVisitor`), such an axiom is LOCAL iff
+ * the property R is NOT in Σ (it is replaced by the empty/universal property and
+ * the characteristic holds trivially), and NON-LOCAL iff R ∈ Σ — in BOTH the ⊥
+ * and ⊤ locality modes. Treating these as declarations would DROP them from every
+ * module, which is UNSOUND when R ∈ Σ (e.g. Transitive(R) derives new Σ-entailed
+ * subsumptions / instances).
+ */
+const PROPERTY_CHARACTERISTIC_TYPES = new Set<string>([
+  `${OWL.namespace}TransitiveProperty`,
+  `${OWL.namespace}FunctionalProperty`,
+  `${OWL.namespace}InverseFunctionalProperty`,
+  `${OWL.namespace}SymmetricProperty`,
+  `${OWL.namespace}AsymmetricProperty`,
+  `${OWL.namespace}ReflexiveProperty`,
+  `${OWL.namespace}IrreflexiveProperty`,
+]);
+
+/** Returns true when `obj` is a property-characteristic rdf:type object. */
+function isPropertyCharacteristicType(obj: string): boolean {
+  return PROPERTY_CHARACTERISTIC_TYPES.has(obj);
+}
+
+/**
+ * Pure declaration rdf:type objects. A triple `x rdf:type owl:X` with owl:X in
+ * this set asserts only the kind of `x` (class / property / individual /
+ * ontology / structural builder) and entails nothing about Σ — it is ALWAYS
+ * local. Property-characteristic types (handled above) are deliberately NOT here.
+ */
+const DECLARATION_TYPES = new Set<string>([
+  OWL_CLASS,
+  OWL_OBJECT_PROPERTY,
+  OWL_DATATYPE_PROPERTY,
+  OWL_ANNOTATION_PROPERTY,
+  OWL_NAMED_INDIVIDUAL,
+  OWL_ONTOLOGY,
+  OWL_RESTRICTION,
+  `${RDF.namespace}List`,
+  `${RDF.namespace}Property`,
+]);
+
+/**
+ * Well-known datatype / data-range IRIs that may appear as the filler of a
+ * data-property restriction (owl:someValuesFrom / owl:allValuesFrom / a qualified
+ * cardinality onDataRange). Datatypes are NEVER class names and NEVER in Σ; under
+ * locality substitution they must NOT be replaced by ⊥/⊤ — see evalRestriction.
+ */
+const DATATYPE_IRIS = new Set<string>([
+  XSD.string,
+  XSD.integer,
+  XSD.boolean,
+  XSD.decimal,
+  XSD.float,
+  XSD.dateTime,
+  XSD.date,
+  `${RDFS.namespace}Literal`,
+  `${OWL.namespace}real`,
+  `${OWL.namespace}rational`,
+]);
+
+/** True when `iri` names a datatype / data range (xsd:*, rdfs:Literal, …). */
+function isDatatypeIri(iri: string): boolean {
+  if (DATATYPE_IRIS.has(iri)) return true;
+  // Any term in the XSD namespace is a datatype.
+  return iri.startsWith(XSD.namespace);
+}
 
 /**
  * Structural predicates that never name a class/property symbol when read off a
@@ -502,26 +580,35 @@ function buildAxiomUnits(idx: TripleIndex): AxiomUnit[] {
 
     let isPrincipal = false;
     let conservative = false;
+    let propertyCharacteristic = false;
 
     if (AXIOM_PREDICATES.has(p)) {
       isPrincipal = true;
     } else if (p === RDF_TYPE && !t.objectIsLiteral) {
-      // rdf:type is a principal axiom ONLY when it is a ClassAssertion to a real
-      // class (or anonymous class expression): NamedIndividual a C, or a r C.
-      // Declarations (a owl:Class / owl:ObjectProperty / …) are NOT logical
-      // axioms — they are local always — so they are not principals here.
+      // rdf:type is a principal axiom when it is:
+      //   • a ClassAssertion to a real class / anonymous class expression
+      //     (NamedIndividual a C, or a r C), OR
+      //   • a PROPERTY-CHARACTERISTIC axiom (R a owl:TransitiveProperty, etc.).
+      // Pure DECLARATIONS (a owl:Class / owl:ObjectProperty / owl:Restriction /
+      // …) are NOT logical axioms — they are always local — so not principals.
       const obj = t.object;
-      const isDeclaration =
-        obj === OWL_CLASS ||
-        obj === OWL_OBJECT_PROPERTY ||
-        obj === OWL_DATATYPE_PROPERTY ||
-        obj === OWL_ANNOTATION_PROPERTY ||
-        obj === OWL_NAMED_INDIVIDUAL ||
-        obj === OWL_ONTOLOGY ||
-        obj === OWL_RESTRICTION ||
-        obj === `${RDF.namespace}List` ||
-        obj.startsWith(`${OWL.namespace}`); // owl:TransitiveProperty etc. — property characteristics handled conservatively below
-      isPrincipal = !isDeclaration;
+      if (isPropertyCharacteristicType(obj)) {
+        // BUG 1/2 FIX: a property-characteristic axiom is a LOGICAL axiom about
+        // the property R (its ⊥/⊤-locality depends on R ∈ Σ). Previously these
+        // fell into the `obj.startsWith(owl:)` declaration branch and were DROPPED
+        // from every module — UNSOUND when R ∈ Σ. Treat as a principal unit.
+        isPrincipal = true;
+        propertyCharacteristic = true;
+      } else {
+        const isDeclaration =
+          DECLARATION_TYPES.has(obj) ||
+          // Any other owl:-namespaced rdf:type object we do not recognise as a
+          // property characteristic is treated as a declaration-like assertion
+          // (e.g. owl:AllDisjointClasses headers) — always local. The recognised
+          // logical property characteristics are handled above.
+          obj.startsWith(`${OWL.namespace}`);
+        isPrincipal = !isDeclaration;
+      }
     } else if (
       !ANNOTATION_PREDICATES.has(p) &&
       !CLASS_BUILDER_PREDICATES.has(p) &&
@@ -550,6 +637,13 @@ function buildAxiomUnits(idx: TripleIndex): AxiomUnit[] {
       // its inclusion can transitively pull related axioms (sound over-approx).
       if (!isBlankNode(t.subject) && !BUILTIN_TERMS.has(t.subject)) signature.add(t.subject);
       if (!t.objectIsLiteral && !isBlankNode(t.object) && !BUILTIN_TERMS.has(t.object)) signature.add(t.object);
+    }
+    if (propertyCharacteristic) {
+      // signatureOf harvests the rdf:type OBJECT (the characteristic IRI, a
+      // builtin → dropped) but not the SUBJECT property R. R is exactly the symbol
+      // whose Σ-membership decides locality, so it MUST be in the unit signature
+      // (both for the locality test and to grow Σ when the axiom is kept).
+      if (!isBlankNode(t.subject) && !BUILTIN_TERMS.has(t.subject)) signature.add(t.subject);
     }
     units.push({ principal: t, triples: triplesOfUnit, signature, conservative });
   }
@@ -618,29 +712,66 @@ function evalClassExpr(
     const minCard = has(OWL_MIN_CARDINALITY) ?? has(OWL_MIN_QUALIFIED_CARDINALITY);
     const exactCard = has(OWL_CARDINALITY) ?? has(OWL_QUALIFIED_CARDINALITY);
     const maxCard = has(OWL_MAX_CARDINALITY) ?? has(OWL_MAX_QUALIFIED_CARDINALITY);
+    const onDataRange = has(OWL_ON_DATA_RANGE);
+
+    // BUG 3 FIX — DATA vs OBJECT restriction.
+    // For a DATA restriction (`∃dataProp.dataRange`, `∀dataProp.dataRange`, a
+    // qualified cardinality with owl:onDataRange, …) the filler is a DATA RANGE,
+    // never a class. A datatype (xsd:integer, rdfs:Literal, …) is NOT a class
+    // name, is never in Σ, and must NOT be substituted to ⊥/⊤. The locality of a
+    // data restriction depends ONLY on the data property: `∃dataProp.dr` is
+    // ⊥-local iff dataProp∉Σ (∃∅.dr = ⊥), `∀dataProp.dr` → ⊤ iff dataProp∉Σ. We
+    // detect a data restriction by: a declared data property, a datatype/literal
+    // filler, or an explicit owl:onDataRange. (Cuenca Grau et al. JAIR 2008; OWL
+    // API SyntacticLocalityEvaluator treats data ranges outside the class
+    // substitution.) Object fillers keep the original D ≡⊥ / D ≡⊤ propagation.
+    const fillerOf = (t: LocalityTriple | undefined): string | undefined => t?.object;
+    const fillerLit = (t: LocalityTriple | undefined): boolean => !!t?.objectIsLiteral;
+    const isDataFiller = (filler: string | undefined, lit: boolean): boolean => {
+      if (lit) return true; // a literal filler is data, never a class
+      if (filler !== undefined && isDatatypeIri(filler)) return true;
+      return false;
+    };
+    const propIsData =
+      !onProp.objectIsLiteral && !isBlankNode(onProp.object) && idx.dataProps.has(onProp.object);
+
+    /**
+     * Evaluate a restriction filler for the ⊥/⊤ propagation. Returns "other" (no
+     * ⊥/⊤ contribution) when the filler is a DATA RANGE — datatypes are never
+     * substituted. Only OBJECT (class) fillers recurse through evalClassExpr.
+     */
+    const evalFiller = (t: LocalityTriple | undefined): ExprValue => {
+      if (!t) return "other";
+      const f = fillerOf(t);
+      const lit = fillerLit(t);
+      if (onDataRange !== undefined || propIsData || isDataFiller(f, lit)) return "other";
+      return evalClassExpr(idx, t.object, sigma, mode, lit, seen);
+    };
 
     if (mode === "bot") {
-      // ∃R.D : ⊥ if R∉Σ (∃∅.D = ⊥) or D ≡⊥ (∃R.⊥ = ⊥).
+      // ∃R.D : ⊥ if R∉Σ (∃∅.D = ⊥) or (OBJECT filler) D ≡⊥ (∃R.⊥ = ⊥). For a DATA
+      // filler the datatype is non-empty and unsubstituted → only R∉Σ forces ⊥.
       if (some) {
         if (propReplaced) return "bot";
-        const fillerVal = evalClassExpr(idx, some.object, sigma, mode, !!some.objectIsLiteral, seen);
+        const fillerVal = evalFiller(some);
         return fillerVal === "bot" ? "bot" : "other";
       }
       // hasValue v : ∅ hasValue v = ⊥ when R∉Σ.
       if (hasVal) return propReplaced ? "bot" : "other";
-      // ∀R.D : ∀∅.D = ⊤ when R∉Σ.
+      // ∀R.D : ∀∅.D = ⊤ when R∉Σ (holds for data and object fillers alike).
       if (all) return propReplaced ? "top" : "other";
       // ≥n R (n≥1): ≥n ∅ = ⊥ when R∉Σ (an empty role has no successors). n=0 → ⊤.
       if (minCard) {
         const n = cardValue(minCard);
         if (n === 0) return "top";
-        // qualified ≥n R.D also ⊥ if D ≡⊥
+        // qualified ≥n R.D also ⊥ if the OBJECT filler D ≡⊥ (data ranges excluded).
         if (propReplaced) return "bot";
         const onClass = has(OWL_ON_CLASS);
         if (onClass) {
-          const fv = evalClassExpr(idx, onClass.object, sigma, mode, !!onClass.objectIsLiteral, seen);
+          const fv = evalFiller(onClass);
           if (fv === "bot") return "bot";
         }
+        // onDataRange filler is a data range → never ⊥ from the filler.
         return "other";
       }
       // ≤n R : ≤n ∅ = ⊤ when R∉Σ (always satisfiable).
@@ -658,14 +789,14 @@ function evalClassExpr(
       // ∃R.D : ∃univ.D — universal? Only ⊤ if D is satisfiable; conservative "other"
       //   unless filler is ⊤ AND propReplaced (∃univ.⊤ = ⊤). If filler ≡⊤ keep ⊤ only when R replaced.
       if (some) {
-        const fillerVal = evalClassExpr(idx, some.object, sigma, mode, !!some.objectIsLiteral, seen);
+        const fillerVal = evalFiller(some);
         if (propReplaced && fillerVal === "top") return "top";
-        if (fillerVal === "bot") return "bot"; // ∃R.⊥ = ⊥ regardless
+        if (fillerVal === "bot") return "bot"; // ∃R.⊥ = ⊥ regardless (object filler)
         return "other";
       }
       if (all) {
         // ∀univ.D : = ⊤ iff D ≡⊤ ; if D ≡⊥ then ∀univ.⊥ = "nothing has any univ-successor" → not generally ⊥.
-        const fillerVal = evalClassExpr(idx, all.object, sigma, mode, !!all.objectIsLiteral, seen);
+        const fillerVal = evalFiller(all);
         if (propReplaced && fillerVal === "top") return "top";
         return "other";
       }
@@ -826,6 +957,18 @@ function isLocalUnit(idx: TripleIndex, unit: AxiomUnit, sigma: Set<string>, mode
     return false;
   }
 
+  // ── Property-characteristic axiom  (R rdf:type owl:TransitiveProperty, …) ────
+  // BUG 1/2 FIX. These are LOGICAL axioms about the property R. Per syntactic
+  // locality (Cuenca Grau et al., JAIR 2008; OWL API SyntacticLocalityEvaluator):
+  // when R ∉ Σ it is replaced by the empty property (⊥-mode) or the universal
+  // property (⊤-mode) and the characteristic (Transitive/Functional/Symmetric/
+  // …) holds trivially — so the axiom is LOCAL. When R ∈ Σ it constrains a kept
+  // property and is NON-LOCAL (it can derive new Σ-entailments, e.g. transitivity
+  // ⇒ extra subsumptions). The rule is the same in both modes: LOCAL iff R ∉ Σ.
+  if (p === RDF_TYPE && !t.objectIsLiteral && isPropertyCharacteristicType(t.object)) {
+    return !propInSigma(t.subject, sigma);
+  }
+
   // ── ClassAssertion(C, a)  [rdf:type] ────────────────────────────────────────
   // a : C is a tautology after substitution only if C ≡⊤. Otherwise the ABox
   // assertion is NON-LOCAL (kept). This is the conservative ABox handling: ABox
@@ -879,20 +1022,20 @@ function isAxiomLocal(axiom: LocalityTriple[], signatureSet: Set<string>, mode: 
   // Find the principal triple.
   let principal: LocalityTriple | undefined = axiom.find((t) => AXIOM_PREDICATES.has(t.predicate));
   if (!principal) {
+    // BUG 2 FIX: a property-characteristic axiom (R a owl:TransitiveProperty, …)
+    // is a LOGICAL principal whose locality depends on R ∈ Σ. Find it BEFORE the
+    // ClassAssertion finder (whose declaration filter would otherwise reject any
+    // owl:-namespaced rdf:type object, silently dropping these).
+    principal = axiom.find(
+      (t) => t.predicate === RDF_TYPE && !t.objectIsLiteral && isPropertyCharacteristicType(t.object),
+    );
+  }
+  if (!principal) {
     // Maybe a ClassAssertion (rdf:type to a non-declaration class).
     principal = axiom.find((t) => {
       if (t.predicate !== RDF_TYPE || t.objectIsLiteral) return false;
       const o = t.object;
-      const isDecl =
-        o === OWL_CLASS ||
-        o === OWL_OBJECT_PROPERTY ||
-        o === OWL_DATATYPE_PROPERTY ||
-        o === OWL_ANNOTATION_PROPERTY ||
-        o === OWL_NAMED_INDIVIDUAL ||
-        o === OWL_ONTOLOGY ||
-        o === OWL_RESTRICTION ||
-        o === `${RDF.namespace}List` ||
-        o.startsWith(`${OWL.namespace}`);
+      const isDecl = DECLARATION_TYPES.has(o) || o.startsWith(`${OWL.namespace}`);
       return !isDecl;
     });
   }
@@ -901,8 +1044,12 @@ function isAxiomLocal(axiom: LocalityTriple[], signatureSet: Set<string>, mode: 
     // No logical principal. If EVERY triple is a declaration / annotation /
     // structural, the axiom is local (entails nothing about Σ). Otherwise keep
     // conservatively. A declaration-only set is local.
+    //
+    // NOTE: a property-characteristic rdf:type triple would already have been
+    // selected as the principal above, so any RDF_TYPE triple reaching here is a
+    // pure declaration (a owl:Class / owl:ObjectProperty / …) → always local.
     const allDeclOrStructural = axiom.every((t) => {
-      if (t.predicate === RDF_TYPE) return true; // declarations / characteristics
+      if (t.predicate === RDF_TYPE) return true; // pure declarations only here
       if (STRUCTURAL_PREDICATES.has(t.predicate)) return true;
       if (t.predicate === RDF_FIRST || t.predicate === RDF_REST) return true;
       if (t.predicate === OWL_ON_PROPERTY || t.predicate === OWL_SOME_VALUES_FROM ||
