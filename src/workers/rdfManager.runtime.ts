@@ -2852,27 +2852,91 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
   //   On any gate failure OR any internal inconsistency hint, return undefined so the
   //   caller uses Konclude. The EL path is a pure FAST PATH; Konclude is the floor.
 
-  const EL_FALLBACK_PREDICATES = new Set<string>([
-    "http://www.w3.org/2002/07/owl#disjointWith",
-    "http://www.w3.org/2002/07/owl#propertyDisjointWith",
-    "http://www.w3.org/2002/07/owl#disjointUnionOf",
-    "http://www.w3.org/2002/07/owl#sameAs",
-    "http://www.w3.org/2002/07/owl#differentFrom",
-    "http://www.w3.org/2002/07/owl#members",
-    "http://www.w3.org/2002/07/owl#distinctMembers",
-    "http://www.w3.org/2002/07/owl#hasKey",
-    "http://www.w3.org/2002/07/owl#complementOf",
-    "http://www.w3.org/2002/07/owl#oneOf",
-    "http://www.w3.org/2002/07/owl#unionOf",
+  // ───────────────────────────────────────────────────────────────────────────
+  // ALLOWLIST GATE (fail SAFE) — the AUTHORITATIVE routing decision.
+  // ───────────────────────────────────────────────────────────────────────────
+  // RATIONALE (architect-confirmed soundness fix). The previous gate was a
+  // DENYLIST over an approximate profile detector: it routed M to the EL path
+  // unless M contained a construct someone remembered to denylist. That FAILS
+  // OPEN — any EL-profile-VALID construct the EL realizer does NOT actually
+  // reproduce (and that nobody denylisted) leaks through and diverges from
+  // Konclude. Confirmed leaks: rdfs:range (missed type realization),
+  // owl:equivalentProperty, owl:ReflexiveProperty (missed role realization), and
+  // — worst — a FUNCTIONAL DATA property with two distinct literals, which
+  // Konclude reports INCONSISTENT but the EL path silently calls consistent
+  // (a MISSED INCONSISTENCY; user shown "consistent" for an inconsistent graph).
+  //
+  // The fix INVERTS the gate to an ALLOWLIST: route M to the EL fast path ONLY
+  // IF every triple in M uses a predicate (and, for rdf:type, a type-object) that
+  // the EL realizer PROVABLY reproduces byte-identically to Konclude. ANY triple
+  // outside the allowlist ⇒ Konclude. Unknown construct ⇒ Konclude (fail safe).
+  //
+  // The allowlist is a SUBSET of what the EL normaliser (elReasoner.ts) consumes
+  // with logical content. Audited against Normaliser.handleTriple's switch and
+  // translateClass: the normaliser produces TBox/role-box content ONLY for
+  // rdfs:subClassOf, owl:equivalentClass, rdfs:domain, rdfs:subPropertyOf,
+  // owl:propertyChainAxiom, and rdf:type owl:TransitiveProperty; restriction /
+  // intersection structure is read via owl:onProperty, owl:someValuesFrom,
+  // owl:intersectionOf, rdf:first, rdf:rest; declarations come via rdf:type
+  // owl:Class / owl:ObjectProperty / owl:Restriction. EVERY OTHER predicate hits
+  // the normaliser's `default` branch and is SILENTLY IGNORED — precisely the
+  // leak. So those predicates are EXCLUDED here and force Konclude.
+  //
+  // EXCLUDED-AND-FALL-BACK constructs (not implemented in the EL realizer; each
+  // forces Konclude rather than being silently dropped):
+  //   • rdfs:range            — Konclude realizes the range type; EL emits nothing.
+  //   • owl:equivalentProperty — role-equivalence realization; EL ignores it.
+  //   • rdfs:range / owl:inverseOf / property characteristics below.
+  //   • rdf:type owl:ReflexiveProperty / owl:FunctionalProperty /
+  //     owl:InverseFunctionalProperty / owl:SymmetricProperty /
+  //     owl:AsymmetricProperty / owl:IrreflexiveProperty / owl:DatatypeProperty
+  //     — none modelled by the EL realizer; the functional-DATA case is an
+  //     OUTRIGHT inconsistency Konclude catches (probe: logs/probe-c4-funcdata.mjs
+  //     → consistent=false) and EL would miss. ALL force Konclude.
+  // We EXCLUDE (fall back) rather than implement these — correctness over speed,
+  // per the architect's recommendation.
+  //
+  // The structural EL-profile guard (detectOwl2Profiles) and classifyEL.inProfile
+  // are kept as ADDITIONAL defense-in-depth below, but the ALLOWLIST is primary.
+
+  const EL_ALLOWED_PREDICATES = new Set<string>([
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", // gated separately by object
+    "http://www.w3.org/2000/01/rdf-schema#subClassOf",
+    "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+    "http://www.w3.org/2000/01/rdf-schema#domain",
+    "http://www.w3.org/2002/07/owl#equivalentClass",
+    "http://www.w3.org/2002/07/owl#propertyChainAxiom",
+    "http://www.w3.org/2002/07/owl#onProperty",
+    "http://www.w3.org/2002/07/owl#someValuesFrom",
+    "http://www.w3.org/2002/07/owl#intersectionOf",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#first",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest",
   ]);
-  const EL_FALLBACK_TYPES = new Set<string>([
-    "http://www.w3.org/2002/07/owl#AllDisjointClasses",
-    "http://www.w3.org/2002/07/owl#AllDisjointProperties",
-    "http://www.w3.org/2002/07/owl#AllDifferent",
-    "http://www.w3.org/2002/07/owl#NegativePropertyAssertion",
-    "http://www.w3.org/2002/07/owl#IrreflexiveProperty",
-    "http://www.w3.org/2002/07/owl#AsymmetricProperty",
+
+  // rdf:type OBJECTS that are allowed as STRUCTURAL/declaration types. Any OTHER
+  // rdf:type object is treated as NAMED-CLASS membership (ABox realization) and
+  // is allowed ONLY when the object is a declared/known domain class (see the
+  // gate). Property characteristics are deliberately ABSENT here so they force
+  // Konclude: ReflexiveProperty, FunctionalProperty, InverseFunctionalProperty,
+  // SymmetricProperty, AsymmetricProperty, IrreflexiveProperty, DatatypeProperty.
+  const EL_ALLOWED_TYPE_OBJECTS = new Set<string>([
+    "http://www.w3.org/2002/07/owl#Class",
+    "http://www.w3.org/2002/07/owl#ObjectProperty",
+    "http://www.w3.org/2002/07/owl#NamedIndividual",
+    "http://www.w3.org/2002/07/owl#Thing",
+    "http://www.w3.org/2002/07/owl#Nothing",
+    "http://www.w3.org/2002/07/owl#Restriction",
+    "http://www.w3.org/2002/07/owl#TransitiveProperty",
   ]);
+
+  // OWL/RDF/RDFS-namespace rdf:type objects that are NOT in EL_ALLOWED_TYPE_OBJECTS
+  // are ALWAYS structural-but-unsupported (property characteristics, datatype
+  // props, …) and must NEVER be mistaken for a domain class. We detect them by
+  // namespace so an UNANTICIPATED owl:* / rdfs:* characteristic also fails SAFE
+  // (forces Konclude) instead of being misread as ABox membership.
+  const OWL_NS = "http://www.w3.org/2002/07/owl#";
+  const RDFS_NS = "http://www.w3.org/2000/01/rdf-schema#";
+  const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
   const EL_RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
   const EL_RDF_FIRST = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
@@ -3041,10 +3105,50 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     moduleTriples: LocalityTriple[],
     DataFactory: any,
   ): ElClassifyResult | undefined {
-    // ── GATE 1: no divergence-capable construct (disjointness / nominals / …). ──
+    // ── GATE 1 (PRIMARY, fail SAFE): ALLOWLIST. Every triple in M must use a
+    //    predicate the EL realizer provably reproduces. For rdf:type, the object
+    //    must be an allowed STRUCTURAL type OR a NAMED domain class (ABox
+    //    realization) — NEVER an owl/rdfs/rdf-namespace type-object outside the
+    //    allowed structural set (those are property characteristics etc. that the
+    //    EL realizer silently ignores ⇒ would diverge). ANY violation ⇒ Konclude.
+    //
+    // Role assertions `a p b` are allowed ONLY when `p` is a NAMED object property
+    // DECLARED in M (`p rdf:type owl:ObjectProperty`): those are the edges the EL
+    // role-box realizer consumes. An assertion over an UNDECLARED predicate (an
+    // unknown data/annotation property, or a property whose characteristic the EL
+    // path doesn't model) is NOT provably reproducible ⇒ Konclude. A role
+    // assertion with a LITERAL object on a declared object property is malformed/
+    // out-of-EL ⇒ Konclude.
+    const declaredObjectProps = new Set<string>();
     for (const t of moduleTriples) {
-      if (EL_FALLBACK_PREDICATES.has(t.predicate)) return undefined;
-      if (t.predicate === EL_RDF_TYPE && EL_FALLBACK_TYPES.has(t.object)) return undefined;
+      if (t.predicate === EL_RDF_TYPE && t.object === EL_OWL_OBJECT_PROPERTY) {
+        declaredObjectProps.add(t.subject);
+      }
+    }
+    for (const t of moduleTriples) {
+      if (t.predicate === EL_RDF_TYPE) {
+        // Literal-valued rdf:type is malformed RDF — bail to Konclude to be safe.
+        if (t.objectIsLiteral) return undefined;
+        if (EL_ALLOWED_TYPE_OBJECTS.has(t.object)) continue; // structural decl
+        // Not an allowed structural type. It is acceptable ONLY as named-class
+        // membership `i rdf:type C` where C is a DOMAIN class — i.e. NOT in the
+        // OWL/RDFS/RDF vocabulary namespaces (those would be unsupported
+        // characteristics like owl:FunctionalProperty / owl:ReflexiveProperty).
+        if (
+          t.object.startsWith(OWL_NS) ||
+          t.object.startsWith(RDFS_NS) ||
+          t.object.startsWith(RDF_NS)
+        ) {
+          return undefined; // unsupported structural/characteristic type ⇒ Konclude
+        }
+        // Domain-class membership ⇒ allowed (ABox realization).
+        continue;
+      }
+      if (EL_ALLOWED_PREDICATES.has(t.predicate)) continue;
+      // The only other allowed predicate is a DECLARED named object property used
+      // as a role-assertion edge with a NON-literal object.
+      if (declaredObjectProps.has(t.predicate) && !t.objectIsLiteral) continue;
+      return undefined; // any other predicate ⇒ fail safe to Konclude
     }
 
     // ── GATE 2: structural EL profile (owlProfile) — falls back on any EL violation. ──
