@@ -596,6 +596,27 @@ export interface WeakeningContext {
   justifications?: Array<
     Array<{ subject: string; predicate: string; object: string; graph?: string }>
   >;
+  /**
+   * LACONIC justifications (Horridge et al. ISWC 2008), aligned BY INDEX with
+   * `justifications`. When present, the precise culprit PART of an intersection
+   * subClassOf axiom (e.g. the `A ⊑ B` part of `A ⊑ B ⊓ C`) tells the weakening
+   * enumerator EXACTLY which conjunct to drop — the minimal repair target. Used
+   * to set `laconicCulpritMember` on the culprit so the laconic-precise drop is
+   * ranked first. Optional; absent ⇒ unchanged behaviour.
+   */
+  laconicJustifications?: Array<{
+    parts: Array<{
+      subject: string;
+      predicate: string;
+      object: string;
+      sourceSubject: string;
+      sourcePredicate: string;
+      sourceObject: string;
+      isPartOf: boolean;
+    }>;
+    sharpened: boolean;
+    skipped: boolean;
+  }>;
 }
 
 const RDFS_SUBCLASS_OF = `${RDFS}subClassOf`;
@@ -694,8 +715,33 @@ export function addWeakeningRepairs(
   // catches culprits the deletion hitting set skipped in favour of an ABox).
   if (ctx.justifications && ctx.justifications.length > 0) {
     ctx.justifications.forEach((mips, jIdx) => {
+      // LACONIC culprit hint for THIS justification (aligned by index): the
+      // precise conjunct part the contradiction actually uses. We look for a
+      // laconic part whose SOURCE axiom is the intersection subClassOf axiom and
+      // whose own object is one of the intersection's members — that member is
+      // the offending conjunct to drop (Horridge et al. ISWC 2008).
+      const lac = ctx.laconicJustifications?.[jIdx];
+      const laconicMemberFor = (subject: string, intersectionObject: string): string | undefined => {
+        if (!lac || lac.skipped) return undefined;
+        const members = ctx.intersections?.get(intersectionObject);
+        if (!members || members.length === 0) return undefined;
+        for (const part of lac.parts) {
+          if (
+            part.isPartOf &&
+            part.sourceSubject === subject &&
+            part.sourceObject === intersectionObject &&
+            part.subject === subject &&
+            members.includes(part.object)
+          ) {
+            return part.object;
+          }
+        }
+        return undefined;
+      };
+
       for (const ax of mips) {
         if (ax.predicate !== RDFS_SUBCLASS_OF) continue;
+        const culpritMember = laconicMemberFor(ax.subject, ax.object);
         const culprit: CulpritAxiom = {
           subject: ax.subject,
           predicate: RDFS_SUBCLASS_OF,
@@ -704,6 +750,7 @@ export function addWeakeningRepairs(
           ...(ctx.intersections?.has(ax.object)
             ? { intersectionMembers: ctx.intersections.get(ax.object) }
             : {}),
+          ...(culpritMember ? { laconicCulpritMember: culpritMember } : {}),
         };
         const owner = findOwner(ax.subject, RDFS_SUBCLASS_OF, ax.object, jIdx);
         emitWeakenings(culprit, owner, owner?.justificationsCovered ?? [jIdx]);

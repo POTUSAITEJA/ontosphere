@@ -167,6 +167,34 @@ describe('enumerateWeakenings — DROP A CONJUNCT', () => {
     expect(drop.adds).toEqual([]);
     expect(drop.removes).toEqual([{ subject: A, predicate: RDFS_SUBCLASS_OF, object: C }]);
   });
+
+  it('LACONIC culprit: A ⊑ B ⊓ C with B the culprit → top candidate drops B, keeps C (ranked first)', () => {
+    const intersectionNode = '_:int1';
+    const ws = enumerateWeakenings(
+      culprit(A, intersectionNode, { intersectionMembers: [B, C], laconicCulpritMember: B }),
+      buildClassHierarchy([]),
+    );
+    // The FIRST (most-preferred) candidate is the laconic-precise one: it drops
+    // the culprit B and keeps C — i.e. adds `A ⊑ C`, removes nothing of C.
+    const top = ws[0];
+    expect(top.strategy).toBe('dropConjunct');
+    expect(top.specificityRank).toBe(0);
+    expect(top.adds).toEqual([{ subject: A, predicate: RDFS_SUBCLASS_OF, object: C }]);
+    expect(top.rationale).toContain('LACONIC');
+    // The per-member candidates are still present (keep B / keep C alternatives).
+    expect(ws.some((w) => w.weakerTarget === B)).toBe(true);
+    expect(ws.some((w) => w.weakerTarget === C)).toBe(true);
+  });
+
+  it('LACONIC hint is inert when the culprit member is not in the intersection', () => {
+    const ws = enumerateWeakenings(
+      culprit(A, '_:int', { intersectionMembers: [B, C], laconicCulpritMember: D }),
+      buildClassHierarchy([]),
+    );
+    // No specificityRank-0 laconic candidate — falls back to the per-member set.
+    expect(ws.every((w) => w.specificityRank >= 1)).toBe(true);
+    expect(ws.map((w) => w.weakerTarget).sort()).toEqual([B, C].sort());
+  });
 });
 
 describe('addWeakeningRepairs — augments deletion repairs with weakening alternatives', () => {

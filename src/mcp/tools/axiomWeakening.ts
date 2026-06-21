@@ -242,6 +242,15 @@ export interface CulpritAxiom {
    * superclass IRI. Optional.
    */
   siblingTargets?: string[];
+  /**
+   * LACONIC culprit hint (Horridge et al. ISWC 2008). When the laconic
+   * refinement of the justification identified that a SPECIFIC conjunct is the
+   * precise culprit — e.g. for `A ⊑ B ⊓ C` the laconic part is `A ⊑ B`, so `B`
+   * is the offending conjunct — this is that conjunct IRI. enumerateWeakenings
+   * then PREFERS the weakening that drops exactly this conjunct (the minimal
+   * thing to weaken), surfacing it first. Optional; absent ⇒ unchanged ranking.
+   */
+  laconicCulpritMember?: string;
 }
 
 /**
@@ -284,6 +293,46 @@ export function enumerateWeakenings(
   if (culprit.intersectionMembers && culprit.intersectionMembers.length > 1) {
     const D = culprit.object;
     const Dlabel = localName(D);
+
+    // LACONIC-PREFERRED dropConjunct (Horridge et al. ISWC 2008). When the
+    // laconic refinement pinpointed the offending conjunct, the MINIMAL weakening
+    // is to drop EXACTLY that conjunct and keep every other — a single, most-
+    // knowledge-preserving step. Emit it first (specificityRank 0) so it ranks
+    // ahead of the per-member "keep only Bi" candidates below.
+    const culpritMember = culprit.laconicCulpritMember;
+    if (
+      culpritMember &&
+      culprit.intersectionMembers.includes(culpritMember) &&
+      culprit.intersectionMembers.length > 1
+    ) {
+      const survivors = culprit.intersectionMembers.filter((m) => m !== culpritMember);
+      if (survivors.length > 0) {
+        const survivorKey = survivors.join('|');
+        if (!seenTargets.has(survivorKey)) {
+          seenTargets.add(survivorKey);
+          candidates.push({
+            strategy: 'dropConjunct',
+            removes: [originalTriple()],
+            adds: survivors.map((m) => ({
+              subject: A,
+              predicate: RDFS_SUBCLASS_OF,
+              object: m,
+              ...(culprit.graph ? { graph: culprit.graph } : {}),
+            })),
+            weakerTarget: survivors[0],
+            // 0 ⇒ ranks ahead of every other weakening (the laconic-precise fix).
+            specificityRank: 0,
+            rationale:
+              `Weaken ${Alabel} ⊑ ${Dlabel} (an intersection) by dropping the ` +
+              `LACONIC culprit conjunct ${localName(culpritMember)} — the precise ` +
+              `part driving the clash (Horridge et al. ISWC 2008) — and keeping ` +
+              `${survivors.map(localName).join(' ⊓ ')}; the most knowledge-preserving fix.`,
+            weakerThan: `${Alabel} ⊑ ${Dlabel}`,
+          });
+        }
+      }
+    }
+
     // Each surviving single member becomes the weaker target: A ⊑ Bi.
     culprit.intersectionMembers.forEach((member) => {
       if (seenTargets.has(member)) return;

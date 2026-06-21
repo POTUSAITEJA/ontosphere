@@ -34,7 +34,259 @@ import {
 } from "./localityModule.ts";
 import { OpfsPersistence, createOpfsBackend } from "./opfsPersistence.ts";
 import { QueryEngine } from "@comunica/query-sparql-rdfjs";
+// LACONIC JUSTIFICATIONS (Horridge, Parsia, Sattler, ISWC 2008). IMPORT ONLY —
+// the pure module is never edited here. `splitAxiom` is the structural weakening
+// (OPlus) closure of one axiom; `axiomKey` is its stable de-dup key. We do NOT
+// use the module's synchronous `computeLaconic` because our entailment oracle
+// (`_checkInconsistencyDirect`) is asynchronous (it round-trips the Konclude
+// worker). Instead `computeLaconicAsync` below replays the SAME two-step Horridge
+// algorithm — split every axiom, sanity-check the candidate set still entails η,
+// then contract superfluous parts — awaiting the async oracle at each step, while
+// reusing the pure `splitAxiom`/`axiomKey` so the weakening rules stay in one place.
+import {
+  splitAxiom,
+  axiomKey as laconicAxiomKey,
+  type LaconicAxiom,
+  type LaconicTriple,
+} from "./laconicJustification.ts";
+// EL FAST PATH (conformance-gated). IMPORT ONLY — elReasoner.ts is the pure,
+// PTIME EL⁺⁺ completion reasoner (proven EXACTLY equal to Konclude on EL input by
+// elReasoner.test.ts). We use classifyEL for the TBox subsumption closure that
+// drives the EL realization in classifyModuleELorKonclude below; owlProfile's
+// detectOwl2Profiles is the structural EL-profile gate. NEITHER module is edited.
+import { classifyEL, type Triple as ElTriple } from "./elReasoner.ts";
+import { detectOwl2Profiles, type ProfileTriple } from "../utils/owlProfile.ts";
 const KONCLUDE_INFERRED_GRAPH_IRI = "urn:vg:inferred";
+
+// ───────────────────────────────────────────────────────────────────────────
+// LACONIC post-processing of inconsistency justifications
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The worker's MIPS search (`explainInconsistency`) returns each justification as
+// a FLAT list of RDF quads, minimal at the granularity of WHOLE axioms. A laconic
+// justification (Horridge et al. ISWC 2008) is sharper: it strips superfluous
+// PARTS, so `A ⊑ B ⊓ C` is reported as just its `A ⊑ B` part when only that part
+// drives the clash. We post-process each MIPS J → its laconic form by:
+//   1. grouping J's flat quads into logical AXIOMS (a principal triple + its
+//      transitive blank-node closure, the shape `splitAxiom` consumes);
+//   2. running `splitAxiom` on each axiom to get its weaker parts;
+//   3. contracting the parts via the Konclude consistency oracle (async).
+//
+// COST CAP (bounds the extra oracle/WASM round-trips so laconic can never blow the
+// 3-minute worker timeout). Laconic adds one oracle call per split part during the
+// sanity check + one per part during contraction — O(parts) calls per justification.
+// We therefore:
+//   • SKIP laconic entirely for a justification with more than
+//     LACONIC_MAX_AXIOMS axioms (a large MIPS would explode the oracle budget);
+//   • SKIP laconic for a justification whose total candidate-part count exceeds
+//     LACONIC_MAX_PARTS (after splitting), for the same reason.
+// A skipped justification falls back to laconic == original (documented, lossless:
+// the agent still gets the regular justification, just not the sharpened parts).
+const LACONIC_MAX_AXIOMS = 12;
+const LACONIC_MAX_PARTS = 24;
+
+/** Convert a runtime N3 quad to the laconic module's plain-triple shape. */
+function quadToLaconicTriple(q: N3.Quad): LaconicTriple {
+  return {
+    subject: q.subject.value,
+    predicate: q.predicate.value,
+    object: q.object.value,
+    objectIsLiteral: q.object.termType === "Literal",
+  };
+}
+
+/** A blank-node-ish term value (N3 blank label, `_:b`, or N3 `bN`). */
+function isLaconicBlank(value: string): boolean {
+  return value.startsWith("_:") || /^b\d+$/.test(value) || value.startsWith("n3-");
+}
+
+/**
+ * Materialise a laconic part (plain triples) into runtime N3 quads so the async
+ * oracle can hand them to Konclude. Blank-node terms become real N3 blank nodes;
+ * everything else is a NamedNode (or a Literal when objectIsLiteral). The graph is
+ * the default graph — `_checkInconsistencyDirect` only reads s/p/o.
+ */
+export function laconicAxiomToQuads(axiom: LaconicAxiom): N3.Quad[] {
+  const term = (value: string, isLiteral: boolean): N3.Quad_Subject | N3.Quad_Object => {
+    if (isLiteral) return N3.DataFactory.literal(value) as unknown as N3.Quad_Object;
+    if (isLaconicBlank(value)) return N3.DataFactory.blankNode(value.replace(/^_:/, ""));
+    return N3.DataFactory.namedNode(value);
+  };
+  return axiom.map((t) =>
+    N3.DataFactory.quad(
+      term(t.subject, false) as N3.Quad_Subject,
+      N3.DataFactory.namedNode(t.predicate),
+      term(t.object, !!t.objectIsLiteral) as N3.Quad_Object,
+    ),
+  );
+}
+
+/**
+ * Group a flat MIPS justification (N3 quads) into logical AXIOMS — each a
+ * principal triple plus its transitive blank-node closure — in the
+ * `LaconicAxiom` shape `splitAxiom` consumes. The principal triple is placed
+ * FIRST (splitAxiom treats `axiom[0]` as principal).
+ *
+ * A quad with a NAMED subject is a principal; its blank-node object closure is
+ * pulled from the SAME justification's quads (the MIPS keeps the class-expression
+ * triples it needs). Closure quads (blank-subject) consumed by a principal are
+ * not re-emitted standalone. Any blank-subject quad NOT reached by a principal is
+ * grouped on its own (kept whole — sound, merely coarser).
+ *
+ * Returns the axioms plus, for each axiom (by its laconic key), the ORIGINAL N3
+ * quads that composed it, so the laconic result can map a part back to the exact
+ * source quads (graph + typed-literal term) the repair path must target.
+ */
+export function groupQuadsIntoLaconicAxioms(
+  justification: N3.Quad[],
+  closureSource?: N3.Quad[],
+): { axioms: LaconicAxiom[]; sourceQuads: Map<string, N3.Quad[]> } {
+  // Blank-node closures are resolved from `closureSource` (the FULL reasoning
+  // base) when provided, NOT from the justification alone. This matters because
+  // the QUAD-level MIPS minimiser may prune individual list cells of an
+  // intersection (e.g. it keeps `_:int first ex:B` but drops the `ex:C` cell when
+  // C is superfluous), leaving a dangling rdf:List. Reconstructing the COMPLETE
+  // class expression from the full base lets splitAxiom see `A ⊑ B ⊓ C` in full
+  // so the laconic contraction can genuinely drop the superfluous `A ⊑ C` part.
+  const closureBase = closureSource && closureSource.length > 0 ? closureSource : justification;
+  const bySubject = new Map<string, N3.Quad[]>();
+  for (const q of closureBase) {
+    const arr = bySubject.get(q.subject.value);
+    if (arr) arr.push(q);
+    else bySubject.set(q.subject.value, [q]);
+  }
+
+  const consumed = new Set<N3.Quad>();
+  const closure = (start: string, accT: LaconicTriple[], accQ: N3.Quad[], seen: Set<string>): void => {
+    if (seen.has(start)) return;
+    seen.add(start);
+    const arr = bySubject.get(start);
+    if (!arr) return;
+    for (const q of arr) {
+      consumed.add(q);
+      accT.push(quadToLaconicTriple(q));
+      accQ.push(q);
+      if (q.object.termType !== "Literal" && isLaconicBlank(q.object.value)) {
+        closure(q.object.value, accT, accQ, seen);
+      }
+    }
+  };
+
+  const axioms: LaconicAxiom[] = [];
+  const sourceQuads = new Map<string, N3.Quad[]>();
+  const register = (triples: LaconicTriple[], quads: N3.Quad[]): void => {
+    if (triples.length === 0) return;
+    const key = laconicAxiomKey(triples);
+    if (sourceQuads.has(key)) return;
+    axioms.push(triples);
+    sourceQuads.set(key, quads);
+  };
+
+  // Principals first: NAMED-subject quads. Each pulls its blank object closure.
+  for (const q of justification) {
+    if (isLaconicBlank(q.subject.value)) continue; // closure handled below
+    const triples: LaconicTriple[] = [quadToLaconicTriple(q)];
+    const quads: N3.Quad[] = [q];
+    consumed.add(q);
+    if (q.object.termType !== "Literal" && isLaconicBlank(q.object.value)) {
+      closure(q.object.value, triples, quads, new Set<string>());
+    }
+    register(triples, quads);
+  }
+
+  // Any remaining blank-subject quad not reached by a principal: keep whole.
+  for (const q of justification) {
+    if (consumed.has(q)) continue;
+    const triples: LaconicTriple[] = [quadToLaconicTriple(q)];
+    const quads: N3.Quad[] = [q];
+    consumed.add(q);
+    if (q.object.termType !== "Literal" && isLaconicBlank(q.object.value)) {
+      closure(q.object.value, triples, quads, new Set<string>());
+    }
+    register(triples, quads);
+  }
+
+  return { axioms, sourceQuads };
+}
+
+/**
+ * Async port of laconicJustification.computeLaconic — same Horridge two-step
+ * shape (split → sanity → contract) but awaiting an ASYNC entailment oracle (the
+ * Konclude consistency check). Reuses the pure `splitAxiom`/`axiomKey` so the
+ * weakening rules live in exactly one place.
+ *
+ * `entails(axioms)` must resolve true iff the union of the given axioms entails η
+ * (here: is INCONSISTENT). Returns the laconic axioms plus a part-key → source
+ * axiom map (the source is the ORIGINAL axiom the part was split from).
+ */
+export async function computeLaconicAsync(
+  justification: LaconicAxiom[],
+  entails: (axioms: LaconicAxiom[]) => Promise<boolean>,
+): Promise<{ laconic: LaconicAxiom[]; sources: Map<LaconicAxiom, LaconicAxiom> }> {
+  // Step 1 — split + dedupe, tracking provenance.
+  const candidates: LaconicAxiom[] = [];
+  const candidateKeys = new Set<string>();
+  const sources = new Map<LaconicAxiom, LaconicAxiom>();
+  for (const original of justification) {
+    for (const part of splitAxiom(original)) {
+      const k = laconicAxiomKey(part);
+      if (candidateKeys.has(k)) continue;
+      candidateKeys.add(k);
+      candidates.push(part);
+      sources.set(part, original);
+    }
+  }
+
+  // Step 2 — sanity: the split candidate set must still entail η. If not (an
+  // oracle that does not accept the weaker parts), fall back to the ORIGINAL
+  // justification verbatim so the result is never weaker than the input.
+  if (!(await entails(candidates))) {
+    const fallback = new Map<LaconicAxiom, LaconicAxiom>();
+    for (const a of justification) fallback.set(a, a);
+    return { laconic: [...justification], sources: fallback };
+  }
+
+  // Step 3 — contract: drop every superfluous part (single stable pass).
+  let current = [...candidates];
+  for (const part of candidates) {
+    const without = current.filter((c) => c !== part);
+    if (await entails(without)) current = without;
+  }
+
+  const laconicSources = new Map<LaconicAxiom, LaconicAxiom>();
+  for (const part of current) {
+    const src = sources.get(part);
+    if (src) laconicSources.set(part, src);
+  }
+  return { laconic: current, sources: laconicSources };
+}
+
+/**
+ * One laconic justification, serialised for the worker→main boundary. `parts` are
+ * the laconic axiom PARTS (the precise culprits); each part carries its principal
+ * triple plus the ORIGINAL source axiom's principal triple (so the UI can say
+ * "the `A ⊑ B` part of axiom `A ⊑ B ⊓ C` is the culprit"). `sharpened` is true
+ * when laconic actually dropped something (parts differ from the original axioms);
+ * `skipped` is true when the cost cap suppressed laconic for this justification.
+ */
+type SerializedLaconicPart = {
+  subject: string;
+  predicate: string;
+  object: string;
+  objectIsLiteral?: boolean;
+  /** The principal triple of the original axiom this part was split from. */
+  sourceSubject: string;
+  sourcePredicate: string;
+  sourceObject: string;
+  /** True when this part is strictly smaller/weaker than its source axiom. */
+  isPartOf: boolean;
+};
+
+type SerializedLaconicJustification = {
+  parts: SerializedLaconicPart[];
+  sharpened: boolean;
+  skipped: boolean;
+};
 
 // ───────────────────────────────────────────────────────────────────────────
 // SINGLE SOURCE OF TRUTH — reasoning-base graph exclusions (Finding 1)
@@ -528,7 +780,26 @@ class KoncludeReasoner {
   }
 
   explainInconsistency(store: N3.Store, maxJustifications = 1): Promise<N3.Quad[][]> {
-    const result = this._queue.then(async () => {
+    const result = this._queue.then(() =>
+      this._explainInconsistencyJustifications(store, maxJustifications),
+    );
+    this._queue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  /**
+   * Compute the MIPS justifications WITHOUT acquiring a _queue slot — the caller
+   * must already hold one (like _checkInconsistencyDirect). Factored out of
+   * explainInconsistency so BOTH the plain path and the laconic path
+   * (explainInconsistencyLaconic) share the identical search and the SAME
+   * consistency oracle, instead of duplicating the binary-expand / single-axiom-
+   * prune / hitting-set enumeration.
+   */
+  private async _explainInconsistencyJustifications(
+    store: N3.Store,
+    maxJustifications = 1,
+  ): Promise<N3.Quad[][]> {
+    {
       const allBase: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
         const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
         return !EXCLUDED_FROM_REASONING.has(g);
@@ -653,9 +924,151 @@ class KoncludeReasoner {
       }
 
       return justifications;
+    }
+  }
+
+  /**
+   * LACONIC inconsistency explanation (Horridge et al. ISWC 2008). Computes the
+   * SAME MIPS justifications as explainInconsistency, then POST-PROCESSES each to
+   * its laconic form — stripping superfluous axiom PARTS so a culprit like
+   * `A ⊑ B ⊓ C` is reported as just its `A ⊑ B` part when only that part drives
+   * the clash. The laconic contraction reuses THIS reasoner's consistency oracle
+   * (`_checkInconsistencyDirect`): a subset of parts "entails η" iff, conjoined
+   * with the other justification axioms, it is INCONSISTENT.
+   *
+   * Returns, per justification: the original MIPS quads, the laconic axiom parts
+   * (each with its source axiom), and whether laconic was sharpened or skipped by
+   * the cost cap (LACONIC_MAX_AXIOMS / LACONIC_MAX_PARTS — see the constants).
+   *
+   * Runs in ONE _queue slot for the whole computation (search + all oracle calls)
+   * so it cannot interleave with another caller's reasoning.
+   */
+  explainInconsistencyLaconic(
+    store: N3.Store,
+    maxJustifications = 1,
+  ): Promise<
+    Array<{
+      justification: N3.Quad[];
+      laconic: SerializedLaconicJustification;
+    }>
+  > {
+    const result = this._queue.then(async () => {
+      const justifications = await this._explainInconsistencyJustifications(store, maxJustifications);
+      // Full reasoning base — used to reconstruct COMPLETE class expressions
+      // (blank-node closures) the quad-level MIPS minimiser may have pruned, so
+      // laconic can split & contract the whole intersection.
+      const fullBase: N3.Quad[] = (store.getQuads(null, null, null, null) as N3.Quad[]).filter((q) => {
+        const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
+        return !EXCLUDED_FROM_REASONING.has(g);
+      });
+      const out: Array<{ justification: N3.Quad[]; laconic: SerializedLaconicJustification }> = [];
+
+      for (const j of justifications) {
+        out.push({
+          justification: j,
+          laconic: await this._laconicForJustification(j, fullBase),
+        });
+      }
+      return out;
     });
     this._queue = result.then(() => {}, () => {});
     return result;
+  }
+
+  /**
+   * Post-process ONE MIPS justification (flat quads) into its laconic form. Must
+   * run inside an existing _queue slot (uses _checkInconsistencyDirect). Applies
+   * the cost cap; on skip / fallback returns the original axioms verbatim.
+   */
+  private async _laconicForJustification(
+    justification: N3.Quad[],
+    fullBase?: N3.Quad[],
+  ): Promise<SerializedLaconicJustification> {
+    const { axioms, sourceQuads } = groupQuadsIntoLaconicAxioms(justification, fullBase);
+
+    // COST CAP — skip laconic for justifications too large to bound the oracle
+    // budget (each extra part ⇒ extra Konclude round-trips). On skip we return
+    // the regular axioms verbatim (lossless: the agent still gets the MIPS).
+    const totalParts = axioms.reduce((n, ax) => n + splitAxiom(ax).length, 0);
+    const skip = axioms.length > LACONIC_MAX_AXIOMS || totalParts > LACONIC_MAX_PARTS;
+    if (skip) {
+      return this._serializeLaconicFromAxioms(axioms, axioms, sourceQuads, false, true);
+    }
+
+    // The async oracle: a set of laconic parts "entails η" iff it is INCONSISTENT.
+    const entails = async (parts: LaconicAxiom[]): Promise<boolean> => {
+      const quads: N3.Quad[] = [];
+      for (const p of parts) {
+        const src = sourceQuads.get(laconicAxiomKey(p));
+        // Reuse the ORIGINAL quads when this part IS an un-split source axiom
+        // (preserves the exact graph/typed-literal terms the reasoner saw);
+        // otherwise materialise the split part's plain triples into fresh quads.
+        quads.push(...(src ?? laconicAxiomToQuads(p)));
+      }
+      return this._checkInconsistencyDirect(quads);
+    };
+
+    const { laconic, sources } = await computeLaconicAsync(axioms, entails);
+    const sharpened = laconic.length !== axioms.length
+      || laconic.some((p) => !sourceQuads.has(laconicAxiomKey(p)));
+    return this._serializeLaconicFromComputed(laconic, sources, sourceQuads, sharpened);
+  }
+
+  /** Serialise laconic parts (computed) into the boundary shape. */
+  private _serializeLaconicFromComputed(
+    laconic: LaconicAxiom[],
+    sources: Map<LaconicAxiom, LaconicAxiom>,
+    sourceQuads: Map<string, N3.Quad[]>,
+    sharpened: boolean,
+  ): SerializedLaconicJustification {
+    const parts: SerializedLaconicPart[] = laconic.map((part) => {
+      const principal = part[0];
+      const source = sources.get(part) ?? part;
+      const srcPrincipal = source[0];
+      const srcQuads = sourceQuads.get(laconicAxiomKey(part));
+      // Prefer the ORIGINAL quad's term for the principal when this part is an
+      // un-split source axiom (carries the exact graph/typed object); else the
+      // split part's plain triple. `isPartOf` = strictly smaller than its source.
+      const principalQuad = srcQuads?.[0];
+      return {
+        subject: principalQuad?.subject.value ?? principal.subject,
+        predicate: principalQuad?.predicate.value ?? principal.predicate,
+        object: principalQuad?.object.value ?? principal.object,
+        ...(principal.objectIsLiteral ? { objectIsLiteral: true } : {}),
+        sourceSubject: srcPrincipal.subject,
+        sourcePredicate: srcPrincipal.predicate,
+        sourceObject: srcPrincipal.object,
+        isPartOf: laconicAxiomKey(part) !== laconicAxiomKey(source),
+      };
+    });
+    return { parts, sharpened, skipped: false };
+  }
+
+  /** Serialise un-processed axioms (skip path) into the boundary shape. */
+  private _serializeLaconicFromAxioms(
+    laconic: LaconicAxiom[],
+    sourceAxioms: LaconicAxiom[],
+    sourceQuads: Map<string, N3.Quad[]>,
+    sharpened: boolean,
+    skipped: boolean,
+  ): SerializedLaconicJustification {
+    void sourceAxioms;
+    const parts: SerializedLaconicPart[] = laconic.map((part) => {
+      const principal = part[0];
+      const srcQuads = sourceQuads.get(laconicAxiomKey(part));
+      const principalQuad = srcQuads?.[0];
+      return {
+        subject: principalQuad?.subject.value ?? principal.subject,
+        predicate: principalQuad?.predicate.value ?? principal.predicate,
+        object: principalQuad?.object.value ?? principal.object,
+        ...(principal.objectIsLiteral ? { objectIsLiteral: true } : {}),
+        sourceSubject: principal.subject,
+        sourcePredicate: principal.predicate,
+        sourceObject: principal.object,
+        isPartOf: false,
+      };
+    });
+    return { parts, sharpened, skipped };
   }
 
   /**
@@ -936,6 +1349,22 @@ export interface KoncludeReasonerLike {
   checkConsistency(store: N3.Store): Promise<boolean>;
   getUnsatisfiableClasses(store: N3.Store): Promise<string[]>;
   explainInconsistency(store: N3.Store, maxJustifications?: number): Promise<N3.Quad[][]>;
+  /**
+   * LACONIC inconsistency explanation (Horridge et al. ISWC 2008). OPTIONAL —
+   * the production KoncludeReasoner implements it; the test node adapter may omit
+   * it (the worker handler guards on its presence and falls back to the plain
+   * MIPS-only result). Returns, per justification, the original MIPS quads plus
+   * the laconic axiom parts (superfluous-part-free) and their source mapping.
+   */
+  explainInconsistencyLaconic?(
+    store: N3.Store,
+    maxJustifications?: number,
+  ): Promise<
+    Array<{
+      justification: N3.Quad[];
+      laconic: SerializedLaconicJustification;
+    }>
+  >;
   classifyModule(moduleQuads: N3.Quad[]): Promise<{
     isConsistent: boolean;
     unsatisfiableClasses: string[];
@@ -2377,9 +2806,407 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     return skol[0] ?? q;
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // EL FAST PATH — conformance-gated PTIME classification of EL-profile modules
+  // ───────────────────────────────────────────────────────────────────────────
+  //
+  // SAFETY MODEL (the whole point — CORRECTNESS OVER SPEED).
+  //   classifyModuleELorKonclude(moduleTriples, moduleQuads) routes a module M's
+  //   classification to the PTIME EL reasoner ONLY when M is PROVABLY inside the
+  //   slice of OWL 2 EL for which the EL path produces an inferred-quad set that is
+  //   BYTE-IDENTICAL to Konclude's `materialize` output. Otherwise it FALLS BACK to
+  //   the full Konclude `classifyModule` — unchanged. It can NEVER produce a result
+  //   that differs from full DL: every divergence-capable construct forces Konclude.
+  //
+  //   What Konclude's materialize (the conformance reference, NO includeClassHierarchy)
+  //   actually emits over a module — empirically (see logs/probe*.mjs) — is ONLY:
+  //     • ABox REALIZATION: `s rdf:type C` for every NAMED class C an individual is
+  //       entailed to belong to (transitive/existential closure of class membership),
+  //       MINUS source triples. No owl:Thing, no owl:NamedIndividual, no subClassOf.
+  //     • ROLE assertions: `a q b` derived from asserted `a p b` via the role box
+  //       (subPropertyOf hierarchy, TransitiveProperty, property chains), MINUS source.
+  //   It emits NO TBox `rdfs:subClassOf` inferences. So the EL path must reproduce
+  //   EXACTLY that ABox-realization + role-assertion set.
+  //
+  //   The EL path reproduces it as follows (each piece independently verified == Konclude):
+  //     (1) TYPE realization: encode the ABox into the EL TBox — `i rdf:type C` ⟶
+  //         `{i} ⊑ C` (i becomes a concept name); `a p b` ⟶ `{a} ⊑ ∃p.{b}` — then
+  //         classifyEL's S(·) completion gives, for each individual i, S({i}); the
+  //         NAMED classes in S({i}) (minus i, owl:Thing, and the asserted types) are
+  //         exactly i's realized types. classifyEL is proven == Konclude on EL TBoxes.
+  //     (2) ROLE realization: a self-contained role-box completion (hierarchy +
+  //         TransitiveProperty + binary/Nary property chains) over the asserted role
+  //         edges yields the inferred `a q b` set (verified == Konclude).
+  //
+  //   GATE (conservative — anything not provably covered ⟶ Konclude):
+  //     • detectOwl2Profiles(M).el.valid must hold (structural EL profile), AND
+  //     • classifyEL(M).inProfile must hold (the EL normaliser accepted every axiom),
+  //     • AND M must contain NO construct whose EL semantics the realizer does not
+  //       reproduce identically — DISJOINTNESS (owl:disjointWith, owl:AllDisjoint*,
+  //       owl:propertyDisjointWith), NOMINALS / sameAs / differentFrom, and negative
+  //       assertions. classifyEL silently IGNORES owl:disjointWith (it is not in its
+  //       rejection set), so an EL inconsistency such as `i:A, A⊑C, A disjointWith C`
+  //       would be MISSED — therefore disjointness ALWAYS forces Konclude. (Verified:
+  //       logs/probe-realize.mjs flags this exact case as a divergence.)
+  //
+  //   On any gate failure OR any internal inconsistency hint, return undefined so the
+  //   caller uses Konclude. The EL path is a pure FAST PATH; Konclude is the floor.
+
+  const EL_FALLBACK_PREDICATES = new Set<string>([
+    "http://www.w3.org/2002/07/owl#disjointWith",
+    "http://www.w3.org/2002/07/owl#propertyDisjointWith",
+    "http://www.w3.org/2002/07/owl#disjointUnionOf",
+    "http://www.w3.org/2002/07/owl#sameAs",
+    "http://www.w3.org/2002/07/owl#differentFrom",
+    "http://www.w3.org/2002/07/owl#members",
+    "http://www.w3.org/2002/07/owl#distinctMembers",
+    "http://www.w3.org/2002/07/owl#hasKey",
+    "http://www.w3.org/2002/07/owl#complementOf",
+    "http://www.w3.org/2002/07/owl#oneOf",
+    "http://www.w3.org/2002/07/owl#unionOf",
+  ]);
+  const EL_FALLBACK_TYPES = new Set<string>([
+    "http://www.w3.org/2002/07/owl#AllDisjointClasses",
+    "http://www.w3.org/2002/07/owl#AllDisjointProperties",
+    "http://www.w3.org/2002/07/owl#AllDifferent",
+    "http://www.w3.org/2002/07/owl#NegativePropertyAssertion",
+    "http://www.w3.org/2002/07/owl#IrreflexiveProperty",
+    "http://www.w3.org/2002/07/owl#AsymmetricProperty",
+  ]);
+
+  const EL_RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+  const EL_RDF_FIRST = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+  const EL_RDF_REST = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
+  const EL_RDF_NIL = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+  const EL_RDFS_SUBCLASS_OF = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+  const EL_RDFS_SUBPROPERTY_OF = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
+  const EL_OWL_CLASS = "http://www.w3.org/2002/07/owl#Class";
+  const EL_OWL_OBJECT_PROPERTY = "http://www.w3.org/2002/07/owl#ObjectProperty";
+  const EL_OWL_NAMED_INDIVIDUAL = "http://www.w3.org/2002/07/owl#NamedIndividual";
+  const EL_OWL_RESTRICTION = "http://www.w3.org/2002/07/owl#Restriction";
+  const EL_OWL_ON_PROPERTY = "http://www.w3.org/2002/07/owl#onProperty";
+  const EL_OWL_SOME_VALUES_FROM = "http://www.w3.org/2002/07/owl#someValuesFrom";
+  const EL_OWL_THING = "http://www.w3.org/2002/07/owl#Thing";
+  const EL_OWL_NOTHING = "http://www.w3.org/2002/07/owl#Nothing";
+  const EL_OWL_TRANSITIVE_PROPERTY = "http://www.w3.org/2002/07/owl#TransitiveProperty";
+  const EL_OWL_PROPERTY_CHAIN_AXIOM = "http://www.w3.org/2002/07/owl#propertyChainAxiom";
+
+  type ElClassifyResult = {
+    isConsistent: boolean;
+    unsatisfiableClasses: string[];
+    inferredQuads: Quad[];
+  };
+
+  /**
+   * Compute the inferred ROLE assertions of a module: starting from asserted
+   * `a p b` edges over named object properties, close under the role box
+   * (subPropertyOf hierarchy + TransitiveProperty + binary/N-ary property chains)
+   * and return the NEW `a q b` triples (over NAMED properties), minus the asserted
+   * ones. This reproduces Konclude's role-assertion materialization (verified ==
+   * Konclude in logs/probe-roles.mjs).
+   */
+  function elRoleAssertions(
+    triples: LocalityTriple[],
+    objectProps: Set<string>,
+  ): Array<{ a: string; r: string; b: string }> {
+    const idx = new Map<string, LocalityTriple[]>();
+    for (const t of triples) {
+      const arr = idx.get(t.subject);
+      if (arr) arr.push(t);
+      else idx.set(t.subject, [t]);
+    }
+    const first = (s: string, p: string): string | undefined =>
+      (idx.get(s) ?? []).find((t) => t.predicate === p)?.object;
+    const readList = (head: string): string[] => {
+      const out: string[] = [];
+      let node: string | undefined = head;
+      const seen = new Set<string>();
+      while (node && node !== EL_RDF_NIL && !seen.has(node)) {
+        seen.add(node);
+        const f = first(node, EL_RDF_FIRST);
+        const rest = first(node, EL_RDF_REST);
+        if (f === undefined) break;
+        out.push(f);
+        node = rest;
+      }
+      return out;
+    };
+
+    // Role box: roleSub (r ⊑ s) and binary chains (r1 ∘ r2 ⊑ s). N-ary chains and
+    // TransitiveProperty (R ∘ R ⊑ R) are split exactly as elReasoner's normaliser.
+    const roleSub: Array<[string, string]> = [];
+    const chains: Array<{ r1: string; r2: string; s: string }> = [];
+    let freshRole = 0;
+    for (const t of triples) {
+      if (t.predicate === EL_RDFS_SUBPROPERTY_OF && !t.objectIsLiteral) {
+        roleSub.push([t.subject, t.object]);
+      } else if (t.predicate === EL_RDF_TYPE && t.object === EL_OWL_TRANSITIVE_PROPERTY) {
+        chains.push({ r1: t.subject, r2: t.subject, s: t.subject });
+      } else if (t.predicate === EL_OWL_PROPERTY_CHAIN_AXIOM && !t.objectIsLiteral) {
+        const ch = readList(t.object);
+        if (ch.length === 1) {
+          roleSub.push([ch[0], t.subject]);
+        } else if (ch.length >= 2) {
+          let left = ch[0];
+          for (let i = 1; i < ch.length; i++) {
+            const isLast = i === ch.length - 1;
+            const tgt = isLast ? t.subject : `urn:vg:el:realize:role:${freshRole++}`;
+            chains.push({ r1: left, r2: ch[i], s: tgt });
+            left = tgt;
+          }
+        }
+      }
+    }
+
+    // Forward-indexed role-edge store with a worklist (mirrors elReasoner's R-map).
+    const fwd = new Map<string, Map<string, Set<string>>>(); // r → a → {b}
+    const queue: Array<{ r: string; a: string; b: string }> = [];
+    const hasE = (r: string, a: string, b: string): boolean =>
+      fwd.get(r)?.get(a)?.has(b) ?? false;
+    const addE = (r: string, a: string, b: string): void => {
+      if (hasE(r, a, b)) return;
+      let f = fwd.get(r);
+      if (!f) {
+        f = new Map();
+        fwd.set(r, f);
+      }
+      let fa = f.get(a);
+      if (!fa) {
+        fa = new Set();
+        f.set(a, fa);
+      }
+      fa.add(b);
+      queue.push({ r, a, b });
+    };
+
+    const asserted = new Set<string>();
+    for (const t of triples) {
+      if (objectProps.has(t.predicate) && !t.objectIsLiteral) {
+        asserted.add(`${t.subject}\0${t.predicate}\0${t.object}`);
+        addE(t.predicate, t.subject, t.object);
+      }
+    }
+
+    const subOf = new Map<string, string[]>();
+    for (const [r, s] of roleSub) {
+      const arr = subOf.get(r);
+      if (arr) arr.push(s);
+      else subOf.set(r, [s]);
+    }
+    const ch1 = new Map<string, Array<{ r2: string; s: string }>>();
+    const ch2 = new Map<string, Array<{ r1: string; s: string }>>();
+    for (const c of chains) {
+      const a1 = ch1.get(c.r1);
+      if (a1) a1.push({ r2: c.r2, s: c.s });
+      else ch1.set(c.r1, [{ r2: c.r2, s: c.s }]);
+      const a2 = ch2.get(c.r2);
+      if (a2) a2.push({ r1: c.r1, s: c.s });
+      else ch2.set(c.r2, [{ r1: c.r1, s: c.s }]);
+    }
+
+    while (queue.length) {
+      const { r, a, b } = queue.pop() as { r: string; a: string; b: string };
+      for (const s of subOf.get(r) ?? []) addE(s, a, b);
+      for (const c of ch1.get(r) ?? []) {
+        for (const z of fwd.get(c.r2)?.get(b) ?? []) addE(c.s, a, z);
+      }
+      for (const c of ch2.get(r) ?? []) {
+        const f1 = fwd.get(c.r1);
+        if (f1) for (const [w, set] of f1) if (set.has(a)) addE(c.s, w, b);
+      }
+    }
+
+    const out: Array<{ a: string; r: string; b: string }> = [];
+    for (const [r, byA] of fwd) {
+      if (r.startsWith("urn:vg:el:realize:role:")) continue; // fresh intermediate role
+      if (!objectProps.has(r)) continue; // only NAMED declared object properties
+      for (const [a, bs] of byA) {
+        for (const b of bs) {
+          if (asserted.has(`${a}\0${r}\0${b}`)) continue;
+          out.push({ a, r, b });
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Try to classify a module via the PTIME EL fast path. Returns the SAME shape as
+   * KoncludeReasonerLike.classifyModule when the module is provably inside the
+   * EL-conformance slice, or `undefined` to signal the caller to FALL BACK to
+   * Konclude. The returned inferredQuads carry a DefaultGraph term (like Konclude's
+   * classifyModule); the caller re-skolemizes + assigns the inferred graph.
+   */
+  function tryClassifyModuleEL(
+    moduleTriples: LocalityTriple[],
+    DataFactory: any,
+  ): ElClassifyResult | undefined {
+    // ── GATE 1: no divergence-capable construct (disjointness / nominals / …). ──
+    for (const t of moduleTriples) {
+      if (EL_FALLBACK_PREDICATES.has(t.predicate)) return undefined;
+      if (t.predicate === EL_RDF_TYPE && EL_FALLBACK_TYPES.has(t.object)) return undefined;
+    }
+
+    // ── GATE 2: structural EL profile (owlProfile) — falls back on any EL violation. ──
+    const profileTriples: ProfileTriple[] = moduleTriples.map((t) => ({
+      subject: t.subject,
+      predicate: t.predicate,
+      object: t.object,
+      objectIsLiteral: !!t.objectIsLiteral,
+    }));
+    let elValid: boolean;
+    try {
+      elValid = detectOwl2Profiles(profileTriples).el.valid;
+    } catch {
+      return undefined;
+    }
+    if (!elValid) return undefined;
+
+    // ── Partition the module into declarations / TBox / ABox. ──────────────────
+    const isClass = new Set<string>();
+    const isObjectProp = new Set<string>();
+    const isIndividual = new Set<string>();
+    for (const t of moduleTriples) {
+      if (t.predicate === EL_RDF_TYPE) {
+        if (t.object === EL_OWL_CLASS) isClass.add(t.subject);
+        else if (t.object === EL_OWL_OBJECT_PROPERTY) isObjectProp.add(t.subject);
+        else if (t.object === EL_OWL_NAMED_INDIVIDUAL) isIndividual.add(t.subject);
+      }
+    }
+
+    // Type assertions `i rdf:type C` where C is NOT a structural/meta type — these
+    // are the ABox class memberships to realize. Role assertions `a p b` over a
+    // declared object property feed elRoleAssertions.
+    const typeAssertions: Array<{ i: string; cls: string }> = [];
+    for (const t of moduleTriples) {
+      if (t.objectIsLiteral) continue;
+      if (
+        t.predicate === EL_RDF_TYPE &&
+        t.object !== EL_OWL_CLASS &&
+        t.object !== EL_OWL_OBJECT_PROPERTY &&
+        t.object !== EL_OWL_NAMED_INDIVIDUAL &&
+        t.object !== EL_OWL_RESTRICTION
+      ) {
+        typeAssertions.push({ i: t.subject, cls: t.object });
+      }
+    }
+
+    // ── Build the augmented EL TBox: keep TBox/structure, re-encode the ABox. ───
+    // ABox encoding (verified == Konclude in logs/probe-realize.mjs):
+    //   `i rdf:type C`  ⟶  declare i as a Class and assert `{i} ⊑ C`.
+    //   `a p b`         ⟶  declare a,b as Classes and assert `{a} ⊑ ∃p.{b}` via a
+    //                       fresh owl:Restriction node.
+    const aug: ElTriple[] = [];
+    for (const t of moduleTriples) {
+      if (t.objectIsLiteral) continue;
+      if (t.predicate === EL_RDF_TYPE) {
+        // keep ONLY structural decls the EL normaliser consumes; drop ABox assertions.
+        if (
+          t.object === EL_OWL_CLASS ||
+          t.object === EL_OWL_OBJECT_PROPERTY ||
+          t.object === EL_OWL_RESTRICTION ||
+          t.object === EL_OWL_TRANSITIVE_PROPERTY
+        ) {
+          aug.push({ subject: t.subject, predicate: t.predicate, object: t.object });
+        }
+        continue;
+      }
+      if (isObjectProp.has(t.predicate)) continue; // role assertion — re-encoded below
+      // subClassOf / equivalentClass / restriction structure / list cells / role box.
+      aug.push({ subject: t.subject, predicate: t.predicate, object: t.object });
+    }
+
+    const individualsToRealize = new Set<string>();
+    for (const { i, cls } of typeAssertions) {
+      individualsToRealize.add(i);
+      aug.push({ subject: i, predicate: EL_RDF_TYPE, object: EL_OWL_CLASS });
+      aug.push({ subject: i, predicate: EL_RDFS_SUBCLASS_OF, object: cls });
+    }
+    let freshNode = 0;
+    for (const t of moduleTriples) {
+      if (t.objectIsLiteral) continue;
+      if (!isObjectProp.has(t.predicate)) continue;
+      const a = t.subject;
+      const b = t.object;
+      individualsToRealize.add(a);
+      // b participates as an existential filler; if b is an individual it must be a
+      // concept name too so `{a} ⊑ ∃p.{b}` is meaningful. (No type realized FOR b
+      // from this edge unless b also has assertions — matching Konclude.)
+      aug.push({ subject: a, predicate: EL_RDF_TYPE, object: EL_OWL_CLASS });
+      aug.push({ subject: b, predicate: EL_RDF_TYPE, object: EL_OWL_CLASS });
+      const rn = `urn:vg:el:realize:bn:${freshNode++}`;
+      aug.push({ subject: rn, predicate: EL_RDF_TYPE, object: EL_OWL_RESTRICTION });
+      aug.push({ subject: rn, predicate: EL_OWL_ON_PROPERTY, object: t.predicate });
+      aug.push({ subject: rn, predicate: EL_OWL_SOME_VALUES_FROM, object: b });
+      aug.push({ subject: a, predicate: EL_RDFS_SUBCLASS_OF, object: rn });
+    }
+
+    let el;
+    try {
+      el = classifyEL(aug);
+    } catch {
+      return undefined;
+    }
+    // If the EL normaliser itself rejected anything, the module is NOT fully EL —
+    // fall back to be safe (the gate should have caught it, but be defensive).
+    if (!el.inProfile) return undefined;
+
+    // Consistency: classifyEL.isConsistent is ⊤-driven only. In the EL slice we
+    // gate (no disjointness), so the ONLY way the module is inconsistent is an
+    // individual forced into owl:Nothing — i.e. some realized concept set contains
+    // owl:Nothing. If ANY individual is unsatisfiable (⊥ ∈ S({i})), the ABox forces
+    // ⊥ ⇒ the ontology is inconsistent. Detect it and report isConsistent:false.
+    let aboxInconsistent = false;
+    for (const i of individualsToRealize) {
+      const s = el.subsumptions.get(i);
+      if (s && s.has(EL_OWL_NOTHING)) {
+        aboxInconsistent = true;
+        break;
+      }
+    }
+    if (!el.isConsistent || aboxInconsistent) {
+      return { isConsistent: false, unsatisfiableClasses: [], inferredQuads: [] };
+    }
+
+    // ── TYPE realization: NAMED classes in S({i}) minus i / owl:Thing / asserted. ─
+    const asserted = new Set<string>(typeAssertions.map((x) => `${x.i}\0${x.cls}`));
+    const { namedNode, quad } = DataFactory;
+    const inferredQuads: Quad[] = [];
+    const seen = new Set<string>();
+    const emit = (s: string, p: string, o: string) => {
+      const key = `${s}\0${p}\0${o}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      inferredQuads.push(quad(namedNode(s), namedNode(p), namedNode(o)));
+    };
+    for (const i of individualsToRealize) {
+      const s = el.subsumptions.get(i);
+      if (!s) continue;
+      for (const c of s) {
+        if (c === i || c === EL_OWL_THING || c === EL_OWL_NOTHING) continue;
+        if (!isClass.has(c)) continue; // only REAL declared classes (Konclude parity)
+        if (asserted.has(`${i}\0${c}`)) continue;
+        emit(i, EL_RDF_TYPE, c);
+      }
+    }
+
+    // ── ROLE realization: inferred `a q b` over the role box. ──────────────────
+    for (const { a, r, b } of elRoleAssertions(moduleTriples, isObjectProp)) {
+      emit(a, r, b);
+    }
+
+    // unsatisfiableClasses: NAMED classes equivalent to owl:Nothing (Konclude's
+    // getUnsatisfiableClasses parity — exclude individuals and fresh names).
+    const unsatisfiableClasses = el.unsatisfiableClasses.filter((c) => isClass.has(c)).sort();
+
+    return { isConsistent: true, unsatisfiableClasses, inferredQuads };
+  }
+
   type IncrementalResult = {
     mode: "incremental" | "full";
     isConsistent: boolean | null;
+    /** Which classifier produced this step's result: the EL fast path or Konclude. */
+    classifier: "el" | "konclude";
     inferredDelta: { added: number; removed: number };
     unsatisfiableClasses: string[];
     moduleSize: number;
@@ -2460,6 +3287,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       return {
         mode: "full",
         isConsistent: outcome.isConsistent ?? null,
+        // A full re-anchor always runs the authoritative Konclude full path.
+        classifier: "konclude",
         inferredDelta: { added: inferredCount, removed: 0 },
         unsatisfiableClasses: [],
         moduleSize: baseTriples.length,
@@ -2506,12 +3335,30 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       if (t.subject) moduleSubjects.add(t.subject);
     }
 
-    // Classify M with the SAME Konclude machinery the full path uses.
-    const konclude = getKoncludeReasoner();
-    await konclude.ready;
-    const moduleQuads = moduleTriplesToQuads(moduleTriples, DataFactory);
-    const { isConsistent, unsatisfiableClasses, inferredQuads } =
-      await konclude.classifyModule(moduleQuads as unknown as N3.Quad[]);
+    // Classify M: EL FAST PATH when M is provably inside the EL-conformance slice
+    // (PTIME, no Konclude round-trip), else FALL BACK to the SAME Konclude machinery
+    // the full path uses. classifier records which path actually ran. The EL path
+    // returns the SAME shape (isConsistent / unsatisfiableClasses / inferredQuads)
+    // and is byte-identical to Konclude on its accepted slice (see tryClassifyModuleEL).
+    let classifier: "el" | "konclude" = "konclude";
+    let isConsistent: boolean;
+    let unsatisfiableClasses: string[];
+    let inferredQuads: Quad[];
+    const elResult = tryClassifyModuleEL(moduleTriples, DataFactory);
+    if (elResult) {
+      classifier = "el";
+      isConsistent = elResult.isConsistent;
+      unsatisfiableClasses = elResult.unsatisfiableClasses;
+      inferredQuads = elResult.inferredQuads;
+    } else {
+      const konclude = getKoncludeReasoner();
+      await konclude.ready;
+      const moduleQuads = moduleTriplesToQuads(moduleTriples, DataFactory);
+      const k = await konclude.classifyModule(moduleQuads as unknown as N3.Quad[]);
+      isConsistent = k.isConsistent;
+      unsatisfiableClasses = k.unsatisfiableClasses;
+      inferredQuads = k.inferredQuads as unknown as Quad[];
+    }
 
     if (!isConsistent) {
       // Inconsistent module ⇒ ontology inconsistent (monotonicity). Do NOT mutate
@@ -2523,6 +3370,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
       return {
         mode: "incremental",
         isConsistent: false,
+        classifier,
         inferredDelta: { added: 0, removed: 0 },
         unsatisfiableClasses,
         moduleSize: moduleTriples.length,
@@ -2630,6 +3478,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     return {
       mode: "incremental",
       isConsistent: true,
+      classifier,
       inferredDelta: { added, removed },
       unsatisfiableClasses,
       moduleSize: moduleTriples.length,
@@ -4232,44 +5081,61 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           const konclude = getKoncludeReasoner();
           await konclude.ready;
           const store = getSharedStore();
-          const mips = await konclude.explainInconsistency(store, n);
-          result = {
-            count: mips.length,
-            mips: mips.map((m) =>
-              m.map((q) => {
-                // C1 + H2: preserve the SOURCE GRAPH and the full OBJECT TERM
-                // (termType + datatype/language) so the apply path can target the
-                // exact graph the axiom physically lives in (urn:vg:data OR
-                // urn:vg:ontologies) and reconstruct a precise typed/lang literal
-                // instead of a lossy lexical-only fallback that may remove the
-                // wrong literal. All new fields are OPTIONAL — `subject/predicate/
-                // object` keep their existing string shape for back-compat.
-                const obj = q.object as Quad["object"];
-                const out: {
-                  subject: string;
-                  predicate: string;
-                  object: string;
-                  objectTermType?: string;
-                  objectDatatype?: string;
-                  objectLanguage?: string;
-                  graph?: string;
-                } = {
-                  subject: q.subject.value,
-                  predicate: q.predicate.value,
-                  object: obj.value,
-                  objectTermType: obj.termType,
-                };
-                if (obj.termType === "Literal") {
-                  const lit = obj as { datatype?: { value?: string }; language?: string };
-                  if (lit.datatype?.value) out.objectDatatype = lit.datatype.value;
-                  if (lit.language) out.objectLanguage = lit.language;
-                }
-                const g = q.graph?.termType === "DefaultGraph" ? "" : q.graph?.value;
-                if (g) out.graph = g;
-                return out;
-              }),
-            ),
+
+          // C1 + H2: preserve the SOURCE GRAPH and the full OBJECT TERM
+          // (termType + datatype/language) so the apply path can target the exact
+          // graph the axiom physically lives in (urn:vg:data OR urn:vg:ontologies)
+          // and reconstruct a precise typed/lang literal instead of a lossy
+          // lexical-only fallback. All new fields are OPTIONAL — subject/predicate/
+          // object keep their existing string shape for back-compat.
+          const serializeQuadAxiom = (q: N3.Quad) => {
+            const obj = q.object as Quad["object"];
+            const out: {
+              subject: string;
+              predicate: string;
+              object: string;
+              objectTermType?: string;
+              objectDatatype?: string;
+              objectLanguage?: string;
+              graph?: string;
+            } = {
+              subject: q.subject.value,
+              predicate: q.predicate.value,
+              object: obj.value,
+              objectTermType: obj.termType,
+            };
+            if (obj.termType === "Literal") {
+              const lit = obj as { datatype?: { value?: string }; language?: string };
+              if (lit.datatype?.value) out.objectDatatype = lit.datatype.value;
+              if (lit.language) out.objectLanguage = lit.language;
+            }
+            const g = q.graph?.termType === "DefaultGraph" ? "" : q.graph?.value;
+            if (g) out.graph = g;
+            return out;
           };
+
+          // Prefer the LACONIC path (Horridge et al. ISWC 2008): it returns the
+          // SAME MIPS plus the superfluous-part-free laconic axiom PARTS and their
+          // source mapping. The test node adapter may not implement it — fall back
+          // to the plain MIPS-only result (laconicJustifications stays absent).
+          if (typeof konclude.explainInconsistencyLaconic === "function") {
+            const enriched = await konclude.explainInconsistencyLaconic(store, n);
+            result = {
+              count: enriched.length,
+              mips: enriched.map((e) => e.justification.map(serializeQuadAxiom)),
+              // NON-BREAKING: the laconic field is aligned by index with `mips`.
+              // Each entry has `parts` (the precise culprit axiom parts, each with
+              // its source axiom principal triple), `sharpened` (laconic dropped a
+              // superfluous part), and `skipped` (the cost cap suppressed laconic).
+              laconicJustifications: enriched.map((e) => e.laconic),
+            };
+          } else {
+            const mips = await konclude.explainInconsistency(store, n);
+            result = {
+              count: mips.length,
+              mips: mips.map((m) => m.map(serializeQuadAxiom)),
+            };
+          }
           break;
         }
         case "getUnsatisfiableClasses": {

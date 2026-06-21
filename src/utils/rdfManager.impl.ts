@@ -823,6 +823,83 @@ export class RDFManagerImpl {
       : [];
   }
 
+  /**
+   * Like explainInconsistency, but ALSO returns the LACONIC justifications
+   * (Horridge, Parsia, Sattler, "Laconic and Precise Justifications in OWL",
+   * ISWC 2008): for each MIPS, the superfluous-part-free axiom PARTS that are the
+   * precise culprit, each mapped back to the ORIGINAL axiom it was split from.
+   *
+   * `justifications` is identical to what explainInconsistency returns (the
+   * regular, whole-axiom MIPS). `laconicJustifications` is aligned BY INDEX with
+   * `justifications`; entry i is the laconic refinement of justification i:
+   *   - parts: the laconic axiom parts (e.g. the `A ⊑ B` part of `A ⊑ B ⊓ C`),
+   *     each carrying its source axiom's principal triple (sourceSubject/…);
+   *   - sharpened: true when laconic dropped at least one superfluous part;
+   *   - skipped: true when the worker's cost cap suppressed laconic for this MIPS
+   *     (then parts == the regular axioms, lossless fallback).
+   *
+   * NON-BREAKING: the laconic data is purely additive; older worker builds omit
+   * the field and `laconicJustifications` comes back as an empty array.
+   */
+  async explainInconsistencyWithLaconic(
+    maxJustifications = 1,
+  ): Promise<{
+    justifications: {
+      subject: string;
+      predicate: string;
+      object: string;
+      objectTermType?: string;
+      objectDatatype?: string;
+      objectLanguage?: string;
+      graph?: string;
+    }[][];
+    laconicJustifications: {
+      parts: {
+        subject: string;
+        predicate: string;
+        object: string;
+        objectIsLiteral?: boolean;
+        sourceSubject: string;
+        sourcePredicate: string;
+        sourceObject: string;
+        isPartOf: boolean;
+      }[];
+      sharpened: boolean;
+      skipped: boolean;
+    }[];
+  }> {
+    const response = await this.worker.call("explainInconsistency", { maxJustifications });
+    const safe = isPlainObject(response) ? response : {};
+    const justifications = Array.isArray(safe.mips)
+      ? (safe.mips as {
+          subject: string;
+          predicate: string;
+          object: string;
+          objectTermType?: string;
+          objectDatatype?: string;
+          objectLanguage?: string;
+          graph?: string;
+        }[][])
+      : [];
+    const laconicJustifications = Array.isArray(safe.laconicJustifications)
+      ? (safe.laconicJustifications as {
+          parts: {
+            subject: string;
+            predicate: string;
+            object: string;
+            objectIsLiteral?: boolean;
+            sourceSubject: string;
+            sourcePredicate: string;
+            sourceObject: string;
+            isPartOf: boolean;
+          }[];
+          sharpened: boolean;
+          skipped: boolean;
+        }[])
+      : [];
+    return { justifications, laconicJustifications };
+  }
+
   /** IRIs of classes entailed to be unsatisfiable (equivalent to owl:Nothing). */
   async getUnsatisfiableClasses(): Promise<string[]> {
     const response = await this.worker.call("getUnsatisfiableClasses", undefined);

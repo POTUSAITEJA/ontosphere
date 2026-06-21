@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const {
   mockRunReasoning,
   mockExplainInconsistency,
+  mockExplainInconsistencyWithLaconic,
   mockRunShacl,
   mockGetUnsat,
   mockFetchQuadsPage,
@@ -13,6 +14,7 @@ const {
 } = vi.hoisted(() => ({
   mockRunReasoning: vi.fn(),
   mockExplainInconsistency: vi.fn(),
+  mockExplainInconsistencyWithLaconic: vi.fn(),
   mockRunShacl: vi.fn(),
   mockGetUnsat: vi.fn(),
   mockFetchQuadsPage: vi.fn(),
@@ -20,6 +22,10 @@ const {
   mockVerifyRepairDetailed: vi.fn(),
 }));
 
+// NOTE: explainInconsistencyWithLaconic is intentionally OMITTED from the default
+// mock object so reasoning.ts falls back to explainInconsistency for the existing
+// suite (which asserts explainInconsistency call args). The dedicated laconic test
+// below re-mocks rdfManager to add it.
 vi.mock('@/utils/rdfManager', () => ({
   rdfManager: {
     runReasoning: mockRunReasoning,
@@ -39,6 +45,7 @@ vi.mock('@/stores/appConfigStore', () => ({
 }));
 
 import { reasoningTools } from '../tools/reasoning';
+import { rdfManager } from '@/utils/rdfManager';
 
 const explainDiagnostics = reasoningTools.find((t) => t.name === 'explainDiagnostics')!;
 
@@ -283,5 +290,61 @@ describe('explainDiagnostics', () => {
     expect(res.success).toBe(false);
     expect(res.error).toContain('explainDiagnostics');
     expect(res.error).toContain('worker boom');
+  });
+
+  // LACONIC threading (Horridge et al. ISWC 2008): when rdfManager exposes the
+  // laconic-enriched call, explainDiagnostics threads laconicJustifications into
+  // the response data and surfaces the precise culprit PART in the repair brief.
+  it('threads laconicJustifications into the response and brief when available', async () => {
+    mockRunReasoning.mockResolvedValue({ isConsistent: false, errors: [] });
+    const justifications = [
+      [
+        { subject: 'http://ex/A', predicate: 'http://www.w3.org/2000/01/rdf-schema#subClassOf', object: '_:int' },
+        { subject: 'http://ex/B', predicate: 'http://www.w3.org/2002/07/owl#disjointWith', object: 'http://ex/D' },
+        { subject: 'http://ex/x', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'http://ex/A' },
+        { subject: 'http://ex/x', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'http://ex/D' },
+      ],
+    ];
+    const laconicJustifications = [
+      {
+        sharpened: true,
+        skipped: false,
+        parts: [
+          {
+            subject: 'http://ex/A',
+            predicate: 'http://www.w3.org/2000/01/rdf-schema#subClassOf',
+            object: 'http://ex/B',
+            sourceSubject: 'http://ex/A',
+            sourcePredicate: 'http://www.w3.org/2000/01/rdf-schema#subClassOf',
+            sourceObject: '_:int',
+            isPartOf: true,
+          },
+        ],
+      },
+    ];
+    mockExplainInconsistencyWithLaconic.mockResolvedValue({ justifications, laconicJustifications });
+    // Inject the laconic-enriched method onto the mocked rdfManager for this test.
+    (rdfManager as unknown as { explainInconsistencyWithLaconic?: unknown }).explainInconsistencyWithLaconic =
+      mockExplainInconsistencyWithLaconic;
+    mockVerifyRepair.mockResolvedValue(true);
+
+    try {
+      const res = (await explainDiagnostics.handler({ maxJustifications: 3 })) as {
+        success: boolean;
+        data: any;
+      };
+      expect(res.success).toBe(true);
+      // The laconic refinement is surfaced in the response data …
+      expect(Array.isArray(res.data.laconicJustifications)).toBe(true);
+      expect(res.data.laconicJustifications[0].sharpened).toBe(true);
+      expect(res.data.laconicJustifications[0].parts[0].object).toBe('http://ex/B');
+      // … and the precise culprit PART is rendered in the brief.
+      expect(res.data.repairBrief).toContain('Precise culprit');
+      expect(res.data.repairBrief).toContain('part of');
+      expect(mockExplainInconsistencyWithLaconic).toHaveBeenCalledWith(3);
+    } finally {
+      delete (rdfManager as unknown as { explainInconsistencyWithLaconic?: unknown })
+        .explainInconsistencyWithLaconic;
+    }
   });
 });

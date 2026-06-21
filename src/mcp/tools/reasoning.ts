@@ -242,8 +242,9 @@ const explainDiagnostics: McpTool = {
   name: 'explainDiagnostics',
   description:
     "Run the full symbolic verifier (OWL 2 DL reasoning + SHACL) and return ONE structured, actionable diagnosis of everything wrong with the current graph. " +
-    "Use this to decide what to fix after authoring. Response: { isConsistent, justifications, unsatisfiableClasses, profile, shaclViolations, repairBrief, suggestedRepairs }. " +
+    "Use this to decide what to fix after authoring. Response: { isConsistent, justifications, laconicJustifications, unsatisfiableClasses, profile, shaclViolations, repairBrief, suggestedRepairs }. " +
     "isConsistent=false means a logical contradiction: `justifications` lists each minimal set of axioms (MIPS) causing it — remove or revise one axiom per set. " +
+    "`laconicJustifications` (Horridge, Parsia & Sattler, ISWC 2008) is the superfluous-part-free refinement of `justifications`, aligned by index: each entry pinpoints the precise culprit axiom PART (e.g. the `A ⊑ B` part of `A ⊑ B ⊓ C`) via parts[] (each part carrying its source axiom as sourceSubject/sourcePredicate/sourceObject), with `sharpened` (a superfluous part was dropped) and `skipped` (a cost cap suppressed laconic for that MIPS — parts then equal the whole axioms). The repairBrief surfaces the precise culprit and the axiom-weakening repairs prefer dropping exactly the laconic culprit conjunct. " +
     "`unsatisfiableClasses` are classes that can never have instances (best-effort). `profile` reports OWL 2 profile analysis: the legacy DL sanity check (owl2dl + violations, e.g. a literal on an object property) PLUS structural EL/QL/RL detection (el/ql/rl each { valid, violations:[{construct,axiom,reason}] }) and `mostRestrictive` (EL|QL|RL|DL|Full) — the tightest profile the ontology fits, indicating whether a cheaper profile-specific reasoner suffices. " +
     "`shaclViolations` are data-shape conformance failures. `repairBrief` is a ranked plain-language summary you can act on directly. " +
     "`suggestedRepairs` is a ranked list of EXECUTABLE reasoner-computed fixes, each { id, issue, kind?, action:{tool,args}, batch?, weakerThan?, alternativeTo?, weakeningVerified?, rationale, verifiedConsistent?, verifiedSet?, justificationsCovered?, needsValue?, needsManualReview? }: " +
@@ -268,10 +269,26 @@ const explainDiagnostics: McpTool = {
       const reasoning = await rdfManager.runReasoning();
       const isConsistent = (reasoning as { isConsistent?: boolean | null })?.isConsistent ?? null;
 
-      // 2. Inconsistency justifications (only meaningful when inconsistent).
+      // 2. Inconsistency justifications (only meaningful when inconsistent). We
+      //    request the LACONIC refinement alongside the regular MIPS (Horridge
+      //    et al. ISWC 2008): each laconic entry pinpoints the superfluous-part-
+      //    free culprit PART (e.g. the `A ⊑ B` part of `A ⊑ B ⊓ C`), aligned by
+      //    index with `justifications`. Non-breaking: `justifications` keeps its
+      //    existing whole-axiom shape; `laconicJustifications` is purely additive.
       let justifications: DiagnosticsData['justifications'] = [];
+      let laconicJustifications: DiagnosticsData['laconicJustifications'] = [];
       if (isConsistent === false) {
-        justifications = await rdfManager.explainInconsistency(maxJustifications);
+        // Prefer the laconic-enriched call (returns the regular MIPS PLUS the
+        // superfluous-part-free refinement). Fall back to plain explainInconsistency
+        // when the manager build / a test double does not expose the laconic method
+        // (defensive: laconic is purely additive).
+        if (typeof rdfManager.explainInconsistencyWithLaconic === 'function') {
+          const incon = await rdfManager.explainInconsistencyWithLaconic(maxJustifications);
+          justifications = incon.justifications;
+          laconicJustifications = incon.laconicJustifications;
+        } else {
+          justifications = await rdfManager.explainInconsistency(maxJustifications);
+        }
       }
 
       // 3. Unsatisfiable classes (Konclude classification — classes equivalent to owl:Nothing).
@@ -302,6 +319,9 @@ const explainDiagnostics: McpTool = {
       const data: DiagnosticsData = {
         isConsistent,
         justifications,
+        ...(laconicJustifications && laconicJustifications.length > 0
+          ? { laconicJustifications }
+          : {}),
         unsatisfiableClasses,
         profile,
         shaclViolations,
@@ -324,6 +344,11 @@ const explainDiagnostics: McpTool = {
         suggestedRepairs = addWeakeningRepairs(suggestedRepairs, {
           ...wctx,
           justifications,
+          // LACONIC culprit hints (Horridge et al. ISWC 2008): let the weakening
+          // enumerator prefer dropping the precise offending conjunct.
+          ...(laconicJustifications && laconicJustifications.length > 0
+            ? { laconicJustifications }
+            : {}),
         });
       }
 
