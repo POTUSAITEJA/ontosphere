@@ -21,6 +21,56 @@ AI chat tab                 relay.html popup            Ontosphere tab
    result injected into chat input automatically
 ```
 
+## Security model
+
+**The relay grants graph read/write to whoever opens it.** When the popup
+(`relay.html`) forwards a `vg-call` onto the BroadcastChannel, the Ontosphere tab
+executes it against the **full MCP toolset** — including `queryGraph`, which can
+run SPARQL `INSERT`/`DELETE UPDATE` that mutates or wipes the user's graph. There
+is no per-tool confirmation: anything the opener sends, the app runs.
+
+### Threat model
+
+`postMessage` to the popup is not implicitly trusted. **Any open browser tab that
+knows the protocol** (`{ type: 'vg-call', tool, params, requestId }`) and can get a
+handle to the popup could otherwise drive the relay and silently rewrite the graph.
+The popup must therefore not blindly trust its opener.
+
+### Origin allowlist (the gate)
+
+`relay.html` only accepts messages whose `evt.origin` is **explicitly trusted**:
+
+- the AI-platform origins in the `TRUSTED_ORIGINS` constant (ChatGPT, Claude.ai,
+  Gemini, the Fraunhofer OpenWebUI/FhGenie deployments),
+- the **same origin** as Ontosphere itself, and
+- `localhost` / `127.0.0.1` (any scheme/port) for local development.
+
+Messages from any other origin are ignored (and a warning is logged). An untrusted
+origin is **never** recorded as the `openerOrigin`, so it can neither have its call
+forwarded nor receive any reply. Replies (`vg-result`, `vg-ping`) are posted **only
+to the validated `openerOrigin`** — the relay never uses `'*'` as a `postMessage`
+target, so results are never broadcast to arbitrary origins.
+
+The BroadcastChannel side (`src/mcp/relayBridge.ts`) needs no separate origin check:
+BroadcastChannel is same-origin by browser design, so only the Ontosphere app and
+its own `relay.html` popup (both served from the same origin) can post on it. The
+popup's origin allowlist is the single trust gate for external AI platforms.
+
+> The relay intentionally runs **without** cross-origin isolation because it needs
+> `window.opener`. The allowlist — not isolation — is what makes it safe.
+
+### Adding a trusted origin
+
+To authorise a new AI platform, add its **exact web origin** (scheme + host +
+optional port, no path — e.g. `https://your-ai-platform.example`) to the
+`TRUSTED_ORIGINS` array near the top of [`public/relay.html`](../public/relay.html).
+Use the origin shown in the address bar of the chat tab that hosts the bookmarklet.
+Same-origin and localhost are handled automatically and need no edits.
+
+The origin check is the pure function `isOriginAllowed(origin)` in `relay.html`; its
+behaviour is locked down by `src/__tests__/relay/relay.originAllowlist.test.ts`
+(allowlisted origin → accepted, evil origin → rejected, `'*'` never used).
+
 ## Prerequisites
 
 - Modern browser (Chrome 115+ recommended; Firefox/Safari supported)

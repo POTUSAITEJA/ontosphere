@@ -174,6 +174,16 @@ async function handleCall(
     return;
   }
 
+  // SECURITY / trust boundary:
+  // This BroadcastChannel is same-origin by browser design — only same-origin
+  // contexts (the Ontosphere app and its relay.html popup, both served from this
+  // origin) can post here, so messages arriving on it are already origin-trusted.
+  // The ACTUAL trust gate for AI platforms lives in public/relay.html, which only
+  // forwards a vg-call onto this channel after validating evt.origin against an
+  // allowlist (see relay.html → isOriginAllowed / "Security model" in
+  // docs/relay-bridge.md). Do NOT add a postMessage path here that accepts
+  // cross-origin window messages and forwards them onto this channel without an
+  // equivalent origin check — that would re-open the relay to any tab.
   const handler = tools[tool];
   if (!handler) {
     const error = `Unknown tool: ${tool}`;
