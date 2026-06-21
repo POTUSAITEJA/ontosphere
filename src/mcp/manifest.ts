@@ -118,6 +118,33 @@ export const mcpManifest: McpToolManifestEntry[] = [
     },
   },
   {
+    name: 'canonicalizeGraph',
+    description:
+      'Produce the W3C RDFC-1.0 canonical N-Quads form + a content hash of the graph — ' +
+      'for reproducible snapshots, deterministic diffing, and standards-compliant dataset identity. ' +
+      'RDFC-1.0 (W3C Recommendation, 2024) assigns deterministic blank-node labels, so two graphs that ' +
+      'are ISOMORPHIC (identical up to blank-node relabelling and triple order) produce a byte-identical ' +
+      'canonical form and the SAME hash — a stable, content-addressable dataset identity. ' +
+      'Returns { canonical, hash, quadCount }. Pass graph to canonicalize one named graph (e.g. "urn:vg:data"), ' +
+      'or omit it for the whole dataset; pass includeInferred=true to fold urn:vg:inferred into the form. ' +
+      'Read-only: never mutates the graph.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        graph: {
+          type: 'string',
+          description:
+            'Single named graph to canonicalize (e.g. "urn:vg:data", "urn:vg:ontologies"). Omit for the whole dataset.',
+        },
+        includeInferred: {
+          type: 'boolean',
+          default: false,
+          description: 'Fold the urn:vg:inferred graph into the canonical form when no specific graph is requested (default false).',
+        },
+      },
+    },
+  },
+  {
     name: 'exportImage',
     description:
       'Export the canvas diagram as SVG text (default, token-efficient) or PNG data URI. ' +

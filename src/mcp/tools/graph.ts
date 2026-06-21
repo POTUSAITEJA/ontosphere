@@ -741,6 +741,45 @@ const help: McpTool = {
 };
 
 // ---------------------------------------------------------------------------
+// canonicalizeGraph
+// ---------------------------------------------------------------------------
+const canonicalizeGraph: McpTool = {
+  name: 'canonicalizeGraph',
+  description:
+    'Produce the W3C RDFC-1.0 canonical N-Quads form + a content hash of the graph — ' +
+    'for reproducible snapshots, deterministic diffing, and standards-compliant dataset identity.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      graph: {
+        type: 'string',
+        description:
+          'Restrict canonicalization to a single named graph (e.g. "urn:vg:data", "urn:vg:ontologies"). Omit to canonicalize the whole dataset.',
+      },
+      includeInferred: {
+        type: 'boolean',
+        default: false,
+        description:
+          'When no specific graph is given, fold the urn:vg:inferred graph into the canonical form (default false: asserted triples only).',
+      },
+    },
+  },
+  async handler(params): Promise<McpResult> {
+    try {
+      const { graph, includeInferred = false } =
+        (params ?? {}) as { graph?: string; includeInferred?: boolean };
+      const { canonical, hash, quadCount } = await rdfManager.canonicalize({
+        graph,
+        includeInferred,
+      });
+      return { success: true, data: { canonical, hash, quadCount } };
+    } catch (e) {
+      return { success: false, error: String(e) };
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // suggestOntologiesForTask
 // ---------------------------------------------------------------------------
 const suggestOntologiesForTask: McpTool = {
@@ -778,6 +817,7 @@ export const graphTools: McpTool[] = [
   suggestOntologiesForTask,
   queryGraph,
   exportGraph,
+  canonicalizeGraph,
   exportImage,
   setViewMode,
   getGraphState,

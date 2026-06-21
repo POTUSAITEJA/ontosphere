@@ -116,6 +116,7 @@
     "ngraph.graph": "20.1.1",
     "ngraph.louvain": "2.0.0",
     "ngraph.slpa": "0.1.0",
+    "rdf-canonize": "^5.0.0",
     "rdf-parse": "4.0.0",
     "rdf-reasoner-konclude": "^0.3.2",
     "react": "19.2.0",

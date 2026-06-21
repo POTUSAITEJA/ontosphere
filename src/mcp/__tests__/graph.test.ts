@@ -13,6 +13,11 @@ vi.mock('@/utils/rdfManager', () => ({
     fetchQuadsPage: vi.fn().mockResolvedValue({ items: [], total: 0, offset: 0, limit: 0 }),
     sparqlQuery: vi.fn().mockResolvedValue({ type: 'select', rows: [] }),
     getNamespaces: vi.fn().mockReturnValue([]),
+    canonicalize: vi.fn().mockResolvedValue({
+      canonical: '_:c14n0 <http://ex/p> _:c14n1 .\n',
+      hash: 'a'.repeat(64),
+      quadCount: 1,
+    }),
   },
 }));
 
@@ -367,5 +372,41 @@ describe('suggestOntologiesForTask', () => {
         }
       }
     }
+  });
+});
+
+describe('canonicalizeGraph (RDFC-1.0)', () => {
+  it('returns canonical, hash, and quadCount from rdfManager.canonicalize', async () => {
+    const result = await tool('canonicalizeGraph').handler({});
+    expect(result.success).toBe(true);
+    const data = (result as any).data;
+    expect(typeof data.canonical).toBe('string');
+    expect(data.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(data.quadCount).toBe(1);
+  });
+
+  it('forwards graph and includeInferred options to rdfManager.canonicalize', async () => {
+    await tool('canonicalizeGraph').handler({ graph: 'urn:vg:data', includeInferred: true });
+    expect(rdfManager.canonicalize).toHaveBeenCalledWith({
+      graph: 'urn:vg:data',
+      includeInferred: true,
+    });
+  });
+
+  it('defaults includeInferred to false when omitted', async () => {
+    await tool('canonicalizeGraph').handler({});
+    expect(rdfManager.canonicalize).toHaveBeenCalledWith({
+      graph: undefined,
+      includeInferred: false,
+    });
+  });
+
+  it('returns an error result when canonicalize throws', async () => {
+    (rdfManager.canonicalize as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('boom'),
+    );
+    const result = await tool('canonicalizeGraph').handler({});
+    expect(result.success).toBe(false);
+    expect((result as any).error).toContain('boom');
   });
 });

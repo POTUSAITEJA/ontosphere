@@ -21,6 +21,8 @@ import {
 } from "./rdfSerialization";
 import { useAppConfigStore } from "../stores/appConfigStore";
 import { ensureDefaultNamespaceMap, type NamespaceEntry, entriesToRecord, recordToEntries } from "../constants/namespaces";
+import { Parser as N3Parser } from "n3";
+import { canonicalizeQuads, canonicalHash, type CanonicalHashAlgorithm } from "./rdfCanonicalize";
 
 type ChangeSubscriber = (count: number, meta?: unknown) => void;
 type SubjectsSubscriber = (
@@ -1583,6 +1585,50 @@ export class RDFManagerImpl {
       return (response as any).content;
     }
     return "";
+  }
+
+  /**
+   * Produce the W3C RDFC-1.0 canonical N-Quads form + a content hash of the
+   * graph. Per the W3C "RDF Dataset Canonicalization" Recommendation (RDFC-1.0,
+   * 2024-05-21, https://www.w3.org/TR/rdf-canon/) the output is invariant under
+   * blank-node relabelling and triple reordering, so two isomorphic graphs share
+   * one canonical form and one hash — the basis for reproducible snapshots,
+   * deterministic diffs, and content-addressable dataset identity.
+   *
+   * Quads are gathered from the dataset-faithful N-Quads export (all urn:vg:*
+   * graphs) and re-parsed client-side with N3 — zero-backend, no network.
+   *   • opts.graph        — restrict to one named graph (e.g. "urn:vg:data").
+   *                         Omit to canonicalize the whole dataset.
+   *   • opts.includeInferred — when no specific graph is requested, include the
+   *                         urn:vg:inferred graph (default false: asserted-only).
+   *   • opts.algorithm    — digest for the content hash (default 'SHA-256').
+   */
+  async canonicalize(opts?: {
+    graph?: string;
+    includeInferred?: boolean;
+    algorithm?: CanonicalHashAlgorithm;
+  }): Promise<{ canonical: string; hash: string; quadCount: number }> {
+    const graph = opts?.graph;
+    const includeInferred = opts?.includeInferred === true;
+    const algorithm: CanonicalHashAlgorithm = opts?.algorithm ?? "SHA-256";
+
+    // Dataset-faithful N-Quads carry every quad's graph term, so the multi-graph
+    // partition survives the round-trip and named graphs are canonicalized too.
+    const nquads = await this.exportToNQuads();
+    const parser = new N3Parser({ format: "application/n-quads" });
+    const allQuads = parser.parse(nquads);
+
+    const quads = allQuads.filter((q) => {
+      const g = q.graph && q.graph.termType !== "DefaultGraph" ? q.graph.value : "";
+      if (graph) return g === graph;
+      // No explicit graph: include everything except inferred unless asked.
+      if (!includeInferred && g === "urn:vg:inferred") return false;
+      return true;
+    });
+
+    const canonical = await canonicalizeQuads(quads);
+    const hash = await canonicalHash(quads, algorithm);
+    return { canonical, hash, quadCount: quads.length };
   }
 
   dispose(): void {
