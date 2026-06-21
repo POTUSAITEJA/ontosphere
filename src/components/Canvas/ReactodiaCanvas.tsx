@@ -1535,26 +1535,62 @@ export default function ReactodiaCanvas() {
     registerSetViewMode(actions.setViewMode);
   }, [actions.setViewMode]);
 
-  // ─── Auto-reasoning: trigger handleRunReasoning on urn:vg:data edits ─────────
+  // ─── Auto-reasoning: AUTO-INCREMENTAL reclassification on urn:vg:data edits ──
   // Read autoReasoning from settings store. Using getState() inside the handler
   // avoids re-registering the subscription on every settings change.
   const autoReasoningDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Accumulate the subjects touched by edits between debounced runs so the
+  // incremental step can derive Σ_Δ from exactly what changed.
+  const pendingChangedSubjectsRef = React.useRef<Set<string>>(new Set());
+  // C2: accumulate the FULL changed signature (subject + predicate + object IRIs
+  // of every added/removed triple) the worker emits, so predicate/object-position
+  // edits are visible to Σ_Δ — not just the subjects.
+  const pendingChangedSignatureRef = React.useRef<Set<string>>(new Set());
+
+  // Module-scoped incremental reasoning: re-classify only the ⊤⊥*-module induced
+  // by the changed subjects and splice the delta into urn:vg:inferred. The worker
+  // falls back to a full run (and re-establishes the baseline) automatically when
+  // no consistent baseline exists; we then refresh the canvas from the inferred
+  // graph either way. Separate from the manual `handleRunReasoning` (full run +
+  // full report) so live editing stays fast at scale.
+  const handleIncrementalReasoning = React.useCallback(
+    async (changedSubjects: string[], changedSignature: string[]) => {
+      setIsReasoning(true);
+      isReasoningRef.current = true;
+      try {
+        const outcome = await rdfManager.reasonIncremental({ changedSubjects, changedSignature });
+        setIsInconsistentDetected(outcome.isConsistent === false);
+        // Refresh the canvas from the (possibly spliced) inferred graph.
+        await handleApplyInferred();
+        return outcome;
+      } finally {
+        setIsReasoning(false);
+        isReasoningRef.current = false;
+      }
+    },
+    [handleApplyInferred],
+  );
 
   React.useEffect(() => {
     const handler = (
-      _subjects: string[],
+      subjects: string[],
       _quads?: unknown,
       _snapshot?: unknown,
       meta?: Record<string, unknown> | null,
     ) => {
       // Guard 1: only react to explicit urn:vg:data writes — NOT to inferred-graph
-      // writes that handleRunReasoning itself makes. This is the primary infinite-loop
-      // break: every emitSubjects call from the reasoner carries graphName=urn:vg:inferred,
-      // so it is unconditionally ignored here.
+      // writes that the reasoner itself makes. This is the primary infinite-loop
+      // break: every emitSubjects call from the (full OR incremental) reasoner
+      // carries graphName=urn:vg:inferred, so it is unconditionally ignored here.
+      //
+      // BUG FIX: a missing graphName (graphName === null) must NOT be treated as a
+      // urn:vg:data write. Only an EXPLICIT urn:vg:data graphName triggers
+      // reasoning; an emission with no graphName is ambiguous (it could be an
+      // inferred/internal emission that simply omitted the tag) and must not
+      // spuriously fire reasoning. This closes a latent re-entrancy / false-trigger
+      // hole in the previous `graphName === null` allowance.
       const graphName = meta && typeof meta.graphName === 'string' ? meta.graphName : null;
-      const isDataGraphWrite = graphName === 'urn:vg:data' || graphName === null;
-      const isInferredGraphWrite = graphName === 'urn:vg:inferred';
-      if (!isDataGraphWrite || isInferredGraphWrite) return;
+      if (graphName !== 'urn:vg:data') return;
 
       // Guard 2: skip full-refresh (initial load / view-mode switch) — those are not
       // user edits; firing reasoning on startup would be noisy.
@@ -1566,6 +1602,19 @@ export default function ReactodiaCanvas() {
       // Guard 4: do not trigger while a run is already in progress.
       if (isReasoningRef.current) return;
 
+      // Accumulate the changed subjects for Σ_Δ.
+      for (const s of subjects) {
+        if (typeof s === 'string' && s.length > 0) pendingChangedSubjectsRef.current.add(s);
+      }
+      // C2: accumulate the full changed signature the worker forwarded in meta
+      // (subject + predicate + object IRIs of every added/removed triple).
+      const sig = meta && Array.isArray((meta as { changedSignature?: unknown }).changedSignature)
+        ? ((meta as { changedSignature?: unknown }).changedSignature as unknown[])
+        : [];
+      for (const s of sig) {
+        if (typeof s === 'string' && s.length > 0) pendingChangedSignatureRef.current.add(s);
+      }
+
       // Debounce: coalesce rapid successive edits into a single reasoning run.
       if (autoReasoningDebounceRef.current) clearTimeout(autoReasoningDebounceRef.current);
       autoReasoningDebounceRef.current = setTimeout(() => {
@@ -1573,7 +1622,11 @@ export default function ReactodiaCanvas() {
         // Re-check guards inside the timeout in case state changed while waiting.
         if (!useSettingsStore.getState().settings.autoReasoning) return;
         if (isReasoningRef.current) return;
-        void handleRunReasoning();
+        const changed = [...pendingChangedSubjectsRef.current];
+        const changedSig = [...pendingChangedSignatureRef.current];
+        pendingChangedSubjectsRef.current = new Set();
+        pendingChangedSignatureRef.current = new Set();
+        void handleIncrementalReasoning(changed, changedSig);
       }, 1500);
     };
 
@@ -1585,7 +1638,7 @@ export default function ReactodiaCanvas() {
         autoReasoningDebounceRef.current = null;
       }
     };
-  }, [handleRunReasoning]);
+  }, [handleIncrementalReasoning]);
 
   // ─── Undo / Redo keyboard shortcuts (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y) ──
   React.useEffect(() => {

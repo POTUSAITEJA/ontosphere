@@ -7,9 +7,32 @@ import { rdfManager } from '@/utils/rdfManager';
 import { checkOwl2Profile, detectOwl2Profiles, type ProfileTriple } from '@/utils/owlProfile';
 import { buildRepairBrief, type DiagnosticsData } from './diagnosticsBrief';
 import { computeRepairs, type RepairSuggestion } from './computeRepairs';
+import type { VerifyRepairRemoval } from '@/utils/rdfManager';
 const EXPORT_FORMATS = ['turtle', 'jsonld', 'rdfxml', 'svg', 'png'];
 
 const DATA_GRAPH = 'urn:vg:data';
+
+/**
+ * BUG B: project a computed repair into a verifyRepair removal, carrying the
+ * object-term metadata (termType/datatype/language) and source graph that
+ * computeRepairs threaded from the MIPS. This makes VERIFY exclude the IDENTICAL
+ * triple the apply path (removeLink) removes — preventing a false
+ * `verifiedConsistent` against a same-lexical sibling in another graph/datatype.
+ * Optional fields are only set when present (back-compat: a bare s/p/o repair
+ * verifies with the legacy lexical/all-graph match).
+ */
+function repairToRemoval(r: RepairSuggestion): VerifyRepairRemoval {
+  const a = r.action.args;
+  return {
+    subject: a.subjectIri!,
+    predicate: a.predicateIri!,
+    object: a.objectIri!,
+    ...(a.objectTermType ? { objectTermType: a.objectTermType } : {}),
+    ...(a.objectDatatype ? { objectDatatype: a.objectDatatype } : {}),
+    ...(a.objectLanguage ? { objectLanguage: a.objectLanguage } : {}),
+    ...(a.graph ? { graph: a.graph } : {}),
+  };
+}
 
 /** Read the asserted data graph and project it to ProfileTriple[] (literal-aware). */
 async function loadDataProfileTriples(): Promise<ProfileTriple[]> {
@@ -241,11 +264,11 @@ const explainDiagnostics: McpTool = {
         //    it does NOT mean the repair is wrong (cross-ref verifiedSet).
         await Promise.all(
           actionable.map(async (r) => {
-            const { subjectIri, predicateIri, objectIri } = r.action.args;
             try {
-              r.verifiedConsistent = await rdfManager.verifyRepair([
-                { subject: subjectIri!, predicate: predicateIri!, object: objectIri! },
-              ]);
+              // BUG B: thread the object-term + source graph so VERIFY targets the
+              // IDENTICAL triple APPLY (removeLink) removes — not a same-lexical
+              // sibling in another graph / with another datatype.
+              r.verifiedConsistent = await rdfManager.verifyRepair([repairToRemoval(r)]);
             } catch {
               // Leave verifiedConsistent undefined when the oracle is unavailable.
             }
@@ -256,11 +279,9 @@ const explainDiagnostics: McpTool = {
         //    This is the hitting-set guarantee: their union restores consistency
         //    even when each individual removal does not.
         if (actionable.length > 0) {
-          const removals = actionable.map((r) => ({
-            subject: r.action.args.subjectIri!,
-            predicate: r.action.args.predicateIri!,
-            object: r.action.args.objectIri!,
-          }));
+          // BUG B: each removal carries its object-term + source graph so the
+          // full-set VERIFY removes exactly what the apply path would.
+          const removals = actionable.map(repairToRemoval);
           try {
             const detailed = await rdfManager.verifyRepairDetailed(removals);
             repairSetVerifiedConsistent = detailed.verifiedConsistent;

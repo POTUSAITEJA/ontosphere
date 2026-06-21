@@ -294,7 +294,7 @@
     },
     {
       "name": "removeLink",
-      "description": "Remove ANY triple from the RDF store, given its subject, predicate, and object. Despite the name it is not limited to object-property edges: the object may be an IRI (an ABox edge or a TBox axiom such as owl:disjointWith / rdfs:subClassOf) OR a literal value (an annotation like rdfs:comment) — the matching triple is removed in all cases. Reasoner-computed repairs (explainDiagnostics.suggestedRepairs) apply via this tool.",
+      "description": "Remove ANY triple from the RDF store, given its subject, predicate, and object. Despite the name it is not limited to object-property edges: the object may be an IRI (an ABox edge or a TBox axiom such as owl:disjointWith / rdfs:subClassOf) OR a literal value (an annotation like rdfs:comment) — the matching triple is removed in all cases. To remove the EXACT axiom a reasoner repair points at — which may physically live in an imported ontology graph and/or carry a typed/language-tagged literal — pass the optional graphName (e.g. \"urn:vg:ontologies\") and, for literal objects, objectIsLiteral=true with objectDatatype/objectLanguage. These map 1:1 onto explainDiagnostics.suggestedRepairs action.args (graph / objectDatatype / objectLanguage / objectTermType), so reasoner-computed repairs apply faithfully. Omitting them targets urn:vg:data and treats the object as an IRI (legacy behaviour).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -306,6 +306,22 @@
           },
           "objectIri": {
             "type": "string"
+          },
+          "graphName": {
+            "type": "string",
+            "description": "Named graph the triple lives in (e.g. \"urn:vg:ontologies\"). Defaults to urn:vg:data. Required to remove an imported-schema axiom — a data-graph removal would silently match nothing."
+          },
+          "objectIsLiteral": {
+            "type": "boolean",
+            "description": "Set true when the object is a literal value (not an IRI) so it is matched as a Literal term, not string-coerced into an IRI."
+          },
+          "objectDatatype": {
+            "type": "string",
+            "description": "Datatype IRI of a literal object (e.g. xsd:integer) so \"42\"^^xsd:integer is matched exactly and a same-lexical \"42\" string is left untouched."
+          },
+          "objectLanguage": {
+            "type": "string",
+            "description": "Language tag of a literal object (e.g. \"en\")."
           }
         },
         "required": [

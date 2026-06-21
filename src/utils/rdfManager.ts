@@ -13,6 +13,7 @@ export type {
 } from "./reasoningTypes";
 
 import { RDFManagerImpl } from "./rdfManager.impl";
+export type { VerifyRepairRemoval } from "./rdfManager.impl";
 import { createRdfManagerWorkerClient } from "./rdfManager.workerClient";
 
 let sharedWorkerClient: ReturnType<typeof createRdfManagerWorkerClient> | null = null;

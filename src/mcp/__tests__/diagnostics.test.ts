@@ -170,6 +170,57 @@ describe('explainDiagnostics', () => {
     expect(mockVerifyRepairDetailed.mock.calls[0][0]).toHaveLength(2);
   });
 
+  it('BUG B: per-axiom AND full-set verifyRepair receive the graph + typed-literal threaded from the MIPS', async () => {
+    mockRunReasoning.mockResolvedValue({ isConsistent: false, errors: [] });
+    const XSD_INT = 'http://www.w3.org/2001/XMLSchema#integer';
+    // A single-axiom MIPS whose covering axiom lives in urn:vg:ontologies and
+    // has a typed-literal object — the worker's explainInconsistency threads
+    // graph + objectTermType + objectDatatype, which computeRepairs carries into
+    // action.args. The verify call MUST forward them so it matches the SAME
+    // triple the apply path (removeLink) removes.
+    mockExplainInconsistency.mockResolvedValue([
+      [
+        {
+          subject: 'http://ex/i',
+          predicate: 'http://ex/age',
+          object: '42',
+          objectTermType: 'Literal',
+          objectDatatype: XSD_INT,
+          graph: 'urn:vg:ontologies',
+        },
+      ],
+    ]);
+    mockVerifyRepair.mockResolvedValue(true);
+    mockVerifyRepairDetailed.mockResolvedValue({
+      verifiedConsistent: true, removedCount: 1, requestedCount: 1, matchedCount: 1,
+    });
+
+    const res = (await explainDiagnostics.handler({ maxJustifications: 3 })) as { success: boolean; data: any };
+    expect(res.success).toBe(true);
+
+    // Per-axiom verifyRepair was called with the EXACT structured removal.
+    expect(mockVerifyRepair).toHaveBeenCalled();
+    const perAxiom = mockVerifyRepair.mock.calls[0][0];
+    expect(perAxiom).toHaveLength(1);
+    expect(perAxiom[0]).toMatchObject({
+      subject: 'http://ex/i',
+      predicate: 'http://ex/age',
+      object: '42',
+      objectTermType: 'Literal',
+      objectDatatype: XSD_INT,
+      graph: 'urn:vg:ontologies',
+    });
+
+    // The full-set verifyRepairDetailed carries the same metadata.
+    expect(mockVerifyRepairDetailed).toHaveBeenCalledTimes(1);
+    const fullSet = mockVerifyRepairDetailed.mock.calls[0][0];
+    expect(fullSet[0]).toMatchObject({
+      objectTermType: 'Literal',
+      objectDatatype: XSD_INT,
+      graph: 'urn:vg:ontologies',
+    });
+  });
+
   it('L2: a matchedCount < requestedCount surfaces a warning (nothing-matched vs still-inconsistent)', async () => {
     mockRunReasoning.mockResolvedValue({ isConsistent: false, errors: [] });
     mockExplainInconsistency.mockResolvedValue([

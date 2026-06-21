@@ -144,8 +144,25 @@ export type RDFWorkerCommandPayloads = {
    * Symbolically verify a repair candidate: build a working store COPY without
    * the listed axioms and re-run the EXISTING Konclude consistency oracle.
    * Never mutates urn:vg:data. Returns { verifiedConsistent: boolean }.
+   *
+   * BUG B: each removal may OPTIONALLY carry the object's term metadata
+   * (objectTermType + objectDatatype/objectLanguage) and the source graph so
+   * VERIFY targets the IDENTICAL triple APPLY will remove — otherwise verify
+   * could match a same-lexical sibling in a different graph / datatype and
+   * report a false `verifiedConsistent`. Absent metadata ⇒ the legacy bare
+   * lexical, all-graph match (back-compat).
    */
-  verifyRepair: { removals: { subject: string; predicate: string; object: string }[] };
+  verifyRepair: {
+    removals: {
+      subject: string;
+      predicate: string;
+      object: string;
+      objectTermType?: string;
+      objectDatatype?: string;
+      objectLanguage?: string;
+      graph?: string;
+    }[];
+  };
   /**
    * Search existing ontology terms (classes / properties / individuals) by
    * label (rdfs:label, skos:prefLabel, skos:altLabel) or IRI local-name across
@@ -187,6 +204,30 @@ export type RDFWorkerCommandPayloads = {
     signature: string[];
     moduleType?: "bot" | "star";
     includeOntologies?: boolean;
+  };
+  /**
+   * AUTO-INCREMENTAL REASONING (module-scoped reclassification on edit).
+   *
+   * Re-classify ONLY the ⊤⊥*-module M induced by the changed signature Σ_Δ,
+   * splicing the resulting inferred delta into urn:vg:inferred, instead of
+   * re-classifying the whole store. Sound RELATIVE TO A CONSISTENT BASELINE: a
+   * prior FULL runReasoning must have established that the ontology was consistent
+   * and recorded its axiom signature. Because the pre-edit ontology was consistent
+   * and only axioms over Σ_Δ changed, every new/retracted entailment (and any new
+   * inconsistency) is expressible over Σ_Δ ⊆ sig(M); the locality guarantee then
+   * makes re-classifying M sufficient and the inferred triples whose subject lies
+   * outside sig(M) provably unchanged.
+   *
+   * `changedSubjects` and/or `changedSignature` seed Σ_Δ (the worker expands it
+   * conservatively over directly-referenced class/property neighbours). When NO
+   * consistent baseline exists, the edit looks like a bulk load, or Σ_Δ is empty,
+   * the worker FALLS BACK to a full run (and re-establishes the baseline). The
+   * mode actually used is reported. READ-then-WRITE only on urn:vg:inferred;
+   * never mutates urn:vg:data.
+   */
+  reasonIncremental: {
+    changedSubjects?: string[];
+    changedSignature?: string[];
   };
   /**
    * Enable or disable OPFS crash-recovery persistence for this session. The
@@ -232,6 +273,7 @@ export const RDF_WORKER_COMMANDS = [
   "searchTerms",
   "explainEntailment",
   "extractModule",
+  "reasonIncremental",
   "setPersistence",
   "clearPersistedStore",
 ] as const;
@@ -695,6 +737,12 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
       assertString(r.subject, "verifyRepair.removals entry.subject must be a string");
       assertString(r.predicate, "verifyRepair.removals entry.predicate must be a string");
       assertString(r.object, "verifyRepair.removals entry.object must be a string");
+      // BUG B: optional object-term + graph metadata so VERIFY matches the
+      // EXACT triple APPLY removes (precise typed/lang literal + source graph).
+      assertOptionalString(r.objectTermType, "verifyRepair.removals entry.objectTermType must be a string when provided");
+      assertOptionalString(r.objectDatatype, "verifyRepair.removals entry.objectDatatype must be a string when provided");
+      assertOptionalString(r.objectLanguage, "verifyRepair.removals entry.objectLanguage must be a string when provided");
+      assertOptionalString(r.graph, "verifyRepair.removals entry.graph must be a string when provided");
     }
   },
   searchTerms(payload) {
@@ -769,6 +817,22 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
         "extractModule.includeOntologies must be a boolean when provided",
       );
     }
+  },
+  reasonIncremental(payload) {
+    // Both fields optional; an empty payload is valid (worker derives Σ_Δ = ∅ and
+    // falls back to a full run). When provided each must be a string array.
+    if (typeof payload === "undefined") return;
+    assertPlainObject(payload, "reasonIncremental payload must be an object when provided");
+    const { changedSubjects, changedSignature } =
+      payload as RDFWorkerCommandPayloads["reasonIncremental"];
+    assertOptionalStringArray(
+      changedSubjects,
+      "reasonIncremental.changedSubjects must be an array of strings when provided",
+    );
+    assertOptionalStringArray(
+      changedSignature,
+      "reasonIncremental.changedSignature must be an array of strings when provided",
+    );
   },
   setPersistence(payload) {
     assertPlainObject(payload, "setPersistence payload must be an object");

@@ -19,6 +19,7 @@ import type {
 import type { ReasoningResult } from "../utils/reasoningTypes.ts";
 import { deserializeQuad, deserializeTerm, serializeQuad } from "../utils/rdfSerialization.ts";
 import type { WorkerQuad } from "../utils/rdfSerialization.ts";
+import { quadMatchesRemoval, type MatchQuad } from "./verifyRepairMatch.ts";
 import { WELL_KNOWN } from "../utils/wellKnownOntologies.ts";
 import { ensureDefaultNamespaceMap } from "../constants/namespaces.ts";
 import { RDF_TYPE, RDFS_LABEL, SHACL } from "../constants/vocabularies.ts";
@@ -28,11 +29,20 @@ import { buildEntailmentProbe } from "./entailmentProbe.ts";
 import {
   extractBotModule,
   extractStarModule,
+  signatureOf,
   type LocalityTriple,
 } from "./localityModule.ts";
 import { OpfsPersistence, createOpfsBackend } from "./opfsPersistence.ts";
 import { QueryEngine } from "@comunica/query-sparql-rdfjs";
 const KONCLUDE_INFERRED_GRAPH_IRI = "urn:vg:inferred";
+
+// H2 — periodic full re-validation. After this many consecutive incremental
+// steps (or once the accumulated changed signature crosses the size cap) the
+// next reasonIncremental is forced to a FULL run that re-anchors the baseline.
+// This bounds any drift that could accumulate over a long incremental-only
+// session where soundness rests on each per-module verdict.
+const MAX_INCREMENTAL_STEPS_BEFORE_FULL = 20;
+const MAX_ACCUMULATED_SIGNATURE_BEFORE_FULL = 2000;
 
 // ---------------------------------------------------------------------------
 // Binary codec — verbatim from rdf-reasoner-konclude v0.3.0 ts/intern.ts.
@@ -294,6 +304,27 @@ class KoncludeReasoner {
     _koncludeReasoner = null;
   }
 
+  /**
+   * De-skolemize a candidate quad set: urn:vg:bnode:* NamedNodes → real blank
+   * nodes so Konclude sees anonymous OWL class expressions. Factored out of
+   * reason / _checkInconsistencyDirect / _getUnsatisfiableClassesDirect /
+   * classifyModule so every Konclude entry point applies the IDENTICAL boundary
+   * transform (a divergence here would silently change what the reasoner sees).
+   */
+  private static _deskolemize(candidates: N3.Quad[]): N3.Quad[] {
+    const BNODE_PREFIX = "urn:vg:bnode:";
+    return candidates.map((q) => {
+      const subj = q.subject.termType === "NamedNode" && q.subject.value.startsWith(BNODE_PREFIX)
+        ? N3.DataFactory.blankNode(q.subject.value.slice(BNODE_PREFIX.length))
+        : q.subject;
+      const obj = q.object.termType === "NamedNode" && q.object.value.startsWith(BNODE_PREFIX)
+        ? N3.DataFactory.blankNode(q.object.value.slice(BNODE_PREFIX.length))
+        : q.object;
+      if (subj === q.subject && obj === q.object) return q;
+      return N3.DataFactory.quad(subj, q.predicate, obj, q.graph);
+    });
+  }
+
   reason(store: N3.Store): Promise<void> {
     const result = this._queue.then(async () => {
       const inferredGraphNode = N3.DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI);
@@ -305,36 +336,10 @@ class KoncludeReasoner {
         const g = q.graph.termType === "DefaultGraph" ? "" : q.graph.value;
         return !EXCLUDED_GRAPHS.has(g);
       });
-      const sourceKeys = new Set(
-        sourceQuads.map((q) => `${q.subject.value}\0${q.predicate.value}\0${q.object.value}`),
-      );
 
-      // De-skolemize: urn:vg:bnode:* → real blank nodes so Konclude sees anonymous OWL class expressions
-      const BNODE_PREFIX = "urn:vg:bnode:";
-      const deskolemized = sourceQuads.map((q) => {
-        const subj = q.subject.termType === "NamedNode" && q.subject.value.startsWith(BNODE_PREFIX)
-          ? N3.DataFactory.blankNode(q.subject.value.slice(BNODE_PREFIX.length))
-          : q.subject;
-        const obj = q.object.termType === "NamedNode" && q.object.value.startsWith(BNODE_PREFIX)
-          ? N3.DataFactory.blankNode(q.object.value.slice(BNODE_PREFIX.length))
-          : q.object;
-        if (subj === q.subject && obj === q.object) return q;
-        return N3.DataFactory.quad(subj, q.predicate, obj, q.graph);
-      });
-
-      const { tripleBuffer, strTableBuffer } = _encodeToBuffers(deskolemized);
-
-      // realization runs TBox classification + ABox individual typing in one pass.
-      // Calling classification separately then realization drains the result buffer mid-sequence,
-      // leaving realization with no output — hence the single-pass approach mirrors materialize().
-      // forRealization=true (3rd arg, added in 0.3.0) configures Konclude for ABox realization.
-      await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer, true], [tripleBuffer, strTableBuffer]);
-      await this._call("realization", []);
-      const resultBuf = (await this._call("getInferredTripleBuffer", [])) as ArrayBuffer;
-      const inferredQuads = _decodeBuffers(resultBuf);
+      const inferredQuads = await this._classifyDirect(sourceQuads);
 
       for (const q of inferredQuads) {
-        if (sourceKeys.has(`${q.subject.value}\0${q.predicate.value}\0${q.object.value}`)) continue;
         store.addQuad(N3.DataFactory.quad(q.subject, q.predicate, q.object, inferredGraphNode));
       }
 
@@ -344,18 +349,69 @@ class KoncludeReasoner {
     return result;
   }
 
-  private async _checkInconsistencyDirect(candidates: N3.Quad[]): Promise<boolean> {
-    const BNODE_PREFIX = "urn:vg:bnode:";
-    const deskolemized = candidates.map((q) => {
-      const subj = q.subject.termType === "NamedNode" && q.subject.value.startsWith(BNODE_PREFIX)
-        ? N3.DataFactory.blankNode(q.subject.value.slice(BNODE_PREFIX.length))
-        : q.subject;
-      const obj = q.object.termType === "NamedNode" && q.object.value.startsWith(BNODE_PREFIX)
-        ? N3.DataFactory.blankNode(q.object.value.slice(BNODE_PREFIX.length))
-        : q.object;
-      if (subj === q.subject && obj === q.object) return q;
-      return N3.DataFactory.quad(subj, q.predicate, obj, q.graph);
+  /**
+   * Run Konclude TBox classification + ABox realization over a candidate quad set
+   * and return the NEWLY inferred quads (those not already present in the source).
+   * De-skolemizes at the boundary. Runs INSIDE an existing _queue slot (like
+   * _checkInconsistencyDirect), so callers that already hold a _queue slot (reason,
+   * classifyModule) reuse it without re-acquiring (which would deadlock). The
+   * returned quads carry a DefaultGraph term; the caller assigns the target graph.
+   */
+  private async _classifyDirect(candidates: N3.Quad[]): Promise<N3.Quad[]> {
+    const sourceKeys = new Set(
+      candidates.map((q) => `${q.subject.value}\0${q.predicate.value}\0${q.object.value}`),
+    );
+    const deskolemized = KoncludeReasoner._deskolemize(candidates);
+    const { tripleBuffer, strTableBuffer } = _encodeToBuffers(deskolemized);
+    // realization runs TBox classification + ABox individual typing in one pass.
+    // Calling classification separately then realization drains the result buffer mid-sequence,
+    // leaving realization with no output — hence the single-pass approach mirrors materialize().
+    // forRealization=true (3rd arg, added in 0.3.0) configures Konclude for ABox realization.
+    await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer, true], [tripleBuffer, strTableBuffer]);
+    await this._call("realization", []);
+    const resultBuf = (await this._call("getInferredTripleBuffer", [])) as ArrayBuffer;
+    const inferredQuads = _decodeBuffers(resultBuf);
+    return inferredQuads.filter(
+      (q) => !sourceKeys.has(`${q.subject.value}\0${q.predicate.value}\0${q.object.value}`),
+    );
+  }
+
+  /**
+   * Classify a MODULE (a self-contained candidate quad set, e.g. a ⊤⊥*-module) in
+   * isolation and return its consistency verdict, the unsatisfiable classes, and
+   * the newly inferred quads. The three Konclude calls (consistency, unsat,
+   * realization) all run within a SINGLE _queue slot so they observe the same
+   * loaded buffer and cannot interleave with another caller's reasoning.
+   *
+   * This is the reusable classify machinery the auto-incremental loop runs over a
+   * module M instead of over the whole store. Mirrors reason()'s de-skolemization
+   * and source-filtering exactly. READ-ONLY — never mutates any store.
+   */
+  classifyModule(moduleQuads: N3.Quad[]): Promise<{
+    isConsistent: boolean;
+    unsatisfiableClasses: string[];
+    inferredQuads: N3.Quad[];
+  }> {
+    const result = this._queue.then(async () => {
+      // Consistency + unsatisfiable classes share one classification pass (a
+      // non-realization load), then realization is a SEPARATE load on the same
+      // candidate set — exactly the call shapes used elsewhere in this class.
+      const inconsistent = await this._checkInconsistencyDirect(moduleQuads);
+      if (inconsistent) {
+        // An inconsistent module ⇒ the ontology is inconsistent (monotonicity).
+        // No inferred delta is meaningful; report the verdict.
+        return { isConsistent: false, unsatisfiableClasses: [] as string[], inferredQuads: [] as N3.Quad[] };
+      }
+      const unsatisfiableClasses = await this._getUnsatisfiableClassesDirect(moduleQuads);
+      const inferredQuads = await this._classifyDirect(moduleQuads);
+      return { isConsistent: true, unsatisfiableClasses, inferredQuads };
     });
+    this._queue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  private async _checkInconsistencyDirect(candidates: N3.Quad[]): Promise<boolean> {
+    const deskolemized = KoncludeReasoner._deskolemize(candidates);
     const { tripleBuffer, strTableBuffer } = _encodeToBuffers(deskolemized);
     await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer, false], [tripleBuffer, strTableBuffer]);
     await this._call("classification", []);
@@ -372,17 +428,7 @@ class KoncludeReasoner {
    * (which would deadlock). Used for C2 vacuous-truth detection.
    */
   private async _getUnsatisfiableClassesDirect(candidates: N3.Quad[]): Promise<string[]> {
-    const BNODE_PREFIX = "urn:vg:bnode:";
-    const deskolemized = candidates.map((q) => {
-      const subj = q.subject.termType === "NamedNode" && q.subject.value.startsWith(BNODE_PREFIX)
-        ? N3.DataFactory.blankNode(q.subject.value.slice(BNODE_PREFIX.length))
-        : q.subject;
-      const obj = q.object.termType === "NamedNode" && q.object.value.startsWith(BNODE_PREFIX)
-        ? N3.DataFactory.blankNode(q.object.value.slice(BNODE_PREFIX.length))
-        : q.object;
-      if (subj === q.subject && obj === q.object) return q;
-      return N3.DataFactory.quad(subj, q.predicate, obj, q.graph);
-    });
+    const deskolemized = KoncludeReasoner._deskolemize(candidates);
     const { tripleBuffer, strTableBuffer } = _encodeToBuffers(deskolemized);
     await this._call("loadTripleBuffer", [tripleBuffer, strTableBuffer, false], [tripleBuffer, strTableBuffer]);
     await this._call("classification", []);
@@ -818,11 +864,68 @@ const RDF_TYPE_IRI = RDF_TYPE;
 const RDFS_LABEL_IRI = RDFS_LABEL;
 
 let _cachedQueryEngine: QueryEngine | null = null;
-let _koncludeReasoner: KoncludeReasoner | null = null;
 
-function getKoncludeReasoner(): KoncludeReasoner {
+/**
+ * The subset of KoncludeReasoner the worker runtime depends on. Declared as an
+ * interface (not the concrete class) so a TEST can inject a node-compatible
+ * adapter — the production KoncludeReasoner spawns a Web Worker (unavailable in
+ * the node/jsdom test environments), so without this seam the incremental and
+ * full Konclude paths could not be exercised end-to-end under vitest. The
+ * production factory still returns the real KoncludeReasoner.
+ */
+export interface KoncludeReasonerLike {
+  readonly ready: Promise<void>;
+  reason(store: N3.Store): Promise<void>;
+  checkConsistency(store: N3.Store): Promise<boolean>;
+  getUnsatisfiableClasses(store: N3.Store): Promise<string[]>;
+  explainInconsistency(store: N3.Store, maxJustifications?: number): Promise<N3.Quad[][]>;
+  classifyModule(moduleQuads: N3.Quad[]): Promise<{
+    isConsistent: boolean;
+    unsatisfiableClasses: string[];
+    inferredQuads: N3.Quad[];
+  }>;
+  explainEntailment(
+    store: N3.Store,
+    subjectIri: string,
+    predicateIri: string,
+    objectIri: string,
+    objectIsClassLike: boolean,
+    maxJustifications?: number,
+  ): Promise<{
+    isEntailed: boolean | null;
+    justifications: N3.Quad[][];
+    ontologyInconsistent?: boolean;
+    vacuous?: boolean;
+    reason?: string;
+  }>;
+  terminate(): void;
+}
+
+let _koncludeReasoner: KoncludeReasonerLike | null = null;
+let _koncludeReasonerFactory: (() => KoncludeReasonerLike) | null = null;
+
+/**
+ * TEST-ONLY: override the Konclude reasoner factory so a node-compatible adapter
+ * (e.g. one wrapping the package `RdfReasoner`) can drive the REAL worker
+ * `handleReasonIncremental` / full-run paths under vitest. Pass `null` to restore
+ * the production factory. Clears any cached instance so the override takes effect
+ * on the next `getKoncludeReasoner()`.
+ */
+export function setKoncludeReasonerFactoryForTest(
+  factory: (() => KoncludeReasonerLike) | null,
+): void {
+  if (_koncludeReasoner) {
+    try { _koncludeReasoner.terminate(); } catch { /* ignore */ }
+    _koncludeReasoner = null;
+  }
+  _koncludeReasonerFactory = factory;
+}
+
+function getKoncludeReasoner(): KoncludeReasonerLike {
   if (!_koncludeReasoner) {
-    _koncludeReasoner = new KoncludeReasoner();
+    _koncludeReasoner = _koncludeReasonerFactory
+      ? _koncludeReasonerFactory()
+      : new KoncludeReasoner();
   }
   return _koncludeReasoner;
 }
@@ -935,6 +1038,36 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     "http://www.w3.org/2001/XMLSchema#",
   ];
   let workerChangeCounter = 0;
+
+  // ── Auto-incremental-reasoning baseline ───────────────────────────────────
+  //
+  // The baseline records the state established by the most recent FULL Konclude
+  // run: whether the ontology was consistent and the complete axiom signature
+  // (sig of the asserted TBox/ABox + loaded ontologies) at that time. An
+  // incremental step is sound ONLY relative to a CONSISTENT baseline (see
+  // handleReasonIncremental). `null` ⇒ no baseline yet ⇒ any incremental request
+  // falls back to a full run. The baseline is (re)established by every full run
+  // (handleRunReasoning, Konclude path) and INVALIDATED on bulk store mutations
+  // (clear / syncLoad / import / graph purge) so a wholesale change can never be
+  // mistaken for a small edit over Σ_Δ.
+  //
+  // `stepsSinceFull` counts consecutive incremental steps spliced since the last
+  // full re-anchor; `accumulatedSignatureSize` accumulates |Σ_Δ| across those
+  // steps. H2: once either crosses its cap the next request is forced to a full
+  // run that re-anchors the baseline, bounding any drift that could accumulate
+  // across a long incremental-only session.
+  let incrementalBaseline:
+    | { consistent: boolean; signature: Set<string> }
+    | null = null;
+  let stepsSinceFull = 0;
+  let accumulatedSignatureSize = 0;
+
+  /** Invalidate the incremental baseline (forces the next request to full). */
+  function invalidateIncrementalBaseline(): void {
+    incrementalBaseline = null;
+    stepsSinceFull = 0;
+    accumulatedSignatureSize = 0;
+  }
 
   // ── OPFS persistence / crash recovery ─────────────────────────────────────
   //
@@ -1133,6 +1266,9 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     if (!StoreCls) throw new Error("n3-store-unavailable");
     sharedStore = new (StoreCls as any)();
     workerChangeCounter = 0;
+    // A brand-new store invalidates any incremental baseline (the inferred graph
+    // and the recorded signature no longer describe this store).
+    invalidateIncrementalBaseline();
     // Reset and re-install incremental graph counters BEFORE seeding so the
     // seed axioms (loadSchemaOntology) are counted through the wrapped methods.
     graphCounts = new Map();
@@ -2042,6 +2178,388 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     };
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // AUTO-INCREMENTAL REASONING (module-scoped reclassification on edit)
+  // ───────────────────────────────────────────────────────────────────────────
+  //
+  // SOUNDNESS ARGUMENT (implemented exactly as specified).
+  //   A full run establishes a baseline: the complete urn:vg:inferred graph, a
+  //   record that the ontology was consistent, and the axiom-set signature Σ_full
+  //   at that time. On a later edit, let Σ_Δ be the signature of the added/removed
+  //   axioms (their subjects plus the class/property symbols they reference).
+  //   Because the PRE-EDIT ontology was consistent and ONLY axioms over Σ_Δ
+  //   changed, every NEW or RETRACTED entailment — and any newly introduced
+  //   inconsistency — must be expressible over Σ_Δ. The ⊤⊥*-module
+  //   M = extractStarModule(currentAxioms, Σ_Δ) captures (locality guarantee) ALL
+  //   axioms that can affect entailments over Σ_Δ ⊆ sig(M). Hence:
+  //     • if M is inconsistent ⇒ the ontology is inconsistent (monotonicity);
+  //     • if M is consistent ⇒ the ontology stays consistent (no inconsistency
+  //       outside M could have been introduced by an edit confined to Σ_Δ);
+  //     • the inferred triples whose SUBJECT lies in sig(M) are exactly those that
+  //       can have changed; all other inferred triples are unchanged and kept.
+  //   We therefore recompute M's entailments and splice the delta into
+  //   urn:vg:inferred, leaving inferred triples over subjects ∉ sig(M) intact.
+  //
+  // PRECONDITION + FALLBACK. Incremental is valid ONLY when a consistent baseline
+  //   exists. Otherwise (no baseline / inconsistent baseline / empty Σ_Δ — which
+  //   we treat as "unknown edit") we FALL BACK to a full run and re-establish the
+  //   baseline. Bulk mutations (clear / load / import / purge) invalidate the
+  //   baseline so they always force a full run.
+
+  /**
+   * Gather the base reasoning axioms from the SAME graphs the full Konclude
+   * classify consumes (urn:vg:data + urn:vg:ontologies; inferred/shapes/workflows/
+   * provenance excluded). Returns BOTH the raw N3 quads (for re-classification) and
+   * their de-skolemized locality-triple projection (for signature + module work).
+   */
+  function gatherBaseAxioms(store: any): { quads: Quad[]; triples: LocalityTriple[] } {
+    const MODULE_EXCLUDED_GRAPHS = new Set([
+      "urn:vg:inferred",
+      "urn:vg:shapes",
+      "urn:vg:workflows",
+      "urn:vg:provenance",
+    ]);
+    const BNODE_PREFIX = "urn:vg:bnode:";
+    const deskolemizeTerm = (value: string, termType: string): string =>
+      termType === "NamedNode" && value.startsWith(BNODE_PREFIX)
+        ? `_:${value.slice(BNODE_PREFIX.length)}`
+        : value;
+    const allQuads: Quad[] = store.getQuads(null, null, null, null) || [];
+    const quads: Quad[] = [];
+    const triples: LocalityTriple[] = [];
+    for (const q of allQuads) {
+      const g = q.graph?.termType === "DefaultGraph" ? "" : q.graph?.value ?? "";
+      if (MODULE_EXCLUDED_GRAPHS.has(g)) continue;
+      quads.push(q);
+      triples.push({
+        subject: deskolemizeTerm(q.subject.value, q.subject.termType),
+        predicate: q.predicate.value,
+        object: deskolemizeTerm(q.object.value, q.object.termType),
+        objectIsLiteral: q.object.termType === "Literal",
+      });
+    }
+    return { quads, triples };
+  }
+
+  /**
+   * Compute Σ_Δ — the changed signature — from the changed subjects / explicit
+   * signature provided by the edit, then EXPAND it conservatively so soundness is
+   * preserved: a changed subject's directly-asserted class/property neighbours
+   * (the symbols of every base axiom that subject participates in as subject OR
+   * object) are added. A larger Σ_Δ only grows the module, which is always sound;
+   * we never SHRINK it. Returns the seed signature (the module fixpoint then
+   * pulls in everything non-local w.r.t. this seed).
+   */
+  function computeChangedSignature(
+    baseTriples: LocalityTriple[],
+    changedSubjects: string[],
+    changedSignature: string[],
+  ): Set<string> {
+    const sigma = new Set<string>();
+    for (const s of changedSignature) if (s) sigma.add(s);
+    const seeds = new Set<string>(changedSubjects.filter(Boolean));
+    for (const s of seeds) sigma.add(s);
+    if (seeds.size === 0) return sigma;
+    // Conservative neighbour expansion: for every base axiom touching a seed
+    // subject (as subject or object), harvest that axiom's signature into Σ_Δ.
+    for (const t of baseTriples) {
+      if (seeds.has(t.subject) || (!t.objectIsLiteral && seeds.has(t.object))) {
+        for (const sym of signatureOf([t])) sigma.add(sym);
+      }
+    }
+    return sigma;
+  }
+
+  /**
+   * Build an N3 store from locality triples (module → reasoner). Mirrors the
+   * conformance test's localityTriplesToStore: `_:`/`bN`/`n3-` forms become real
+   * blank nodes so the reasoner sees anonymous class expressions; everything else
+   * is a NamedNode (or a plain Literal when objectIsLiteral).
+   */
+  function moduleTriplesToQuads(triples: LocalityTriple[], DataFactory: any): Quad[] {
+    const { namedNode, blankNode, literal, quad } = DataFactory;
+    const isBlankForm = (v: string): boolean =>
+      v.startsWith("_:") || /^b\d+$/.test(v) || v.startsWith("n3-");
+    const term = (v: string, isLiteral?: boolean) => {
+      if (isLiteral) return literal(v);
+      if (isBlankForm(v)) return blankNode(v.replace(/^_:/, ""));
+      return namedNode(v);
+    };
+    return triples.map((t) =>
+      quad(term(t.subject), namedNode(t.predicate), term(t.object, t.objectIsLiteral)),
+    );
+  }
+
+  /**
+   * Re-skolemize an inferred quad's subject/object back to the urn:vg:bnode: form
+   * used in the shared store, so the spliced inferred triples are keyed
+   * identically to a full run's output (skolemizeQuads). A real blank node →
+   * urn:vg:bnode:{hash(label)}; named/literal terms are untouched.
+   */
+  function reskolemizeInferred(q: Quad, DataFactory: any): Quad {
+    const skol = skolemizeQuads([q], DataFactory);
+    return skol[0] ?? q;
+  }
+
+  type IncrementalResult = {
+    mode: "incremental" | "full";
+    isConsistent: boolean | null;
+    inferredDelta: { added: number; removed: number };
+    unsatisfiableClasses: string[];
+    moduleSize: number;
+    fullSize: number;
+    reasonedSignatureSize: number;
+  };
+
+  /**
+   * Establish / refresh the incremental baseline after a full run. `consistent`
+   * is the full run's verdict; the signature is computed from the current base
+   * axioms. Called from the full Konclude path so every full run re-arms
+   * incremental reasoning.
+   */
+  function establishIncrementalBaseline(store: any, consistent: boolean): void {
+    try {
+      const { triples } = gatherBaseAxioms(store);
+      incrementalBaseline = { consistent, signature: signatureOf(triples) };
+    } catch (err) {
+      debugLog("[VG_REASONING_WORKER] establishIncrementalBaseline failed", err);
+      incrementalBaseline = null;
+    }
+  }
+
+  /**
+   * Re-anchor counters after a FULL run (mode:"full"). A full run recomputes the
+   * entire inferred set from scratch, so it resets the H2 drift counters. Called
+   * from the full-run path of handleReasonIncremental (NOT establish-, because the
+   * full handleRunReasoning path also establishes a baseline for manual full runs,
+   * where the counters are irrelevant — but resetting there is harmless too).
+   */
+  function resetIncrementalDriftCounters(): void {
+    stepsSinceFull = 0;
+    accumulatedSignatureSize = 0;
+  }
+
+  /**
+   * handleReasonIncremental — the auto-incremental step. Implements the procedure
+   * documented above. Falls back to a full run (via handleRunReasoning) when the
+   * precondition does not hold, and re-establishes the baseline in that case.
+   * Returns the mode used plus delta/size metrics.
+   */
+  async function handleReasonIncremental(
+    payload: RDFWorkerCommandPayloads["reasonIncremental"] | undefined,
+  ): Promise<IncrementalResult> {
+    const { DataFactory } = resolveN3();
+    if (!DataFactory) throw new Error("n3-api-unavailable");
+
+    const changedSubjects = Array.isArray(payload?.changedSubjects)
+      ? payload!.changedSubjects.filter((s) => typeof s === "string" && s.length > 0)
+      : [];
+    const changedSignature = Array.isArray(payload?.changedSignature)
+      ? payload!.changedSignature.filter((s) => typeof s === "string" && s.length > 0)
+      : [];
+
+    const store = getSharedStore();
+    const { quads: baseQuads, triples: baseTriples } = gatherBaseAxioms(store);
+
+    // PRECONDITION: a CONSISTENT baseline and a non-empty Σ_Δ. Otherwise full.
+    // H2: also force a full run once the drift caps are crossed (too many
+    // consecutive incremental steps, or too large an accumulated Σ_Δ), so a long
+    // incremental-only session is periodically re-anchored to a from-scratch run.
+    const sigmaDelta = computeChangedSignature(baseTriples, changedSubjects, changedSignature);
+    const baselineOk = incrementalBaseline !== null && incrementalBaseline.consistent === true;
+    const driftCapHit =
+      stepsSinceFull >= MAX_INCREMENTAL_STEPS_BEFORE_FULL ||
+      accumulatedSignatureSize + sigmaDelta.size > MAX_ACCUMULATED_SIGNATURE_BEFORE_FULL;
+    const fallbackToFull = !baselineOk || sigmaDelta.size === 0 || driftCapHit;
+
+    if (fallbackToFull) {
+      // A full re-anchor must produce EXACTLY the from-scratch inferred set. The
+      // Konclude full path ADDS freshly-derived inferred quads to the shared store
+      // but does not by itself purge inferred triples that a prior edit retracted
+      // (it classifies over a working COPY). Clear the maintained inferred graph
+      // first so the re-anchor cannot retain a stale entailment (e.g. an inferred
+      // triple left over from a step that detected inconsistency and skipped its
+      // splice). This makes mode:"full" a TRUE incremental==full re-baseline.
+      const inferredGraphTerm = DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI);
+      const staleInferred = store.getQuads(null, null, null, inferredGraphTerm) || [];
+      if (staleInferred.length > 0) store.removeQuads(staleInferred);
+
+      const reasoningId = `reasoning-inc-fb-${Date.now().toString(36)}`;
+      const outcome = await handleRunReasoning(
+        { type: "runReasoning", id: reasoningId, reasonerBackend: "konclude" },
+        { mutateSharedStore: true, includeAdded: false, emitSubjects: true, emitChange: true, emitResultEvent: false },
+      );
+      // A full run recomputes the whole inferred set from scratch → re-anchor the
+      // H2 drift counters (handleRunReasoning already re-established the baseline).
+      resetIncrementalDriftCounters();
+      const inferredCount = store.getQuads(
+        null, null, null, DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI),
+      ).length;
+      return {
+        mode: "full",
+        isConsistent: outcome.isConsistent ?? null,
+        inferredDelta: { added: inferredCount, removed: 0 },
+        unsatisfiableClasses: [],
+        moduleSize: baseTriples.length,
+        fullSize: baseTriples.length,
+        reasonedSignatureSize: sigmaDelta.size,
+      };
+    }
+
+    // M = extractStarModule(currentAxioms, Σ_Δ). includeDeclarationsForSignature so
+    // the module is a self-contained, classifiable ontology in isolation.
+    const moduleTriples = extractStarModule(baseTriples, [...sigmaDelta], {
+      includeDeclarationsForSignature: true,
+    });
+
+    // ── sig(M): the module's Σ-SYMBOLS plus its (individual) SUBJECTS ────────────
+    // C1 (SOUNDNESS — complete purge). The PURGE set must remove every existing
+    // inferred quad whose signature intersects sig(M). sig(M) here is:
+    //   • signatureOf(M) — the class/property SYMBOLS the module uses (this is the
+    //     EXACT signature the locality theory preserves; it excludes structural
+    //     builtins like rdf:type / owl:Class so they never cause a false match), and
+    //   • the SUBJECTS occurring in M — which adds the ABox INDIVIDUALS (the subject
+    //     of `a rdf:type C`), whose rdf:type entailments realization emits and whose
+    //     symbols signatureOf deliberately drops.
+    // Rationale:
+    //   • A retraction can make a previously-inferred triple `a q b` stale even
+    //     though, after the edit, `a` no longer appears as a SUBJECT in M (its
+    //     supporting axiom was removed). The OLD splice (subject ∈ moduleSubjects)
+    //     would then never remove `a q b` → UNSOUND. Because Σ_Δ now carries the
+    //     removed axiom's predicate/object (C2) and the module is built over that,
+    //     the property symbol q ∈ signatureOf(M); keying the purge on "mentions ANY
+    //     sig(M) symbol (s/p/o)" removes the stale triple.
+    //   • Re-deriving from classifying M reproduces ALL entailments over sig(M),
+    //     so purging every inferred-over-sig(M) and re-adding M's fresh inferred
+    //     cannot lose a still-valid entailment nor keep a stale one. Inferred
+    //     triples mentioning NO sig(M) term are provably unaffected (locality) and
+    //     kept — including UNRELATED rdf:type entailments about distant individuals
+    //     (their class object ∉ signatureOf(M) and their subject ∉ subjects(M)).
+    const moduleTermSet = signatureOf(moduleTriples);
+    for (const t of moduleTriples) {
+      if (t.subject) moduleTermSet.add(t.subject);
+    }
+
+    // Classify M with the SAME Konclude machinery the full path uses.
+    const konclude = getKoncludeReasoner();
+    await konclude.ready;
+    const moduleQuads = moduleTriplesToQuads(moduleTriples, DataFactory);
+    const { isConsistent, unsatisfiableClasses, inferredQuads } =
+      await konclude.classifyModule(moduleQuads as unknown as N3.Quad[]);
+
+    if (!isConsistent) {
+      // Inconsistent module ⇒ ontology inconsistent (monotonicity). Do NOT mutate
+      // the inferred graph; leave the baseline intact (still consistent at the
+      // last full run — the agent should fix the edit) but report inconsistency.
+      // Count this as an incremental step (H2 drift) even though no splice ran:
+      // the next edit is still relative to the same un-re-anchored baseline.
+      stepsSinceFull += 1;
+      accumulatedSignatureSize += sigmaDelta.size;
+      return {
+        mode: "incremental",
+        isConsistent: false,
+        inferredDelta: { added: 0, removed: 0 },
+        unsatisfiableClasses,
+        moduleSize: moduleTriples.length,
+        fullSize: baseTriples.length,
+        reasonedSignatureSize: sigmaDelta.size,
+      };
+    }
+
+    // ── Splice the delta into urn:vg:inferred ───────────────────────────────────
+    // PURGE every existing inferred quad whose signature (subject/predicate/object)
+    // intersects sig(M); then ADD ALL freshly-derived inferred quads from
+    // classifying M (no subject filter — H1: the write set must match exactly what
+    // a full run produces over sig(M), and the full path applies no such filter).
+    // Inferred quads mentioning no M term are left UNTOUCHED (locality guarantee).
+    // Store terms are SKOLEMIZED (urn:vg:bnode:*) while moduleTermSet holds the
+    // de-skolemized `_:` form, so map blank/skolemized terms before comparing.
+    const inferredGraph = DataFactory.namedNode(KONCLUDE_INFERRED_GRAPH_IRI);
+    const BNODE_PREFIX = "urn:vg:bnode:";
+    const storeTermInModule = (term: any): boolean => {
+      if (!term) return false;
+      if (term.termType === "Literal") return false;
+      if (term.termType === "BlankNode") return moduleTermSet.has(`_:${term.value}`);
+      if (term.termType === "NamedNode" && term.value.startsWith(BNODE_PREFIX)) {
+        return moduleTermSet.has(`_:${term.value.slice(BNODE_PREFIX.length)}`);
+      }
+      return moduleTermSet.has(term.value);
+    };
+    const quadMentionsModule = (q: Quad): boolean =>
+      storeTermInModule(q.subject) || storeTermInModule(q.predicate) || storeTermInModule(q.object);
+
+    const existingInferred: Quad[] = store.getQuads(null, null, null, inferredGraph) || [];
+    const baseKeys = new Set(
+      baseQuads.map((q) => `${q.subject.value}\0${q.predicate.value}\0${q.object.value}`),
+    );
+
+    let removed = 0;
+    const removedSubjects = new Set<string>();
+    for (const q of existingInferred) {
+      if (quadMentionsModule(q)) {
+        store.removeQuad(q);
+        removed++;
+        const sv = subjectTermToString(q.subject, q.subject.value);
+        if (sv) removedSubjects.add(sv);
+      }
+    }
+
+    const touchedSubjects = new Set<string>();
+    let added = 0;
+    const addSeen = new Set<string>();
+    for (const inf of inferredQuads) {
+      const skol = reskolemizeInferred(inf, DataFactory);
+      const key = `${skol.subject.value}\0${skol.predicate.value}\0${skol.object.value}`;
+      // Never write a triple that is asserted in the base graphs (parity with the
+      // full path's sourceKeys filter — classifyModule already filtered the
+      // module's own source, but a module-source triple may equal a base triple).
+      if (baseKeys.has(key)) continue;
+      if (addSeen.has(key)) continue;
+      addSeen.add(key);
+      const q = DataFactory.quad(skol.subject, skol.predicate, skol.object, inferredGraph);
+      const changed = store.addQuad(q);
+      if (changed) {
+        added++;
+        const sv = subjectTermToString(q.subject, q.subject.value);
+        if (sv) touchedSubjects.add(sv);
+      }
+    }
+
+    // Emit change + the touched subjects (carry graphName=urn:vg:inferred so the
+    // auto-reasoning effect's loop guard ignores this write — same as the full
+    // path). Include removed subjects too so the canvas drops stale inferred edges.
+    if (added > 0 || removed > 0) {
+      emitChange({ reason: "reasoningIncremental", addedCount: added, removedCount: removed });
+      for (const s of removedSubjects) touchedSubjects.add(s);
+      if (touchedSubjects.size > 0) {
+        const emission = prepareSubjectEmissionFromSet(touchedSubjects, store, DataFactory);
+        if (emission.subjects.length > 0) {
+          emitSubjects(emission.subjects, emission.quadsBySubject, emission.snapshot, {
+            reason: "reasoningIncremental",
+            graphName: "urn:vg:inferred",
+          });
+        }
+      }
+    }
+
+    // Baseline remains consistent; refresh its signature to the post-edit one so a
+    // subsequent edit's Σ_Δ is computed against the current axioms. Advance the H2
+    // drift counters (a successful incremental splice without a from-scratch run).
+    establishIncrementalBaseline(store, true);
+    stepsSinceFull += 1;
+    accumulatedSignatureSize += sigmaDelta.size;
+
+    return {
+      mode: "incremental",
+      isConsistent: true,
+      inferredDelta: { added, removed },
+      unsatisfiableClasses,
+      moduleSize: moduleTriples.length,
+      fullSize: baseTriples.length,
+      reasonedSignatureSize: sigmaDelta.size,
+    };
+  }
+
   function searchTermsInStore(
     store: any,
     payload: RDFWorkerCommandPayloads["searchTerms"],
@@ -2282,6 +2800,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           result = true;
           break;
         case "syncLoad": {
+          // Bulk load — wholesale change; the incremental baseline no longer holds.
+          invalidateIncrementalBaseline();
           const { DataFactory } = resolveN3();
           if (!DataFactory) throw new Error("n3-datafactory-unavailable");
           const store = getSharedStore();
@@ -2350,6 +2870,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           break;
         }
         case "syncRemoveGraph": {
+          // Removing a whole graph is a wholesale change — invalidate the baseline.
+          invalidateIncrementalBaseline();
           const { DataFactory } = resolveN3();
           if (!DataFactory) throw new Error("n3-datafactory-unavailable");
           const store = getSharedStore();
@@ -2472,6 +2994,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           break;
         }
         case "importSerialized": {
+          // Import is a bulk load — invalidate the incremental baseline.
+          invalidateIncrementalBaseline();
           const { DataFactory } = resolveN3();
           if (!DataFactory) throw new Error("n3-datafactory-unavailable");
           if (!payload || typeof payload !== "object" || typeof (payload as any).content !== "string") {
@@ -2692,6 +3216,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           break;
         }
         case "unloadOntologySubjects": {
+          // Unloading an ontology's subjects is a wholesale change — invalidate.
+          invalidateIncrementalBaseline();
           const { DataFactory } = resolveN3();
           if (!DataFactory) throw new Error("n3-datafactory-unavailable");
           const store = getSharedStore();
@@ -2990,6 +3516,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           break;
         }
         case "removeQuadsByNamespace": {
+          // Namespace-scoped bulk removal — invalidate the incremental baseline.
+          invalidateIncrementalBaseline();
           const { DataFactory } = resolveN3();
           if (!DataFactory) throw new Error("n3-datafactory-unavailable");
           const store = getSharedStore();
@@ -3043,6 +3571,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           break;
         }
         case "purgeNamespace": {
+          // Purging a namespace is a wholesale change — invalidate the baseline.
+          invalidateIncrementalBaseline();
           const { DataFactory } = resolveN3();
           if (!DataFactory) throw new Error("n3-datafactory-unavailable");
           const store = getSharedStore();
@@ -3117,6 +3647,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           break;
         }
         case "renameNamespaceUri": {
+          // Renaming a namespace rewrites many IRIs — invalidate the baseline.
+          invalidateIncrementalBaseline();
           const { DataFactory } = resolveN3();
           if (!DataFactory) throw new Error("n3-datafactory-unavailable");
           const store = getSharedStore();
@@ -3359,6 +3891,31 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
               : "urn:vg:data";
           const graphTerm = createGraphTerm(graphName, DataFactory);
           const touchedSubjects = new Set<string>();
+          // C2: accumulate the FULL signature (subject + predicate + non-literal
+          // object, de-skolemized to the `_:` form gatherBaseAxioms uses) of every
+          // ADDED and REMOVED quad — captured BEFORE removal for retractions. This
+          // is Σ_Δ's seed: it MUST carry the changed triple's PREDICATE and OBJECT,
+          // not just its subject, so a predicate/object-position edit (e.g.
+          // retracting `p rdfs:subPropertyOf q`) pulls p (and q) into the module and
+          // the splice can purge the now-stale inferred triples those axioms backed.
+          const changedSignatureSet = new Set<string>();
+          const SB_BNODE_PREFIX = "urn:vg:bnode:";
+          const sigTermOf = (term: any): string | null => {
+            if (!term) return null;
+            if (term.termType === "Literal") return null;
+            if (term.termType === "BlankNode") return `_:${term.value}`;
+            const v = String(term.value ?? "");
+            if (!v) return null;
+            return v.startsWith(SB_BNODE_PREFIX) ? `_:${v.slice(SB_BNODE_PREFIX.length)}` : v;
+          };
+          const recordChangedSignature = (q: any): void => {
+            const s = sigTermOf(q?.subject);
+            if (s) changedSignatureSet.add(s);
+            const p = sigTermOf(q?.predicate);
+            if (p) changedSignatureSet.add(p);
+            const o = sigTermOf(q?.object);
+            if (o) changedSignatureSet.add(o);
+          };
           let added = 0;
           let removed = 0;
 
@@ -3375,6 +3932,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
                 if (!rem.object) {
                   const matches = store.getQuads(subject, predicate, null, graphOverride) || [];
                   for (const q of matches) {
+                    recordChangedSignature(q); // capture BEFORE removal
                     store.removeQuad(q);
                     removed += 1;
                     touchedSubjects.add(subjectTermToString(q.subject));
@@ -3386,6 +3944,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
                 const matches = store.getQuads(subject, predicate, object, graphOverride) || [];
                 let handled = false;
                 for (const q of matches) {
+                  recordChangedSignature(q); // capture BEFORE removal
                   store.removeQuad(q);
                   removed += 1;
                   handled = true;
@@ -3401,6 +3960,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
                       objTerm.termType === "Literal" &&
                       String(objTerm.value || "") === lexical
                     ) {
+                      recordChangedSignature(q); // capture BEFORE removal
                       store.removeQuad(q);
                       removed += 1;
                       touchedSubjects.add(subjectTermToString(q.subject));
@@ -3417,9 +3977,18 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             const rawAdds = (payload.adds as any[]).filter(Boolean).map((a) => deserializeQuad(a, DataFactory));
             for (const quad of skolemizeQuads(rawAdds, DataFactory)) {
               try {
-                store.addQuad(quad);
-                added += 1;
-                touchedSubjects.add(subjectTermToString(quad.subject));
+                // BUG C: only count an add when store.addQuad actually changed the
+                // store (it returns false for a no-op re-add of an existing quad),
+                // mirroring importSerialized's `if (changed)` guard. N3's addQuad
+                // returns a boolean; guard for stores that return void by treating
+                // a non-false result as "changed". This makes applyBatch's `added`
+                // reflect the ACTUAL store delta so revert reporting is honest.
+                const changed = store.addQuad(quad);
+                if (changed !== false) {
+                  added += 1;
+                  touchedSubjects.add(subjectTermToString(quad.subject));
+                  recordChangedSignature(quad);
+                }
               } catch (err) {
                 console.error("[rdfManager.worker] syncBatch add failed", err);
               }
@@ -3443,9 +4012,18 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           }
 
           if (added > 0 || removed > 0) {
-            emitChange({ reason: "syncBatch", graphName, added, removed });
+            // C2: forward the full changed signature in the emission meta so the
+            // auto-incremental trigger (ReactodiaCanvas) can pass it as
+            // `changedSignature` to reasonIncremental — making predicate/object
+            // edits visible to Σ_Δ, not just subjects.
+            const changedSignature = Array.from(changedSignatureSet);
+            emitChange({ reason: "syncBatch", graphName, added, removed, changedSignature });
             if (shouldEmitSubjects && emissionSubjects.length > 0) {
-              emitSubjects(emissionSubjects, emissionQuads, emissionSnapshot);
+              emitSubjects(emissionSubjects, emissionQuads, emissionSnapshot, {
+                reason: "syncBatch",
+                graphName,
+                changedSignature,
+              });
             }
           }
 
@@ -3488,6 +4066,13 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
             result = { type: "construct", triples };
           } else if (queryResult.resultType === "void") {
             await queryResult.execute();
+            // L1 (SOUNDNESS): a SPARQL UPDATE mutates urn:vg:data directly via
+            // Comunica, BYPASSING syncBatch's changed-signature tracking — so the
+            // incremental Σ_Δ cannot see what changed. Invalidate the incremental
+            // baseline so the next reasonIncremental falls back to a full run that
+            // re-anchors from scratch (a wholesale update can never masquerade as a
+            // small Σ_Δ edit). Mirrors the bulk-mutation invalidation elsewhere.
+            invalidateIncrementalBaseline();
             // Trigger the normal subject-emission pipeline so the canvas refreshes
             const { DataFactory } = resolveN3();
             if (DataFactory) {
@@ -3617,7 +4202,15 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           // axiom (per-repair check) OR the full hitting set at once (the union
           // is the valid fix even when no single removal restores consistency).
           const p = (msg.payload ?? { removals: [] }) as {
-            removals: { subject: string; predicate: string; object: string }[];
+            removals: {
+              subject: string;
+              predicate: string;
+              object: string;
+              objectTermType?: string;
+              objectDatatype?: string;
+              objectLanguage?: string;
+              graph?: string;
+            }[];
           };
           const { StoreCls } = resolveN3();
           if (!StoreCls) throw new Error("n3-store-unavailable");
@@ -3625,23 +4218,35 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           await konclude.ready;
           const source = getSharedStore();
           const removals = p.removals ?? [];
-          // Track which requested removal keys actually matched a quad so the
-          // caller can distinguish "removed but still inconsistent" from
-          // "nothing matched" (L2). A removal whose key matches zero quads (e.g.
-          // a serialization mismatch) would otherwise leave the store unchanged
-          // and report verifiedConsistent:false as if the repair had failed.
-          const matchedKeys = new Set<string>();
-          const requestedKeys = new Set(
-            removals.map((r) => `${r.subject} ${r.predicate} ${r.object}`),
-          );
+
+          // BUG B: VERIFY must exclude the IDENTICAL triple that APPLY removes.
+          // When a removal carries object-term metadata (objectTermType +
+          // datatype/language) and/or a source graph, those must MATCH the quad —
+          // so a same-lexical "42" string in a different graph or with a different
+          // datatype is NOT treated as the repaired axiom (which would yield a
+          // false `verifiedConsistent`). Absent metadata ⇒ legacy bare-lexical,
+          // all-graph match (back-compat). The predicate is the SHARED, pure
+          // `quadMatchesRemoval` so the apply and verify notions of "same triple"
+          // cannot drift apart.
+
+          // Track which requested removals actually matched a quad so the caller
+          // can distinguish "removed but still inconsistent" from "nothing
+          // matched" (L2). A removal that matches zero quads (e.g. a serialization
+          // or graph mismatch) would otherwise leave the store unchanged and
+          // report verifiedConsistent:false as if the repair had failed.
+          const matchedIdx = new Set<number>();
           const copy = new (StoreCls as any)();
           const allQuads: Quad[] = source.getQuads(null, null, null, null);
           for (const q of allQuads) {
-            const key = `${q.subject.value} ${q.predicate.value} ${q.object.value}`;
-            if (requestedKeys.has(key)) {
-              matchedKeys.add(key);
-              continue;
+            let drop = false;
+            for (let i = 0; i < removals.length; i++) {
+              if (quadMatchesRemoval(q as unknown as MatchQuad, removals[i])) {
+                matchedIdx.add(i);
+                drop = true;
+                break;
+              }
             }
+            if (drop) continue;
             copy.addQuad(q);
           }
           const removedCount = allQuads.length - copy.size;
@@ -3649,8 +4254,8 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           result = {
             verifiedConsistent,
             removedCount,
-            requestedCount: requestedKeys.size,
-            matchedCount: matchedKeys.size,
+            requestedCount: removals.length,
+            matchedCount: matchedIdx.size,
           };
           break;
         }
@@ -3716,6 +4321,15 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           const moduleType = p.moduleType === "star" ? "star" : "bot";
           const includeOntologies = p.includeOntologies !== false;
           result = extractModuleFromStore(getSharedStore(), p.signature, moduleType, includeOntologies);
+          break;
+        }
+        case "reasonIncremental": {
+          // AUTO-INCREMENTAL REASONING — module-scoped reclassification on edit.
+          // Sound relative to a consistent baseline; falls back to a full run
+          // automatically when no such baseline exists or the edit looks like a
+          // bulk change. Returns { mode, isConsistent, inferredDelta, … }.
+          const p = (msg.payload ?? {}) as RDFWorkerCommandPayloads["reasonIncremental"];
+          result = await handleReasonIncremental(p);
           break;
         }
         default:
@@ -3869,6 +4483,14 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           if (emission.subjects.length > 0) {
             emitSubjects(emission.subjects, emission.quadsBySubject, emission.snapshot, { reason: "reasoning", graphName: "urn:vg:inferred" });
           }
+        }
+        // Auto-incremental baseline: a full run over the shared store re-arms the
+        // incremental loop. Record the consistency verdict + the current axiom
+        // signature so a subsequent edit can be re-classified module-scoped. Only
+        // when the reasoner actually produced a verdict (kIsConsistent !== null);
+        // a reasoner FAILURE leaves the baseline as-is (no false re-arm).
+        if (kIsConsistent !== null) {
+          establishIncrementalBaseline(kSharedStoreRef, kIsConsistent === true);
         }
       }
 

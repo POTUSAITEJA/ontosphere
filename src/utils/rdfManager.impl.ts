@@ -33,6 +33,14 @@ type SubjectsSubscriber = (
 const DEFAULT_GRAPH = "urn:vg:data";
 const IRI_REGEX = /^[a-z][a-z0-9+.-]*:/i;
 
+/**
+ * BUG B: a verifyRepair removal. The optional object-term metadata + source
+ * graph let VERIFY exclude the IDENTICAL triple APPLY removes (precise
+ * typed/lang literal in the correct graph). Sourced from the worker protocol so
+ * the two stay in lockstep.
+ */
+export type VerifyRepairRemoval = RDFWorkerCommandPayloads["verifyRepair"]["removals"][number];
+
 // OPFS persistence enable preference. Stored in localStorage (same browser-
 // storage pattern the rest of the app config uses) so the user's choice
 // survives a reload. Defaults to ENABLED in the real app; in test/SSR contexts
@@ -942,6 +950,51 @@ export class RDFManagerImpl {
   }
 
   /**
+   * AUTO-INCREMENTAL REASONING — re-classify ONLY the ⊤⊥*-module induced by the
+   * changed signature Σ_Δ and splice the inferred delta into urn:vg:inferred,
+   * instead of re-classifying the whole store. Sound relative to a CONSISTENT
+   * baseline established by a prior full `runReasoning`; when no such baseline
+   * exists (or the edit looks like a bulk change / Σ_Δ is empty) the worker FALLS
+   * BACK to a full run and re-establishes the baseline. The mode actually used is
+   * returned. Pass the subjects (and/or explicit class/property symbols) the edit
+   * touched; the worker expands Σ_Δ conservatively for soundness. READ-then-WRITE
+   * only on urn:vg:inferred; never mutates urn:vg:data.
+   */
+  async reasonIncremental(opts?: {
+    changedSubjects?: string[];
+    changedSignature?: string[];
+  }): Promise<{
+    mode: "incremental" | "full";
+    isConsistent: boolean | null;
+    inferredDelta: { added: number; removed: number };
+    unsatisfiableClasses: string[];
+    moduleSize: number;
+    fullSize: number;
+    reasonedSignatureSize: number;
+  }> {
+    const response = await this.worker.call("reasonIncremental", {
+      changedSubjects: opts?.changedSubjects,
+      changedSignature: opts?.changedSignature,
+    });
+    const safe = (isPlainObject(response) ? response : {}) as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+    const delta = isPlainObject(safe.inferredDelta)
+      ? (safe.inferredDelta as Record<string, unknown>)
+      : {};
+    return {
+      mode: safe.mode === "incremental" ? "incremental" : "full",
+      isConsistent: typeof safe.isConsistent === "boolean" ? safe.isConsistent : null,
+      inferredDelta: { added: num(delta.added), removed: num(delta.removed) },
+      unsatisfiableClasses: Array.isArray(safe.unsatisfiableClasses)
+        ? (safe.unsatisfiableClasses as string[])
+        : [],
+      moduleSize: num(safe.moduleSize),
+      fullSize: num(safe.fullSize),
+      reasonedSignatureSize: num(safe.reasonedSignatureSize),
+    };
+  }
+
+  /**
    * Symbolically verify a repair candidate: re-run the Konclude consistency
    * oracle on a COPY of the data store with the given axioms removed. Returns
    * true when removing those axioms makes the ontology consistent. Never
@@ -950,7 +1003,7 @@ export class RDFManagerImpl {
    * Backwards-compatible boolean wrapper around `verifyRepairDetailed`.
    */
   async verifyRepair(
-    removals: { subject: string; predicate: string; object: string }[],
+    removals: VerifyRepairRemoval[],
   ): Promise<boolean> {
     return (await this.verifyRepairDetailed(removals)).verifiedConsistent;
   }
@@ -963,7 +1016,7 @@ export class RDFManagerImpl {
    * rather than "removing this repair leaves the ontology inconsistent" (L2).
    */
   async verifyRepairDetailed(
-    removals: { subject: string; predicate: string; object: string }[],
+    removals: VerifyRepairRemoval[],
   ): Promise<{
     verifiedConsistent: boolean;
     removedCount: number;

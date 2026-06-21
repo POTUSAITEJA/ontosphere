@@ -22,6 +22,15 @@ interface LinkParams {
   p?: string; predicate?: string;
   o?: string; object?: string;
   limit?: number;
+  // BUG A — optional graph + object-term metadata so an agent applying a
+  // suggestedRepair removes the EXACT axiom (the MIPS axiom may live in
+  // urn:vg:ontologies, and its object may be a typed/lang literal). These map
+  // 1:1 onto suggestedRepairs' action.args (graph/objectDatatype/objectLanguage/
+  // objectTermType). Absent ⇒ the legacy data-graph string-coerced behaviour.
+  graphName?: string;
+  objectDatatype?: string;
+  objectLanguage?: string;
+  objectIsLiteral?: boolean;
 }
 
 export const linkTools: McpTool[] = [
@@ -98,13 +107,17 @@ export const linkTools: McpTool[] = [
   },
   {
     name: 'removeLink',
-    description: 'Remove a triple (edge) between two entities.',
+    description: 'Remove ANY triple from the RDF store, given its subject, predicate and object. Despite the name it is not limited to object-property edges: the object may be an IRI (an ABox edge or a TBox axiom such as owl:disjointWith / rdfs:subClassOf) OR a literal value (an annotation). To remove the EXACT axiom a reasoner repair points at — which may physically live in an imported ontology graph and/or carry a typed/language-tagged literal — pass the optional graphName (e.g. "urn:vg:ontologies") and, for literal objects, objectIsLiteral=true with objectDatatype/objectLanguage. These map 1:1 onto explainDiagnostics.suggestedRepairs action.args (graph / objectDatatype / objectLanguage / objectTermType), so an agent can apply a suggested repair faithfully. Omitting them targets the default data graph and coerces the object to a string/IRI (legacy behaviour).',
     inputSchema: {
       type: 'object',
       properties: {
         subjectIri: { type: 'string' },
         predicateIri: { type: 'string' },
         objectIri: { type: 'string' },
+        graphName: { type: 'string', description: 'Named graph the triple lives in (e.g. "urn:vg:ontologies"). Defaults to urn:vg:data. Required to remove an imported-schema axiom — a data-graph removal would silently match nothing.' },
+        objectIsLiteral: { type: 'boolean', description: 'Set true when the object is a literal value (not an IRI) so it is matched as a Literal term, not string-coerced into an IRI.' },
+        objectDatatype: { type: 'string', description: 'Datatype IRI of a literal object (e.g. xsd:integer) so "42"^^xsd:integer is matched exactly and a same-lexical "42" string is left untouched.' },
+        objectLanguage: { type: 'string', description: 'Language tag of a literal object (e.g. "en").' },
       },
       required: ['subjectIri', 'predicateIri', 'objectIri'],
     },
@@ -116,19 +129,49 @@ export const linkTools: McpTool[] = [
         const rawO = raw.objectIri ?? raw.object ?? raw.o;
         const subjectIri = rawS ? expandIri(rawS) : undefined;
         const predicateIri = rawP ? expandIri(rawP) : undefined;
-        const objectIri = rawO ? expandIri(rawO) : undefined;
-        if (!subjectIri || !predicateIri || !objectIri) {
+        // BUG A: a literal object is NOT an IRI — never expand-prefix it.
+        const isLiteral =
+          raw.objectIsLiteral === true ||
+          typeof raw.objectDatatype === 'string' ||
+          typeof raw.objectLanguage === 'string';
+        const objectIri = rawO
+          ? (isLiteral ? rawO : expandIri(rawO))
+          : undefined;
+        if (!subjectIri || !predicateIri || objectIri === undefined) {
           return { success: false as const, error: 'subjectIri, predicateIri, and objectIri are all required' };
         }
-        const expandError = [subjectIri, predicateIri, objectIri].find(v => v.startsWith('Unknown prefix:'));
+        const toCheck = isLiteral ? [subjectIri, predicateIri] : [subjectIri, predicateIri, objectIri];
+        const expandError = toCheck.find(v => v.startsWith('Unknown prefix:'));
         if (expandError) return { success: false as const, error: expandError };
-        rdfManager.removeTriple(subjectIri, predicateIri, objectIri);
+
+        // BUG A: target the EXACT graph + object term. removeTriple takes a 4th
+        // graphName arg and coerces a structured literal object ({value,type,
+        // datatype,language}) to a Literal term, so an agent can remove an
+        // imported-ontology axiom or a typed literal — not just a data-graph IRI.
+        const graphName = raw.graphName || 'urn:vg:data';
+        const objectArg: unknown = isLiteral
+          ? {
+              value: objectIri,
+              type: 'literal',
+              ...(raw.objectDatatype ? { datatype: raw.objectDatatype } : {}),
+              ...(raw.objectLanguage ? { language: raw.objectLanguage } : {}),
+            }
+          : objectIri;
+        rdfManager.removeTriple(subjectIri, predicateIri, objectArg, graphName);
 
         // Provenance is best-effort; a fault must not flip the successful removal.
         try {
           await getProvenanceRecorder().recordEdit({
             tool: 'removeLink',
-            removed: [{ s: subjectIri, p: predicateIri, o: objectIri, ot: classifyObjectType(objectIri) }],
+            removed: [{
+              s: subjectIri,
+              p: predicateIri,
+              o: objectIri,
+              ot: isLiteral ? 'literal' : classifyObjectType(objectIri),
+              ...(raw.graphName ? { g: raw.graphName } : {}),
+              ...(raw.objectDatatype ? { dt: raw.objectDatatype } : {}),
+              ...(raw.objectLanguage ? { lang: raw.objectLanguage } : {}),
+            }],
           });
         } catch (provErr) {
           console.warn('[removeLink] provenance recordEdit failed (mutation still applied)', provErr);

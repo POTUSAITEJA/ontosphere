@@ -124,34 +124,50 @@ const removeNode: McpTool = {
       const { iri } = params as { iri: string };
       const { ctx } = getWorkspaceRefs();
 
-      // Capture the subject's quads BEFORE deletion so the batch can be reverted.
-      // We record only triples where the node is the subject (matching what
-      // removeAllQuadsForIri targets for restoration via re-add).
-      let removedQuads: ProvQuad[] = [];
+      // Capture the node's quads BEFORE deletion so the batch can be reverted.
+      // BUG E: removeAllQuadsForIri deletes BOTH outgoing (subject-position) AND
+      // incoming (object-position) edges, so we must capture both — otherwise an
+      // incoming edge is unrevertable and the removed count under-reports.
+      // BUG D: also preserve each literal object's datatype/language so revert
+      // restores the exact typed/lang literal, not a plain xsd:string.
+      const removedQuads: ProvQuad[] = [];
       try {
-        const page = await rdfManager.fetchQuadsPage({
-          graphName: 'urn:vg:data',
-          filter: { subject: iri },
-          limit: 0,
-          serialize: true,
-        });
-        const items = (page?.items ?? []) as Array<{
+        const toProvQuad = (q: {
           subject: { value: string } | string;
           predicate: { value: string } | string;
-          object: { value: string; termType?: string } | string;
-        }>;
-        removedQuads = items.map((q) => {
+          object: { value: string; termType?: string; datatype?: string; language?: string } | string;
+        }): ProvQuad => {
           const s = typeof q.subject === 'string' ? q.subject : q.subject.value;
           const p = typeof q.predicate === 'string' ? q.predicate : q.predicate.value;
           const oVal = typeof q.object === 'string' ? q.object : q.object.value;
           const termType = typeof q.object === 'string' ? undefined : q.object.termType;
+          const datatype = typeof q.object === 'string' ? undefined : q.object.datatype;
+          const language = typeof q.object === 'string' ? undefined : q.object.language;
           const ot: ProvQuad['ot'] =
             termType === 'Literal' ? 'literal'
             : termType === 'BlankNode' ? 'bnode'
             : termType === 'NamedNode' ? 'iri'
             : classifyObjectType(oVal);
-          return { s, p, o: oVal, ot };
-        });
+          return {
+            s, p, o: oVal, ot,
+            ...(ot === 'literal' && datatype ? { dt: datatype } : {}),
+            ...(ot === 'literal' && language ? { lang: language } : {}),
+          };
+        };
+        const [outgoing, incoming] = await Promise.all([
+          rdfManager.fetchQuadsPage({ graphName: 'urn:vg:data', filter: { subject: iri }, limit: 0, serialize: true }),
+          rdfManager.fetchQuadsPage({ graphName: 'urn:vg:data', filter: { object: iri }, limit: 0, serialize: true }),
+        ]);
+        type RawQuad = Parameters<typeof toProvQuad>[0];
+        const seen = new Set<string>();
+        for (const q of [...(outgoing?.items ?? []), ...(incoming?.items ?? [])] as RawQuad[]) {
+          const pq = toProvQuad(q);
+          // De-dupe a self-loop (node is both subject and object of one triple).
+          const k = `${pq.s} ${pq.p} ${pq.o} ${pq.ot ?? ''}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          removedQuads.push(pq);
+        }
       } catch (err) {
         console.error('[removeNode] capture-before-delete failed', err);
       }
@@ -461,19 +477,26 @@ const updateNode: McpTool = {
         });
         const items = (page?.items ?? []) as Array<{
           predicate: { value: string } | string;
-          object: { value: string; termType?: string } | string;
+          object: { value: string; termType?: string; datatype?: string; language?: string } | string;
         }>;
         for (const q of items) {
           const p = typeof q.predicate === 'string' ? q.predicate : q.predicate.value;
           if (!touchedPredicates.has(p)) continue;
           const oVal = typeof q.object === 'string' ? q.object : q.object.value;
           const termType = typeof q.object === 'string' ? undefined : q.object.termType;
+          const datatype = typeof q.object === 'string' ? undefined : q.object.datatype;
+          const language = typeof q.object === 'string' ? undefined : q.object.language;
           const ot: ProvQuad['ot'] =
             termType === 'Literal' ? 'literal'
             : termType === 'BlankNode' ? 'bnode'
             : termType === 'NamedNode' ? 'iri'
             : classifyObjectType(oVal);
-          provRemoved.push({ s: iri, p, o: oVal, ot });
+          // BUG D: preserve datatype/language so revert restores the exact literal.
+          provRemoved.push({
+            s: iri, p, o: oVal, ot,
+            ...(ot === 'literal' && datatype ? { dt: datatype } : {}),
+            ...(ot === 'literal' && language ? { lang: language } : {}),
+          });
         }
       } catch (err) {
         console.error('[updateNode] capture-before-update failed', err);
