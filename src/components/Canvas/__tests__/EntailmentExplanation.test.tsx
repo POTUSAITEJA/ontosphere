@@ -141,6 +141,40 @@ describe('EntailmentExplanation', () => {
     expect(await screen.findByText(/reasoner offline/i)).toBeTruthy();
   });
 
+  it('FIX4: retries the explain when reopened after a transient error', async () => {
+    // First open fails (transient reasoner outage); reopening must retry and
+    // succeed instead of showing the stale error forever.
+    explain
+      .mockRejectedValueOnce(new Error('reasoner offline'))
+      .mockResolvedValueOnce({ isEntailed: true, justifications: [] });
+    render(<EntailmentExplanation triple={TRIPLE} explain={explain as any} />);
+
+    const trigger = openPopover();
+    expect(await screen.findByText(/reasoner offline/i)).toBeTruthy();
+    expect(explain).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(trigger); // close
+    fireEvent.click(trigger); // reopen ⇒ retry
+
+    await waitFor(() => expect(explain).toHaveBeenCalledTimes(2));
+    // The retry succeeded: the error is gone, the success branch renders.
+    expect(
+      await screen.findByText(/no detailed justification available for this relation type/i),
+    ).toBeTruthy();
+    expect(screen.queryByText(/reasoner offline/i)).toBeNull();
+  });
+
+  it('FIX4: does NOT re-run after a successful load (success is cached)', async () => {
+    explain.mockResolvedValue({ isEntailed: true, justifications: [] });
+    render(<EntailmentExplanation triple={TRIPLE} explain={explain as any} />);
+    const trigger = openPopover();
+    await waitFor(() => expect(explain).toHaveBeenCalledTimes(1));
+    fireEvent.click(trigger); // close
+    fireEvent.click(trigger); // reopen — loaded result is cached, no re-run
+    await waitFor(() => expect(explain).toHaveBeenCalledTimes(1));
+    expect(explain).toHaveBeenCalledTimes(1);
+  });
+
   it('forwards objectIsLiteral for inferred data properties', async () => {
     explain.mockResolvedValue({ isEntailed: true, justifications: [] });
     render(

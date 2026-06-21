@@ -210,8 +210,11 @@ export function EntailmentExplanation(
       e.stopPropagation();
       setOpen(prev => {
         const next = !prev;
-        // Lazy: only call the reasoner the first time the popover is opened.
-        if (next && state.status === 'idle') runExplain();
+        // Lazy: only call the reasoner when the popover opens. FIX4: treat a
+        // previous 'error' (transient reasoner failure) as retryable so
+        // reopening re-runs the explain instead of showing a stale error. A
+        // successful ('loaded') result is still cached and not re-run.
+        if (next && (state.status === 'idle' || state.status === 'error')) runExplain();
         return next;
       });
     },

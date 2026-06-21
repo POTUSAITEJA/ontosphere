@@ -110,6 +110,9 @@ export function AgentEditsPanel() {
   const mounted = useRef(true);
 
   const refresh = useCallback(() => {
+    // FIX3: no-op when unmounted so async callers (e.g. the revert finally
+    // block) cannot trigger setEdits on an unmounted component (React warning).
+    if (!mounted.current) return;
     try {
       setEdits(getProvenanceRecorder().listEdits());
     } catch (err) {

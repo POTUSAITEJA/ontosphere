@@ -12,9 +12,9 @@
 // reasoning.ts's explainDiagnostics handler. The component is presentational +
 // orchestration only; no repair selection lives here.
 
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { rdfManager } from '../../utils/rdfManager';
+import { rdfManager, type VerifyRepairRemoval } from '../../utils/rdfManager';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
@@ -60,6 +60,26 @@ function repairObjectTerm(
   return value;
 }
 
+/**
+ * BUG B: project a repair into a verifyRepair removal carrying the object-term
+ * metadata + source graph so VERIFY excludes the IDENTICAL triple the apply path
+ * removes — not a same-lexical sibling in another graph / with another datatype
+ * (which would yield a false 'verifiedConsistent'). Optional fields are only set
+ * when present (back-compat with the legacy lexical/all-graph match).
+ */
+function repairToRemoval(r: RepairSuggestion): VerifyRepairRemoval {
+  const a = r.action.args;
+  return {
+    subject: a.subjectIri!,
+    predicate: a.predicateIri!,
+    object: a.objectIri!,
+    ...(a.objectTermType ? { objectTermType: a.objectTermType } : {}),
+    ...(a.objectDatatype ? { objectDatatype: a.objectDatatype } : {}),
+    ...(a.objectLanguage ? { objectLanguage: a.objectLanguage } : {}),
+    ...(a.graph ? { graph: a.graph } : {}),
+  };
+}
+
 interface RepairSuggestionsProps {
   /**
    * Identity of the current reasoning run. Changing it re-fetches diagnostics
@@ -91,7 +111,13 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
   const [error, setError] = useState<string | null>(null);
   const [computed, setComputed] = useState<ComputedRepairs | null>(null);
   const [applied, setApplied] = useState<Record<string, boolean>>({});
+  const [applying, setApplying] = useState<Record<string, boolean>>({});
   const [rerunning, setRerunning] = useState(false);
+  // Synchronous in-flight guard: set at the very start of an apply (before any
+  // await) so a fast double-click can be rejected immediately — React state
+  // updates are async and would let a second click through before re-render.
+  const inFlight = useRef<Set<string>>(new Set());
+  const ALL_VERIFIED_KEY = '__all_verified__';
 
   // ── Load diagnostics + compute (and verify) repairs ────────────────────────
   useEffect(() => {
@@ -135,20 +161,15 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
           );
           await Promise.all(
             actionable.map(async (r) => {
-              const { subjectIri, predicateIri, objectIri } = r.action.args;
               try {
-                r.verifiedConsistent = await rdfManager.verifyRepair([
-                  { subject: subjectIri!, predicate: predicateIri!, object: objectIri! },
-                ]);
+                // BUG B: VERIFY the SAME triple APPLY removes (graph + exact
+                // typed/lang literal), not a bare lexical/all-graph match.
+                r.verifiedConsistent = await rdfManager.verifyRepair([repairToRemoval(r)]);
               } catch { /* oracle unavailable — leave undefined */ }
             }),
           );
           if (actionable.length > 0) {
-            const removals = actionable.map((r) => ({
-              subject: r.action.args.subjectIri!,
-              predicate: r.action.args.predicateIri!,
-              object: r.action.args.objectIri!,
-            }));
+            const removals: VerifyRepairRemoval[] = actionable.map(repairToRemoval);
             try {
               repairSetVerifiedConsistent = await rdfManager.verifyRepair(removals);
               for (const r of actionable) r.verifiedSet = repairSetVerifiedConsistent ?? undefined;
@@ -210,6 +231,13 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
       toast.error('This repair cannot be applied automatically.');
       return;
     }
+    // FIX1: synchronous in-flight guard. A fast double-click fires two calls
+    // before isApplied flips; without this the second applyBatch removes 0
+    // triples and shows the misleading "matched no triples" warning for a
+    // repair that actually succeeded. Reject the re-entrant click immediately.
+    if (inFlight.current.has(r.id)) return;
+    inFlight.current.add(r.id);
+    setApplying((s) => ({ ...s, [r.id]: true }));
     const graph = repairGraph(r.action.args);
     try {
       if (r.action.tool === 'removeLink') {
@@ -280,33 +308,55 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
     } catch (e) {
       console.error('Apply repair failed', e);
       toast.error('Apply failed (see console).');
+    } finally {
+      inFlight.current.delete(r.id);
+      setApplying((s) => {
+        const next = { ...s };
+        delete next[r.id];
+        return next;
+      });
     }
   }, [offerRerun]);
 
   // ── Apply the full verified hitting set in one batch ───────────────────────
   const applyAllVerified = useCallback(async (repairs: RepairSuggestion[]) => {
+    // FIX1: guard against concurrent/double invocation of the batch apply.
+    if (inFlight.current.has(ALL_VERIFIED_KEY)) return;
+    inFlight.current.add(ALL_VERIFIED_KEY);
+    setApplying((s) => ({ ...s, [ALL_VERIFIED_KEY]: true }));
     // C1 + H2: each removal carries its OWN source graph and exact object term
     // so the batch removes from urn:vg:ontologies / urn:vg:data as appropriate
     // and matches typed/lang literals precisely (applyBatch honours the per-entry
     // `graph` field; the default `DATA_GRAPH` only applies when none is recorded).
-    const removals = repairs
-      .filter(
-        (r) =>
-          r.issue === 'inconsistency' &&
-          !r.needsManualReview &&
-          r.action.tool === 'removeLink' &&
-          r.action.args.subjectIri &&
-          r.action.args.predicateIri &&
-          r.action.args.objectIri,
-      )
-      .map((r) => ({
-        subject: r.action.args.subjectIri!,
-        predicate: r.action.args.predicateIri!,
-        object: repairObjectTerm(r.action.args.objectIri!, r.action.args),
-        graph: repairGraph(r.action.args),
-      }));
+    //
+    // FIX2: build the applied-id set from the EXACT same filtered list used to
+    // build `removals` (removeLink + subject/predicate/object present), not the
+    // broader inconsistency/!needsManualReview filter. A repair lacking
+    // removeLink/objectIri is excluded from the batch, so it must NOT be marked
+    // Applied (that would be a false success).
+    const applicable = repairs.filter(
+      (r) =>
+        r.issue === 'inconsistency' &&
+        !r.needsManualReview &&
+        r.action.tool === 'removeLink' &&
+        r.action.args.subjectIri &&
+        r.action.args.predicateIri &&
+        r.action.args.objectIri,
+    );
+    const removals = applicable.map((r) => ({
+      subject: r.action.args.subjectIri!,
+      predicate: r.action.args.predicateIri!,
+      object: repairObjectTerm(r.action.args.objectIri!, r.action.args),
+      graph: repairGraph(r.action.args),
+    }));
     if (removals.length === 0) {
       toast.info('No verified repair set to apply.');
+      inFlight.current.delete(ALL_VERIFIED_KEY);
+      setApplying((s) => {
+        const next = { ...s };
+        delete next[ALL_VERIFIED_KEY];
+        return next;
+      });
       return;
     }
     try {
@@ -318,9 +368,8 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
         );
         return;
       }
-      const ids = repairs
-        .filter((r) => r.issue === 'inconsistency' && !r.needsManualReview)
-        .reduce<Record<string, boolean>>((acc, r) => { acc[r.id] = true; return acc; }, {});
+      // FIX2: only the repairs actually included in the batch are marked Applied.
+      const ids = applicable.reduce<Record<string, boolean>>((acc, r) => { acc[r.id] = true; return acc; }, {});
       setApplied((s) => ({ ...s, ...ids }));
       const partial = removed < removals.length ? ` (${removed} of ${removals.length} matched)` : '';
       toast.success(`Applied repair set — removed ${removed} axiom(s) to restore consistency${partial}`, {
@@ -347,6 +396,13 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
     } catch (e) {
       console.error('Apply all verified failed', e);
       toast.error('Apply all failed (see console).');
+    } finally {
+      inFlight.current.delete(ALL_VERIFIED_KEY);
+      setApplying((s) => {
+        const next = { ...s };
+        delete next[ALL_VERIFIED_KEY];
+        return next;
+      });
     }
   }, [offerRerun]);
 
@@ -392,6 +448,7 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
             </div>
             <Button
               size="sm"
+              disabled={!!applying[ALL_VERIFIED_KEY] || rerunning}
               onClick={() => void applyAllVerified(repairs)}
               aria-label="Apply all verified repairs to restore consistency"
             >
@@ -405,6 +462,7 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
       {repairs.map((r) => {
         const label = tripleLabel(r.action);
         const isApplied = !!applied[r.id];
+        const isApplying = !!applying[r.id];
         const verifiedAlone = r.verifiedConsistent === true;
         const verifiedAsSet = !verifiedAlone && r.verifiedSet === true;
         return (
@@ -467,7 +525,7 @@ export const RepairSuggestions = memo(({ reasoningId, isConsistent }: RepairSugg
                 <Button
                   size="sm"
                   variant={isApplied ? 'outline' : 'default'}
-                  disabled={isApplied || rerunning}
+                  disabled={isApplied || isApplying || rerunning}
                   onClick={() => void applyRepair(r)}
                   aria-label={`Apply repair ${r.id}: ${r.rationale}`}
                 >

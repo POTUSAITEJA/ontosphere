@@ -140,6 +140,51 @@ describe('AgentEditsPanel', () => {
     expect(screen.getByText('No agent edits yet')).toBeTruthy();
   });
 
+  it('FIX3: a revert that resolves AFTER unmount does not setState (no warning/throw)', async () => {
+    // Hold the revert open so we can unmount before it resolves; the finally
+    // block then runs against an unmounted component. refresh() must no-op.
+    let resolveRevert: (v: unknown) => void = () => {};
+    revertBatch.mockReturnValue(
+      new Promise((res) => {
+        resolveRevert = res;
+      }),
+    );
+    // Spy on console to assert React does not warn about setState-on-unmounted,
+    // and listEdits to assert refresh() did not run after unmount.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { unmount } = render(<AgentEditsPanel />);
+    const revertButton = screen.getByRole('button', { name: 'Revert addNode edit' });
+    fireEvent.click(revertButton);
+    await waitFor(() => expect(revertBatch).toHaveBeenCalledWith('batch-a'));
+
+    // Unmount while the revert is still in flight.
+    unmount();
+    const callsAfterUnmount = listEdits.mock.calls.length;
+
+    // Resolve the revert AFTER unmount — the finally block runs now.
+    await act(async () => {
+      resolveRevert({
+        success: true,
+        reverted: { addedRemoved: 2, removedRestored: 0 },
+        requested: { addedToRemove: 2, removedToRestore: 0 },
+      });
+      await Promise.resolve();
+    });
+
+    // refresh() no-ops when unmounted: listEdits was not called again.
+    expect(listEdits.mock.calls.length).toBe(callsAfterUnmount);
+    // No React "setState on unmounted component" warning.
+    const warned = [...errorSpy.mock.calls, ...warnSpy.mock.calls]
+      .flat()
+      .some((arg) => typeof arg === 'string' && /unmounted/i.test(arg));
+    expect(warned).toBe(false);
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
   it('auto-refreshes when the provenance change emitter fires', () => {
     listEdits.mockReturnValue([]);
     render(<AgentEditsPanel />);

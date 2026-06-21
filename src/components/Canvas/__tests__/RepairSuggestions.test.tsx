@@ -249,6 +249,21 @@ describe('RepairSuggestions', () => {
     expect(expected[0].action.args.objectDatatype).toBe(XSD_INT);
 
     render(<RepairSuggestions reasoningId="rh2" isConsistent={false} />);
+
+    // BUG B: VERIFY must target the SAME typed-literal triple APPLY removes. The
+    // verifyRepair call (fired on load) carries objectTermType + datatype + graph,
+    // so it cannot "succeed" against a same-lexical "42" string sibling.
+    await waitFor(() => expect(hoisted.rdf.verifyRepair).toHaveBeenCalled());
+    const verifyRemovals = hoisted.rdf.verifyRepair.mock.calls[0][0];
+    expect(verifyRemovals[0]).toMatchObject({
+      subject: `${EX}i`,
+      predicate: EX_AGE,
+      object: '42',
+      objectTermType: 'Literal',
+      objectDatatype: XSD_INT,
+      graph: 'urn:vg:data',
+    });
+
     const applyBtn = await screen.findByRole('button', { name: /Apply repair/i });
     fireEvent.click(applyBtn);
 
@@ -299,6 +314,128 @@ describe('RepairSuggestions', () => {
     expect(Array.isArray(changes.removes)).toBe(true);
     expect(changes.removes.length).toBe(2);
     expect(changes.adds).toEqual([]);
+  });
+
+  it('FIX1: a fast double-click on "Apply fix" applies the repair only once', async () => {
+    primeConsistentInconsistency();
+    // applyBatch is held open so the second click lands while the first call is
+    // still in flight (isApplied has not flipped yet).
+    let resolveApply: (v: { added: number; removed: number }) => void = () => {};
+    const applyPromise = new Promise<{ added: number; removed: number }>((res) => {
+      resolveApply = res;
+    });
+    hoisted.rdf.applyBatch.mockReturnValue(applyPromise);
+
+    render(<RepairSuggestions reasoningId="rf1" isConsistent={false} />);
+    const applyBtn = await screen.findByRole('button', { name: /Apply repair/i });
+
+    // Two rapid clicks before the first applyBatch resolves.
+    fireEvent.click(applyBtn);
+    fireEvent.click(applyBtn);
+
+    // The in-flight guard rejected the second click synchronously.
+    expect(hoisted.rdf.applyBatch).toHaveBeenCalledTimes(1);
+
+    // Resolve the first apply; still exactly one call (no late second fire).
+    resolveApply({ added: 0, removed: 1 });
+    await waitFor(() => expect(hoisted.toast.success).toHaveBeenCalled());
+    expect(hoisted.rdf.applyBatch).toHaveBeenCalledTimes(1);
+    // No misleading "matched no triples" warning for a repair that succeeded.
+    expect(hoisted.toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('FIX1: a fast double-click on "Apply all verified" applies the set only once', async () => {
+    const twoJustifs = [
+      [
+        { subject: `${EX}i`, predicate: RDF_TYPE, object: `${EX}A` },
+        { subject: `${EX}A`, predicate: OWL_DISJOINT, object: `${EX}B` },
+        { subject: `${EX}i`, predicate: RDF_TYPE, object: `${EX}B` },
+      ],
+      [
+        { subject: `${EX}j`, predicate: RDF_TYPE, object: `${EX}C` },
+        { subject: `${EX}C`, predicate: OWL_DISJOINT, object: `${EX}D` },
+        { subject: `${EX}j`, predicate: RDF_TYPE, object: `${EX}D` },
+      ],
+    ];
+    hoisted.rdf.explainInconsistency.mockResolvedValue(twoJustifs);
+    hoisted.rdf.getUnsatisfiableClasses.mockResolvedValue([]);
+    hoisted.rdf.runShaclValidation.mockResolvedValue({ conforms: true, violations: [], shapeCount: 0 });
+    hoisted.rdf.verifyRepair.mockImplementation((removals: { subject: string }[]) =>
+      Promise.resolve(removals.length > 1),
+    );
+    let resolveApply: (v: { added: number; removed: number }) => void = () => {};
+    const applyPromise = new Promise<{ added: number; removed: number }>((res) => {
+      resolveApply = res;
+    });
+    hoisted.rdf.applyBatch.mockReturnValue(applyPromise);
+
+    render(<RepairSuggestions reasoningId="rf2" isConsistent={false} />);
+    const applyAllBtn = await screen.findByRole('button', { name: /Apply all verified repairs/i });
+
+    fireEvent.click(applyAllBtn);
+    fireEvent.click(applyAllBtn);
+
+    // Only the first invocation reached applyBatch.
+    expect(hoisted.rdf.applyBatch).toHaveBeenCalledTimes(1);
+    resolveApply({ added: 0, removed: 2 });
+    await waitFor(() => expect(hoisted.toast.success).toHaveBeenCalled());
+    expect(hoisted.rdf.applyBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('FIX2: applyAllVerified marks Applied ONLY the repairs actually included in the batch', async () => {
+    // Inject a mixed repair set: one real removeLink repair (in the batch) and
+    // one inconsistency+!needsManualReview repair that lacks an objectIri (so it
+    // is excluded from `removals` and must NOT be marked Applied).
+    const computeMod = await import('../../../mcp/tools/computeRepairs');
+    const spy = vi.spyOn(computeMod, 'computeRepairs').mockReturnValue([
+      {
+        id: 'R1',
+        issue: 'inconsistency',
+        action: {
+          tool: 'removeLink',
+          args: { subjectIri: `${EX}i`, predicateIri: RDF_TYPE, objectIri: `${EX}A` },
+        },
+        rationale: 'Real repair included in the batch',
+      },
+      {
+        id: 'R2',
+        issue: 'inconsistency',
+        // inconsistency + !needsManualReview but missing objectIri ⇒ excluded
+        // from removals. Under the old broad filter this was wrongly marked Applied.
+        action: {
+          tool: 'removeLink',
+          args: { subjectIri: `${EX}j`, predicateIri: RDF_TYPE },
+        },
+        rationale: 'Repair NOT applied (missing object)',
+      },
+    ] as ReturnType<typeof computeMod.computeRepairs>);
+
+    hoisted.rdf.explainInconsistency.mockResolvedValue([[{ subject: `${EX}i`, predicate: RDF_TYPE, object: `${EX}A` }]]);
+    hoisted.rdf.getUnsatisfiableClasses.mockResolvedValue([]);
+    hoisted.rdf.runShaclValidation.mockResolvedValue({ conforms: true, violations: [], shapeCount: 0 });
+    hoisted.rdf.verifyRepair.mockResolvedValue(true);
+    // Only the single valid removal is in the batch.
+    hoisted.rdf.applyBatch.mockResolvedValue({ added: 0, removed: 1 });
+
+    render(<RepairSuggestions reasoningId="rf3" isConsistent={false} />);
+
+    const applyAllBtn = await screen.findByRole('button', { name: /Apply all verified repairs/i });
+    fireEvent.click(applyAllBtn);
+
+    await waitFor(() => expect(hoisted.rdf.applyBatch).toHaveBeenCalled());
+    const [changes] = hoisted.rdf.applyBatch.mock.calls[0];
+    // Only the well-formed repair was sent to the batch.
+    expect(changes.removes.length).toBe(1);
+    expect(changes.removes[0].subject).toBe(`${EX}i`);
+
+    // R1 (applied) shows "Applied"; R2 (excluded) must NOT — its button stays "Apply fix".
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Apply repair R1/i }).textContent).toMatch(/Applied/);
+    });
+    expect(screen.getByRole('button', { name: /Apply repair R2/i }).textContent).toMatch(/Apply fix/);
+    expect(screen.getByRole('button', { name: /Apply repair R2/i }).textContent).not.toMatch(/Applied/);
+
+    spy.mockRestore();
   });
 
   it('shows the consistent/conformant empty state when there are no issues', async () => {
