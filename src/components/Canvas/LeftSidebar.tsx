@@ -15,6 +15,7 @@ import {
   Download,
   Settings,
   Sparkles,
+  Workflow,
   Bot,
   HelpCircle,
   Shield,
@@ -267,7 +268,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
               <TooltipPrimitive.Root>
                 <TooltipPrimitive.Trigger asChild>
                   <button className="rail-btn" onClick={() => { setOpenAccordions(['workflows']); onToggle(); }} aria-label="Workflows">
-                    <Sparkles className="h-[18px] w-[18px]" />
+                    <Workflow className="h-[18px] w-[18px]" />
                     <span>Flows</span>
                   </button>
                 </TooltipPrimitive.Trigger>
@@ -471,7 +472,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 <AccordionItem value="workflows" className="border-none">
                   <AccordionTrigger className="px-3 py-2 hover:bg-accent/5">
                     <div className="flex items-center gap-2 text-foreground">
-                      <Sparkles className="h-4 w-4 text-primary" />
+                      <Workflow className="h-4 w-4 text-primary" />
                       <span className="text-sm font-medium">Workflows</span>
                     </div>
                   </AccordionTrigger>
