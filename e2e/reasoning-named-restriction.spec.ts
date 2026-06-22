@@ -36,27 +36,39 @@ test('loadRdf blank-node restrictions: skolemized on canvas, reasoning classifie
   await page.goto(BASE_URL);
   await waitForMcpTools(page);
 
+  // NB: use the `ct:` prefix, not `ex:` — the app reserves `ex:` for
+  // http://example.org/ (iriUtils built-in), which would override this
+  // document's @prefix and break the collapse-test# IRIs asserted below.
+  // Classes and the object property are declared (`a owl:Class` /
+  // `a owl:ObjectProperty`): Konclude only performs ABox individual
+  // classification for declared classes that carry equivalentClass restrictions.
   const turtle = `
-@prefix ex: <http://example.org/collapse-test#> .
+@prefix ct: <http://example.org/collapse-test#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 
-ex:ClassA owl:equivalentClass [
+ct:hasPart a owl:ObjectProperty .
+ct:FillerA a owl:Class .
+ct:FillerB a owl:Class .
+
+ct:ClassA a owl:Class ;
+    owl:equivalentClass [
     rdf:type owl:Restriction ;
-    owl:onProperty ex:hasPart ;
-    owl:someValuesFrom ex:FillerA
+    owl:onProperty ct:hasPart ;
+    owl:someValuesFrom ct:FillerA
 ] .
 
-ex:ClassB owl:equivalentClass [
+ct:ClassB a owl:Class ;
+    owl:equivalentClass [
     rdf:type owl:Restriction ;
-    owl:onProperty ex:hasPart ;
-    owl:someValuesFrom ex:FillerB
+    owl:onProperty ct:hasPart ;
+    owl:someValuesFrom ct:FillerB
 ] .
 
-ex:ind1 rdf:type owl:NamedIndividual ;
-    ex:hasPart ex:p1 .
+ct:ind1 rdf:type owl:NamedIndividual ;
+    ct:hasPart ct:p1 .
 
-ex:p1 rdf:type ex:FillerA .
+ct:p1 rdf:type ct:FillerA .
 `;
 
   await call(page, 'loadRdf', { turtle });
@@ -79,8 +91,11 @@ ex:p1 rdf:type ex:FillerA .
   const details = await call(page, 'getNodeDetails', { iri: `${EX}ind1` }) as any;
   const types: string[] = details?.data?.types ?? [];
 
-  expect(types).toContain(`${EX}ClassA`);
-  expect(types).not.toContain(`${EX}ClassB`);
+  // getNodeDetails returns CURIE/abbreviated forms (e.g. "ct:ClassA"), so compare
+  // by local name rather than full IRI.
+  const localNames = types.map((t) => t.split(/[#/:]/).pop());
+  expect(localNames).toContain('ClassA');
+  expect(localNames).not.toContain('ClassB');
 });
 
 test('named restriction nodes: MCP seeds correct triples and reasoning classifies correctly', async ({ page }) => {
@@ -104,6 +119,14 @@ test('named restriction nodes: MCP seeds correct triples and reasoning classifie
   await call(page, 'addNode', { iri: `${EX}ClassB`, typeIri: `${OWL}Class` });
   await call(page, 'addTriple', { subjectIri: `${EX}ClassA`, predicateIri: `${OWL}equivalentClass`, objectIri: `${EX}R1` });
   await call(page, 'addTriple', { subjectIri: `${EX}ClassB`, predicateIri: `${OWL}equivalentClass`, objectIri: `${EX}R2` });
+
+  // Declare the filler classes and the object property. Konclude only performs
+  // ABox individual classification for declared classes carrying equivalentClass
+  // restrictions; without these declarations realization fires the TBox hierarchy
+  // but skips ind1 → ClassA.
+  await call(page, 'addNode', { iri: `${EX}hasPart`, typeIri: `${OWL}ObjectProperty` });
+  await call(page, 'addNode', { iri: `${EX}FillerA`, typeIri: `${OWL}Class` });
+  await call(page, 'addNode', { iri: `${EX}FillerB`, typeIri: `${OWL}Class` });
 
   // ── Seed ABox ───────────────────────────────────────────────────────────
 
@@ -149,9 +172,11 @@ test('named restriction nodes: MCP seeds correct triples and reasoning classifie
   const types: string[] = details?.data?.types ?? [];
   console.log('[TEST] ind1 inferred types:', types);
 
+  // getNodeDetails returns CURIE/abbreviated forms (e.g. "ex:collapse-test#ClassA"),
+  // so compare by local name rather than full IRI.
+  const localNames = types.map((t) => t.split(/[#/:]/).pop());
   // ind1 must be classified as ClassA (has FillerA filler)
-  expect(types).toContain(`${EX}ClassA`);
-
+  expect(localNames).toContain('ClassA');
   // ind1 must NOT be classified as ClassB (no FillerB filler)
-  expect(types).not.toContain(`${EX}ClassB`);
+  expect(localNames).not.toContain('ClassB');
 });

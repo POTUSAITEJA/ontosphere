@@ -268,7 +268,12 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
         className="absolute inset-0 z-50 flex items-start justify-center bg-black/60 pt-4"
         onMouseDown={e => { if (e.target === e.currentTarget) onOpenChange(false); }}
       >
-        <div className="w-full max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Reasoning report"
+          className="w-full max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200"
+        >
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-lg font-semibold">Reasoning Report</h2>
             <button onClick={() => onOpenChange(false)} className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent transition-colors">
@@ -307,6 +312,9 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
     >
       <div
         ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Reasoning report"
         className="w-full max-w-[min(90%,64rem)] max-h-[calc(100%-2rem)] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200"
       >
         {/* Header */}

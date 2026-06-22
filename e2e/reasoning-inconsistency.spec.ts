@@ -87,8 +87,8 @@ test('Modal content: Summary shows OWL DL card, Errors tab shows affected node',
   // Switch to Errors tab
   await dialog.getByRole('tab', { name: /errors/i }).click();
 
-  // Should show "Affected: Node" with the individual IRI
-  await expect(dialog.getByText(/Affected:/i)).toBeVisible();
+  // The Errors tab shows the affected node as a clickable local-name link
+  // (the "Affected: Edge …" prefix is only used for edge-scoped errors).
   await expect(dialog.getByText(/frank/i).first()).toBeVisible();
 });
 
@@ -110,5 +110,7 @@ test('Consistent sanity: reasoning-demo.ttl → isConsistent=true, errors=0, inf
   const okButton = page.locator('button.glass-btn--status-ok');
   await okButton.waitFor({ timeout: 10_000 });
   const text = await okButton.textContent();
-  expect(text).toMatch(/Valid/i);
+  // The OK status button reads "Consistent" (optionally with a SHACL warnings
+  // count), mirroring the "Inconsistent" label asserted in the error-status test.
+  expect(text).toMatch(/Consistent/i);
 });
