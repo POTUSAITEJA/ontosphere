@@ -22,6 +22,14 @@ export function createPyodideWorkerRuntime(
   let initializationPromise: Promise<any> | null = null;
   const loadedPackages = new Set<string>();
 
+  // SharedArrayBuffer for blocking input requests
+  let signalBuffer: SharedArrayBuffer | null = null;
+  let textBuffer: SharedArrayBuffer | null = null;
+  let signalView: Int32Array | null = null;
+  let textView: Uint8Array | null = null;
+  const INPUT_TIMEOUT_MS = 30_000;
+  const TEXT_BUFFER_SIZE = 8192;
+
   function post(message: any) {
     try {
       postMessage(message);
@@ -59,6 +67,116 @@ export function createPyodideWorkerRuntime(
     });
   }
 
+  function emitStdout(text: string) {
+    post({ type: 'event', event: 'stdout', payload: { text, timestamp: Date.now() } });
+  }
+
+  function emitStderr(text: string) {
+    post({ type: 'event', event: 'stderr', payload: { text, timestamp: Date.now() } });
+  }
+
+  function setupStdioCapture() {
+    if (!pyodide) return;
+    try {
+      pyodide.globals.set('__vg_emit', (channel: string, text: string) => {
+        if (channel === 'stdout') emitStdout(text);
+        else if (channel === 'stderr') emitStderr(text);
+      });
+
+      pyodide.runPython(`
+import sys
+
+class _VGWriter:
+    def __init__(self, channel, original):
+        self._channel = channel
+        self._original = original
+    def write(self, text):
+        if text and text != '\\n':
+            __vg_emit(self._channel, text)
+        if self._original:
+            self._original.write(text)
+    def flush(self):
+        if self._original:
+            self._original.flush()
+
+sys.stdout = _VGWriter('stdout', sys.stdout)
+sys.stderr = _VGWriter('stderr', sys.stderr)
+`);
+    } catch (err) {
+      console.warn('[pyodide.runtime] Failed to set up stdio capture, continuing without it', err);
+    }
+  }
+
+  function setupInputBlocking() {
+    if (typeof SharedArrayBuffer === 'undefined') {
+      console.warn('[pyodide.runtime] SharedArrayBuffer not available — request_input disabled');
+      if (pyodide) {
+        pyodide.runPython(`
+def request_input(prompt, input_type='text', options=None, default_value=None):
+    raise RuntimeError('request_input() requires SharedArrayBuffer (COOP/COEP headers). Not available in this environment.')
+`);
+      }
+      return;
+    }
+
+    signalBuffer = new SharedArrayBuffer(8);
+    textBuffer = new SharedArrayBuffer(TEXT_BUFFER_SIZE);
+    signalView = new Int32Array(signalBuffer);
+    textView = new Uint8Array(textBuffer);
+
+    post({
+      type: 'event',
+      event: 'init_buffers',
+      payload: { signalBuffer, textBuffer },
+    });
+
+    if (!pyodide) return;
+
+    let requestCounter = 0;
+    pyodide.globals.set('__vg_request_input', (
+      prompt: string,
+      inputType: string,
+      optionsJson: string,
+      defaultValue: string,
+    ) => {
+      if (!signalView || !textView) throw new Error('Input buffers not initialized');
+
+      const requestId = `input-${++requestCounter}`;
+      Atomics.store(signalView, 0, 0); // waiting
+      Atomics.store(signalView, 1, 0);
+
+      const options = optionsJson ? JSON.parse(optionsJson) : undefined;
+      post({
+        type: 'event',
+        event: 'input_request',
+        payload: { requestId, prompt, inputType: inputType || 'text', options, defaultValue: defaultValue || undefined },
+      });
+
+      const waitResult = Atomics.wait(signalView, 0, 0, INPUT_TIMEOUT_MS);
+      const state = Atomics.load(signalView, 0);
+
+      if (waitResult === 'timed-out' || state === 0) {
+        throw new Error(`request_input() timed out after ${INPUT_TIMEOUT_MS / 1000}s waiting for user response`);
+      }
+      if (state === -1) {
+        throw new Error('request_input() was cancelled by the user');
+      }
+
+      const byteLength = Atomics.load(signalView, 1);
+      if (byteLength === 0) return '';
+      const decoder = new TextDecoder();
+      return decoder.decode(textView.slice(0, byteLength));
+    });
+
+    pyodide.runPython(`
+import json as _json
+
+def request_input(prompt, input_type='text', options=None, default_value=None):
+    options_json = _json.dumps(options) if options else ''
+    return __vg_request_input(prompt, input_type or 'text', options_json, default_value or '')
+`);
+  }
+
   async function ensurePyodide(pyodideUrl?: string): Promise<any> {
     if (pyodide) return pyodide;
     if (initializationPromise) return initializationPromise;
@@ -88,7 +206,10 @@ export function createPyodideWorkerRuntime(
         });
         
         emitProgress('Pyodide ready', 100);
-        
+
+        setupStdioCapture();
+        setupInputBlocking();
+
         console.log('[pyodide.runtime] Initialized Pyodide', pyodide.version);
         return pyodide;
       } catch (err) {
