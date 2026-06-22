@@ -3,7 +3,7 @@
 // Agent-edit audit & undo surface. Reads/writes the in-memory PROV-O journal
 // maintained by the ProvenanceRecorder (mirrored into urn:vg:provenance).
 import type { McpTool, McpResult } from '@/mcp/types';
-import { getProvenanceRecorder } from '@/mcp/provenance';
+import { getProvenanceRecorder, type EvictionWarning } from '@/mcp/provenance';
 
 const listAgentEdits: McpTool = {
   name: 'listAgentEdits',
@@ -25,10 +25,27 @@ const listAgentEdits: McpTool = {
   async handler(params): Promise<McpResult> {
     try {
       const { limit } = (params ?? {}) as { limit?: number };
-      const edits = getProvenanceRecorder().listEdits(
+      const recorder = getProvenanceRecorder();
+      const edits = recorder.listEdits(
         typeof limit === 'number' && limit > 0 ? limit : undefined,
       );
-      return { success: true, data: { edits, count: edits.length } };
+      const state = recorder.getState();
+      const result: Record<string, unknown> = { edits, count: edits.length };
+      if (state.evictionWarning) {
+        // Surface the warning so the caller knows revert history was truncated.
+        const w: EvictionWarning = state.evictionWarning;
+        result.evictionWarning = {
+          evictedCount: w.evictedCount,
+          revertibleDropped: w.revertibleDropped,
+          droppedBatchIds: w.droppedBatchIds,
+          message:
+            w.revertibleDropped > 0
+              ? `${w.revertibleDropped} revertible batch(es) were evicted from the journal ` +
+                `(cap=${state.cap}). One-click reversal history has been truncated.`
+              : `${w.evictedCount} already-reverted batch(es) evicted (cap=${state.cap}).`,
+        };
+      }
+      return { success: true, data: result };
     } catch (e) {
       return { success: false, error: String(e) };
     }

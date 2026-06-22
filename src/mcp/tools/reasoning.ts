@@ -9,8 +9,10 @@ import { buildRepairBrief, type DiagnosticsData } from './diagnosticsBrief';
 import {
   computeRepairs,
   addWeakeningRepairs,
+  annotateDeletionMinimality,
   type RepairSuggestion,
   type WeakeningContext,
+  type DeletionRemoval,
 } from './computeRepairs';
 import { buildClassHierarchy, buildDirectEdgeMap } from './axiomWeakening';
 import type { VerifyRepairRemoval } from '@/utils/rdfManager';
@@ -442,6 +444,29 @@ const explainDiagnostics: McpTool = {
             for (const r of deletionSet) r.verifiedSet = detailed.verifiedConsistent;
           } catch {
             // Oracle unavailable — leave repairSetVerifiedConsistent null.
+          }
+
+          // 3. BOUNDED subset-minimality verification (live wiring of
+          //    annotateDeletionMinimality). The greedy/irredundant hitting set
+          //    above is minimal-by-heuristic (no single member redundant) but NOT
+          //    proven minimum-cardinality; a genuinely smaller sub-collection may
+          //    still restore consistency once the REAL reasoner is consulted. We
+          //    run the bounded smallest-first subset search using the SAME
+          //    store-copy oracle (verifyRepairDetailed) the full-set check uses —
+          //    each invocation operates on a store COPY and never mutates the
+          //    author's graph. The search annotates each verified deletion repair
+          //    with `minimalityVerified`. Above the bound the search is skipped
+          //    (minimalityVerified:false, irredundant fallback). Guarded so it is
+          //    a no-op when no reasoner is available and NEVER throws into the
+          //    diagnosis path (matches current best-effort verification behaviour).
+          try {
+            const reasonerCheck = async (removals: DeletionRemoval[]): Promise<boolean> =>
+              (await rdfManager.verifyRepairDetailed(removals as VerifyRepairRemoval[]))
+                .verifiedConsistent;
+            await annotateDeletionMinimality(suggestedRepairs, reasonerCheck);
+          } catch {
+            // Oracle unavailable or search failed — leave minimalityVerified
+            // undefined on the repairs (unchanged pure-path behaviour).
           }
         }
       }

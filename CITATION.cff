@@ -13,6 +13,11 @@ abstract: >
   integration. All computation runs entirely client-side in the browser against
   an in-memory RDF store backed by Web Workers — no backend required.
 authors:
+  - family-names: Potu
+    given-names: Sai Teja
+    affiliation: "Fraunhofer Institute for Mechanics of Materials IWM"
+    email: "sai.teja.potu@iwm.fraunhofer.de"
+    orcid: "https://orcid.org/0009-0007-7468-3544"
   - family-names: Hanke
     given-names: Thomas
     affiliation: "Fraunhofer Institute for Mechanics of Materials IWM"
@@ -40,5 +45,5 @@ keywords:
 identifiers:
   - type: doi
     value: "10.5281/zenodo.19605270"
-    description: "Concept DOI — always resolves to the latest release"
+    description: "Concept DOI — always resolves to the latest release. Version DOI is minted on each Zenodo release; update this file and .zenodo.json at release time."
 type: software

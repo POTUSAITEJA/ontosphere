@@ -172,8 +172,9 @@ describe('explainDiagnostics', () => {
     // The brief must NOT read a per-axiom false as "this repair is wrong".
     expect(res.data.repairBrief).toContain('apply the full repair set');
     expect(res.data.repairBrief).toContain('restore consistency');
-    // verifyRepairDetailed was called once with ALL removals.
-    expect(mockVerifyRepairDetailed).toHaveBeenCalledTimes(1);
+    // The FIRST verifyRepairDetailed call carries ALL removals (the full-set
+    // check); any subsequent calls are the bounded subset-minimality search.
+    expect(mockVerifyRepairDetailed).toHaveBeenCalled();
     expect(mockVerifyRepairDetailed.mock.calls[0][0]).toHaveLength(2);
   });
 
@@ -218,8 +219,9 @@ describe('explainDiagnostics', () => {
       graph: 'urn:vg:ontologies',
     });
 
-    // The full-set verifyRepairDetailed carries the same metadata.
-    expect(mockVerifyRepairDetailed).toHaveBeenCalledTimes(1);
+    // The FIRST (full-set) verifyRepairDetailed call carries the same metadata;
+    // any subsequent calls are the bounded subset-minimality search.
+    expect(mockVerifyRepairDetailed).toHaveBeenCalled();
     const fullSet = mockVerifyRepairDetailed.mock.calls[0][0];
     expect(fullSet[0]).toMatchObject({
       objectTermType: 'Literal',

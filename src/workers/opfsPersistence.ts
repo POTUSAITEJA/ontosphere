@@ -53,6 +53,40 @@
 import * as N3 from "n3";
 import type { Quad } from "@rdfjs/types";
 
+// ---------------------------------------------------------------------------
+// Web Locks API minimal types (not in lib.dom for all TS versions; defined
+// locally so we don't add a tsconfig lib dependency just for one narrow API).
+// ---------------------------------------------------------------------------
+interface Lock { readonly name: string; readonly mode: string; }
+interface LockRequestOptions { mode?: "exclusive" | "shared"; ifAvailable?: boolean; steal?: boolean; }
+interface LockManager {
+  request<T>(name: string, options: LockRequestOptions, callback: (lock: Lock | null) => Promise<T>): Promise<T>;
+  request<T>(name: string, callback: (lock: Lock | null) => Promise<T>): Promise<T>;
+}
+
+/**
+ * Feature-detect and return the Web Locks API, or null when unavailable.
+ * Checks both `navigator.locks` (main thread / dedicated worker) and
+ * `globalThis.navigator?.locks` (worker) to cover all contexts.
+ */
+function resolveLocks(): LockManager | null {
+  try {
+    const nav: unknown =
+      typeof navigator !== "undefined"
+        ? navigator
+        : typeof globalThis !== "undefined" && "navigator" in globalThis
+          ? (globalThis as { navigator?: unknown }).navigator
+          : undefined;
+    const locks = (nav as { locks?: unknown } | undefined)?.locks;
+    if (locks && typeof (locks as LockManager).request === "function") {
+      return locks as LockManager;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 /** The four durable named graphs persisted to OPFS, in deterministic order. */
 export const PERSISTED_GRAPHS = [
   "urn:vg:data",
@@ -205,6 +239,17 @@ export function loadQuadsIntoStore(store: PersistableStore, quads: Quad[]): numb
   return loaded;
 }
 
+/**
+ * Signal emitted (via `onLockConflict`) when the Web Locks API is available but
+ * the persistence lock is already held by another tab. The UI can use this to
+ * show a non-blocking warning instead of silently no-oping on the write.
+ */
+export interface LockConflictSignal {
+  lockName: string;
+  /** ISO-8601 timestamp of the conflict detection. */
+  at: string;
+}
+
 export interface OpfsPersistenceOptions {
   backend: PersistenceBackend | null;
   enabled?: boolean;
@@ -212,6 +257,19 @@ export interface OpfsPersistenceOptions {
   timer?: TimerLike;
   /** Optional logger; defaults to a single console.debug line. */
   log?: (message: string, detail?: unknown) => void;
+  /**
+   * Name of the Web Locks API lock to acquire around each write. Defaults to
+   * `"opfs-persistence-write"`. Concurrent writers (e.g. two browser tabs) will
+   * serialize rather than clobber. Set to `null` to disable locking even when
+   * `navigator.locks` is available (useful in tests that don't mock it).
+   */
+  lockName?: string | null;
+  /**
+   * Callback invoked (at most once per write attempt) when the lock is held by
+   * another tab and the write is deferred/blocked. Consumers can show a warning
+   * instead of discovering the single-tab limitation silently.
+   */
+  onLockConflict?: (signal: LockConflictSignal) => void;
 }
 
 const DEFAULT_DEBOUNCE_MS = 2000;
@@ -227,12 +285,17 @@ const DEFAULT_DEBOUNCE_MS = 2000;
  *   persistence for the session and logs a single warning — the in-memory graph
  *   is never affected.
  */
+/** Default lock name for serialising concurrent tab writes. */
+export const DEFAULT_LOCK_NAME = "opfs-persistence-write";
+
 export class OpfsPersistence {
   private readonly backend: PersistenceBackend | null;
   private enabled: boolean;
   private readonly debounceMs: number;
   private readonly timer: TimerLike;
   private readonly log: (message: string, detail?: unknown) => void;
+  private readonly lockName: string | null;
+  private readonly onLockConflict: ((signal: LockConflictSignal) => void) | null;
   private pendingStore: PersistableStore | null = null;
   private writing = false;
   private rewriteQueued = false;
@@ -252,6 +315,9 @@ export class OpfsPersistence {
           /* ignore logging failures */
         }
       });
+    // `null` explicitly disables locking; `undefined` → use the default name.
+    this.lockName = options.lockName === null ? null : (options.lockName ?? DEFAULT_LOCK_NAME);
+    this.onLockConflict = options.onLockConflict ?? null;
   }
 
   /** True only when OPFS is available AND the user preference is enabled. */
@@ -301,6 +367,66 @@ export class OpfsPersistence {
       this.rewriteQueued = true;
       return;
     }
+
+    // Web Locks API guard: acquire an exclusive lock so concurrent tabs
+    // serialize their writes rather than clobbering each other. We feature-
+    // detect here (not at construction) so a late polyfill or test injection
+    // of navigator.locks is picked up correctly.
+    //
+    // If the lock is already held by another tab, `navigator.locks.request`
+    // will queue us; the callback won't run until the lock is released. We
+    // emit the onLockConflict signal BEFORE awaiting the lock so the caller
+    // can warn the user that a write is pending (non-blocking) rather than
+    // discovering the serialisation silently.
+    //
+    // Graceful degradation: when navigator.locks is absent (non-Chromium,
+    // non-worker, jsdom) we skip locking entirely and proceed with current
+    // single-tab behavior (no change from pre-feature code).
+    const locksApi = resolveLocks();
+    if (locksApi && this.lockName) {
+      let conflictSignaled = false;
+      const doWrite = async (): Promise<void> => {
+        await this.writeSnapshotUnlocked(store);
+      };
+      // The `ifAvailable` option makes the request non-blocking: the callback
+      // receives `null` immediately when the lock is already held, letting us
+      // surface the conflict to the caller without stalling.
+      await locksApi.request(
+        this.lockName,
+        { mode: "exclusive", ifAvailable: true } as LockRequestOptions,
+        async (lock: Lock | null) => {
+          if (lock === null) {
+            // Lock is held by another tab; signal and queue a retry via the
+            // normal rewrite path (the caller will retry on the next flush/timer).
+            if (!conflictSignaled) {
+              conflictSignaled = true;
+              if (this.onLockConflict) {
+                try {
+                  this.onLockConflict({ lockName: this.lockName!, at: new Date().toISOString() });
+                } catch {
+                  /* ignore callback errors */
+                }
+              }
+              this.log("OPFS write deferred — lock held by another tab (will retry)");
+              // Re-queue the store so the next debounce fires a retry.
+              this.pendingStore = store;
+              this.rewriteQueued = true;
+            }
+            return;
+          }
+          await doWrite();
+        },
+      );
+      return;
+    }
+
+    // Locks unavailable or disabled: original behavior.
+    await this.writeSnapshotUnlocked(store);
+  }
+
+  /** Inner write logic, called either directly (no locks) or inside a lock callback. */
+  private async writeSnapshotUnlocked(store: PersistableStore): Promise<void> {
+    if (!this.backend) return;
     this.writing = true;
     try {
       const content = await serializePersistedGraphs(store);

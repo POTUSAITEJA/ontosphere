@@ -1,0 +1,54 @@
+{
+  "title": "Ontosphere: Browser-based RDF/Ontology Knowledge Graph Editor with OWL 2 DL Reasoning",
+  "description": "Ontosphere is a browser-based RDF/ontology knowledge graph editor. It loads RDF from local files, remote URLs, or SPARQL/Fuseki endpoints; lets users author nodes and edges directly on the canvas; runs OWL 2 DL reasoning (via Konclude compiled to WebAssembly) with visual differentiation of inferred triples; and applies multi-algorithm layout (Dagre, ELK) and automatic clustering for large graphs. Additional features include namespace management with live URI renaming, SHACL validation, a drag-and-drop workflow template catalog, W3C RDFC-1.0 dataset canonicalization, and a Model Context Protocol (MCP) server for AI-agent integration. All computation runs entirely client-side in the browser — no backend required.",
+  "upload_type": "software",
+  "license": "Apache-2.0",
+  "version": "1.5.0",
+  "creators": [
+    {
+      "name": "Potu, Sai Teja",
+      "affiliation": "Fraunhofer Institute for Mechanics of Materials IWM",
+      "orcid": "0009-0007-7468-3544"
+    },
+    {
+      "name": "Hanke, Thomas",
+      "affiliation": "Fraunhofer Institute for Mechanics of Materials IWM",
+      "orcid": "0000-0003-1649-6832"
+    }
+  ],
+  "keywords": [
+    "rdf",
+    "ontology",
+    "knowledge-graph",
+    "sparql",
+    "owl",
+    "owl2-dl",
+    "reasoning",
+    "visualization",
+    "linked-data",
+    "semantic-web",
+    "turtle",
+    "json-ld",
+    "graph-editor",
+    "fair-data",
+    "webassembly",
+    "konclude",
+    "shacl",
+    "mcp",
+    "model-context-protocol",
+    "reactodia"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/ThHanke/ontosphere",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://thhanke.github.io/ontosphere/",
+      "relation": "isDocumentedBy",
+      "scheme": "url"
+    }
+  ],
+  "notes": "Version DOI is minted automatically by Zenodo on each tagged GitHub release. Update the 'version' field and the identifiers in CITATION.cff to match each new release. The creators[0].orcid field must be updated to Sai Teja Potu's real ORCID before the first public release."
+}

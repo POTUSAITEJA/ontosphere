@@ -153,3 +153,49 @@ describe("quadMatchesRemoval — VERIFY/APPLY agreement invariant", () => {
     expect(matched[0].graph?.value).toBe("urn:vg:ontologies");
   });
 });
+
+describe("quadMatchesRemoval — STORE IMMUTABILITY (read-only matching)", () => {
+  // VERIFY builds a working store COPY with the repaired axioms removed and
+  // re-runs the oracle. The matcher itself is the seam that decides which quad to
+  // exclude — it MUST be a pure predicate that never mutates the quads it reads,
+  // so the author's graph is untouched. Here we simulate verifyRepair's filter
+  // step over a store COPY and assert the original store is byte-identical after.
+  function makeStore(): MatchQuad[] {
+    return [
+      quad(S, P, { value: O }, "urn:vg:data"),
+      quad(S, P, { value: O }, "urn:vg:ontologies"),
+      quad("http://ex/i", "http://ex/age", { value: "42", termType: "Literal", datatype: XSD_INT }, "urn:vg:data"),
+    ];
+  }
+
+  it("filtering a store COPY to remove a matched quad leaves the author store unchanged", () => {
+    const authorStore = makeStore();
+    const snapshot = JSON.stringify(authorStore);
+    const removal: RepairRemoval = {
+      subject: S, predicate: P, object: O, objectTermType: "NamedNode", graph: "urn:vg:ontologies",
+    };
+
+    // verifyRepair's store-copy semantics: build a COPY, drop the matched quad,
+    // reason over the copy. The original (authorStore) is never touched.
+    const working = authorStore.slice();
+    const after = working.filter((q) => !quadMatchesRemoval(q, removal));
+
+    expect(after).toHaveLength(authorStore.length - 1);
+    // The author store is byte-identical — the matcher did not mutate any quad.
+    expect(JSON.stringify(authorStore)).toBe(snapshot);
+    expect(authorStore).toHaveLength(3);
+  });
+
+  it("the matcher does not mutate the removal request it reads", () => {
+    const removal: RepairRemoval = {
+      subject: "http://ex/i", predicate: "http://ex/age", object: "42",
+      objectTermType: "Literal", objectDatatype: XSD_INT, graph: "urn:vg:data",
+    };
+    const removalSnapshot = JSON.stringify(removal);
+    const store = makeStore();
+    const storeSnapshot = JSON.stringify(store);
+    store.forEach((q) => quadMatchesRemoval(q, removal));
+    expect(JSON.stringify(removal)).toBe(removalSnapshot);
+    expect(JSON.stringify(store)).toBe(storeSnapshot);
+  });
+});

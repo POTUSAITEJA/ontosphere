@@ -37,6 +37,7 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
 - [Recording demo videos](#recording-demo-videos)
 - [Contributing](#contributing--development-notes)
 - [License & authors](#license--authors)
+- [Reproducibility and data availability](#reproducibility-and-data-availability)
 
 Overview
 --------
@@ -657,3 +658,95 @@ Contributing / Development notes
 License & authors
 -----------------
 Check the repository root for licence and contributor information.
+
+## Reproducibility and data availability
+
+### License
+
+Ontosphere is released under the [Apache 2.0 License](LICENSE). The source code, benchmark data, and study scripts are all openly available under the same terms.
+
+### Persistent identifier and citation
+
+The software is archived on Zenodo under the concept DOI
+[10.5281/zenodo.19605270](https://doi.org/10.5281/zenodo.19605270).
+A version-specific DOI is minted automatically by Zenodo for each tagged GitHub release.
+Cite using the metadata in `CITATION.cff` (CFF 1.2.0).
+
+### Reproducible build
+
+All dependencies are pinned via `package-lock.json`. A clean, reproducible build from source:
+
+```sh
+npm ci            # install exact locked versions
+npm run build     # Vite production build → dist/
+npm test          # unit tests (Vitest)
+npm run typecheck:ratchet  # TypeScript error ratchet
+```
+
+**Docker one-liner** (no Node installation required):
+
+```sh
+# Build the image
+docker build -t ontosphere:latest .
+
+# Run the static server (opens on http://localhost:8080)
+docker run --rm -p 8080:8080 ontosphere:latest
+```
+
+The Dockerfile uses a two-stage build (Node 22 slim builder → Node 22 slim server) and pins
+the base image by tag. The production stage serves `dist/` via a minimal Express static server
+(`docker-static-server.js`) that sets the required cross-origin isolation headers (see below).
+
+### Cross-origin isolation requirement (WASM reasoner)
+
+The Konclude OWL 2 DL reasoner is compiled to WebAssembly and uses `SharedArrayBuffer`
+(pthreads). Browsers require two HTTP response headers for `SharedArrayBuffer` to be available:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: credentialless
+```
+
+Both the development server (`server.js`) and the Docker production server
+(`docker-static-server.js`) set these headers automatically. If you serve `dist/` via a
+different static file server (nginx, Caddy, GitHub Pages, etc.), configure it to emit these
+headers or the WASM reasoner will silently fall back to a non-threaded mode.
+
+### OntoAuthor-Mat benchmark and study data
+
+The **OntoAuthor-Mat** benchmark — six ontology-authoring tasks for materials science covering
+OWL 2 DL patterns (subsumption, existential/universal restrictions, disjointness, `owl:sameAs`,
+and unsatisfiability scenarios) — is included in `_research_workspace/ontoauthor-mat/`.
+
+Each task directory contains:
+- `brief.md` — natural-language task description shown to the model
+- `reference.ttl` — gold-standard OWL 2 DL solution
+- `shapes.ttl` — SHACL shapes used for automated scoring
+- `cq.sparql` — competency questions for logical verification
+
+To regenerate the study tables reported in the paper:
+
+```sh
+node _research_workspace/study/reproduce.mjs
+```
+
+This script re-runs all evaluation metrics against the archived model outputs and writes the
+LaTeX-ready result tables to `_research_workspace/paper/latex/results-summary.json`.
+
+### LLM transparency
+
+Model identifiers, prompt templates, and archived response logs for all study conditions are
+stored in `_research_workspace/study/`. The model adapter (`localModelAdapter.mjs`) records
+the exact model ID and sampling parameters used for each run. Raw model outputs (before
+scoring) are preserved in the same directory so every reported result can be traced back to a
+specific model response.
+
+### Data Availability Statement
+
+All software, benchmark data, and study scripts necessary to reproduce the results reported
+in this paper are openly available. The source code and benchmark tasks are hosted at
+<https://github.com/ThHanke/ontosphere> and archived on Zenodo at
+<https://doi.org/10.5281/zenodo.19605270>. No proprietary or restricted data were used.
+Model responses are archived alongside the benchmark tasks in the same repository under
+`_research_workspace/study/`. The live application is deployed at
+<https://thhanke.github.io/ontosphere>.

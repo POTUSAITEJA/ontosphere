@@ -165,6 +165,19 @@ export interface RepairSuggestion {
    */
   verifiedSet?: boolean;
   /**
+   * Set by `verifyDeletionSetMinimality` after a BOUNDED subset-minimality
+   * search: true when the deletion repair set was *verified* to be a genuinely
+   * minimal sub-collection whose removal restores consistency (no proper subset
+   * of it does) — i.e. the reported set is not merely irredundant-by-heuristic
+   * but reasoner-verified minimal WITHIN the configured bound. false when the
+   * hitting set was above the bound and the search was skipped (the set falls
+   * back to the irredundant heuristic and minimality is NOT proven). Same value
+   * on every deletion repair in the verified set. Undefined when no reasoner
+   * check was supplied (pure path — behaviour unchanged). Cross-reference
+   * `minimalDeletionSet` on the returned summary for the actual minimal set.
+   */
+  minimalityVerified?: boolean;
+  /**
    * True when the action cannot be fully specified because a value must be
    * chosen by the agent (SHACL candidates with an unknown object).
    */
@@ -804,4 +817,245 @@ export function computeRepairs(diagnostics: DiagnosticsData): RepairSuggestion[]
       : [];
   const shaclRepairs = buildShaclRepairs(diagnostics.shaclViolations ?? []);
   return [...inconsistencyRepairs, ...shaclRepairs];
+}
+
+// ---------------------------------------------------------------------------
+// Bounded subset-minimality verification for DELETION repairs
+// ---------------------------------------------------------------------------
+
+/**
+ * A removal request projected from a deletion repair — the exact triple the
+ * apply path (removeLink) removes, carrying the source graph and object-term
+ * metadata so a verifier excludes the IDENTICAL quad (mirrors
+ * reasoning.ts/repairToRemoval and verifyRepairMatch.RepairRemoval). The
+ * reasoner-check callback receives a collection of these.
+ */
+export interface DeletionRemoval {
+  subject: string;
+  predicate: string;
+  object: string;
+  objectTermType?: string;
+  objectDatatype?: string;
+  objectLanguage?: string;
+  graph?: string;
+}
+
+/**
+ * The injected reasoner-check seam. Given a sub-collection of removals, returns
+ * a promise resolving to `true` when removing exactly those axioms (on a STORE
+ * COPY — the implementation MUST NOT mutate the author's graph) restores global
+ * consistency. Tests supply a deterministic mock oracle; production wires this
+ * to rdfManager.verifyRepairDetailed. The contract is read-only: the check is
+ * invoked many times during the subset search and the caller relies on each
+ * invocation being independent (no accumulated state on the real store).
+ */
+export type ReasonerConsistencyCheck = (
+  removals: DeletionRemoval[],
+) => Promise<boolean>;
+
+export interface MinimalitySearchOptions {
+  /**
+   * Maximum hitting-set cardinality at which the exhaustive subset search runs.
+   * At or below the bound we search for a genuinely minimal sub-collection; above
+   * it we skip the (exponential) search and fall back to the irredundant
+   * heuristic with `minimalityVerified: false`. Default 4. The search visits up
+   * to 2^bound subsets, so keep the bound small.
+   */
+  bound?: number;
+}
+
+export interface MinimalityResult {
+  /**
+   * The verified-minimal sub-collection of removals (a subset of the input
+   * deletion repairs' removals) whose removal restores consistency and no proper
+   * subset of which does. When `minimalityVerified` is false this is the full
+   * input set (the irredundant fallback) — minimality is NOT proven.
+   */
+  minimalDeletionSet: DeletionRemoval[];
+  /**
+   * true when the minimal set was reasoner-verified within the bound; false when
+   * the set exceeded the bound (search skipped) OR the full set itself did not
+   * restore consistency under the oracle (nothing to minimise from).
+   */
+  minimalityVerified: boolean;
+  /** The bound that was applied. */
+  bound: number;
+  /** Number of reasoner-check invocations made (0 when search skipped). */
+  checksPerformed: number;
+}
+
+/** Project a deletion RepairSuggestion to the removal the apply path would run. */
+export function repairToDeletionRemoval(r: RepairSuggestion): DeletionRemoval {
+  const a = r.action.args;
+  return {
+    subject: a.subjectIri ?? '',
+    predicate: a.predicateIri ?? '',
+    object: a.objectIri ?? '',
+    ...(a.objectTermType ? { objectTermType: a.objectTermType } : {}),
+    ...(a.objectDatatype ? { objectDatatype: a.objectDatatype } : {}),
+    ...(a.objectLanguage ? { objectLanguage: a.objectLanguage } : {}),
+    ...(a.graph ? { graph: a.graph } : {}),
+  };
+}
+
+/** Stable key for a removal (graph + object-term aware, mirrors axiomKey). */
+function removalKey(r: DeletionRemoval): string {
+  return [
+    r.subject,
+    r.predicate,
+    r.object,
+    r.objectTermType ?? '',
+    r.objectDatatype ?? '',
+    r.objectLanguage ?? '',
+    r.graph ?? '',
+  ].join(' ');
+}
+
+/**
+ * Enumerate all subsets of `items` of size exactly `k`, in ascending index
+ * order (deterministic). Index combinations over [0, n).
+ */
+function combinations(n: number, k: number): number[][] {
+  const out: number[][] = [];
+  const combo: number[] = [];
+  const rec = (start: number): void => {
+    if (combo.length === k) {
+      out.push([...combo]);
+      return;
+    }
+    for (let i = start; i < n; i++) {
+      combo.push(i);
+      rec(i + 1);
+      combo.pop();
+    }
+  };
+  rec(0);
+  return out;
+}
+
+/**
+ * BOUNDED subset-minimality verification for a DELETION repair set.
+ *
+ * The greedy/irredundant hitting set computed by `computeMinimalHittingSet` is
+ * minimal-by-heuristic: no single member is redundant, but it is NOT guaranteed
+ * to be of minimum cardinality, and a genuinely smaller sub-collection may still
+ * restore consistency once the *real* reasoner (not just the per-justification
+ * combinatorics) is consulted. For a hitting set of size n at or below `bound`,
+ * this searches — smallest cardinality first — for the smallest reasoner-VERIFIED
+ * sub-collection whose removal restores consistency. The first such set found is
+ * returned and flagged `minimalityVerified: true` (it is minimum-cardinality
+ * within the candidate set, hence minimal: no smaller subset works).
+ *
+ * Above the bound the (exponential) search is skipped: the input set is returned
+ * unchanged with `minimalityVerified: false` (irredundant fallback). When no
+ * reasoner check is supplied this function is NEVER called by the pure path, so
+ * behaviour with a missing oracle is unchanged (the caller simply leaves
+ * `minimalityVerified` undefined).
+ *
+ * The oracle is invoked on REMOVAL sub-collections only; it must operate on a
+ * store copy and never mutate the author's graph — this function relies on that
+ * read-only contract (it issues many independent checks).
+ *
+ * Determinism: subsets are visited in ascending (size, lexicographic index)
+ * order, so identical inputs + identical oracle yield an identical minimal set.
+ */
+export async function verifyDeletionSetMinimality(
+  deletionRemovals: DeletionRemoval[],
+  check: ReasonerConsistencyCheck,
+  options: MinimalitySearchOptions = {},
+): Promise<MinimalityResult> {
+  const bound = options.bound ?? 4;
+  // Deduplicate by removal key (two repairs could project the same triple) while
+  // preserving first-seen order for stable index combinations.
+  const seen = new Set<string>();
+  const items: DeletionRemoval[] = [];
+  for (const r of deletionRemovals) {
+    const k = removalKey(r);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    items.push(r);
+  }
+
+  const n = items.length;
+
+  // Empty set: nothing to verify. Vacuously not a verified-minimal repair.
+  if (n === 0) {
+    return { minimalDeletionSet: [], minimalityVerified: false, bound, checksPerformed: 0 };
+  }
+
+  // Above the bound: skip the exponential search, fall back to the irredundant
+  // set and flag minimality as NOT verified.
+  if (n > bound) {
+    return { minimalDeletionSet: items, minimalityVerified: false, bound, checksPerformed: 0 };
+  }
+
+  let checksPerformed = 0;
+
+  // Search smallest-first. For each cardinality k from 1..n, try every k-subset
+  // (deterministic ascending index order). The first subset the oracle reports
+  // consistent for is, by construction, of minimum cardinality among all working
+  // subsets — hence genuinely minimal (no smaller sub-collection restores
+  // consistency). k === n is the full set itself.
+  for (let k = 1; k <= n; k++) {
+    for (const idx of combinations(n, k)) {
+      const subset = idx.map((i) => items[i]);
+      checksPerformed += 1;
+      // eslint-disable-next-line no-await-in-loop -- deterministic smallest-first search
+      const consistent = await check(subset);
+      if (consistent) {
+        return {
+          minimalDeletionSet: subset,
+          minimalityVerified: true,
+          bound,
+          checksPerformed,
+        };
+      }
+    }
+  }
+
+  // No subset (including the full set) restored consistency under the oracle.
+  // Return the full set but do NOT claim verified minimality — the oracle could
+  // not confirm even the whole set fixes the ontology (e.g. a degenerate MIPS or
+  // an oracle that never matched the removals).
+  return { minimalDeletionSet: items, minimalityVerified: false, bound, checksPerformed };
+}
+
+/**
+ * Convenience wrapper: run the bounded subset-minimality search over the
+ * DELETION repairs in `repairs` (issue:'inconsistency', not weaken, not
+ * needsManualReview, with a fully-specified action), then annotate each verified
+ * deletion repair in place with `minimalityVerified`. Returns the
+ * MinimalityResult so the caller can surface `minimalDeletionSet`.
+ *
+ * No-ops (returns minimalityVerified:false, leaves repairs untouched) when there
+ * are no actionable deletion repairs. Never called on the pure path, so callers
+ * that omit a reasoner check see unchanged behaviour.
+ */
+export async function annotateDeletionMinimality(
+  repairs: RepairSuggestion[],
+  check: ReasonerConsistencyCheck,
+  options: MinimalitySearchOptions = {},
+): Promise<MinimalityResult> {
+  const deletionRepairs = repairs.filter(
+    (r) =>
+      r.issue === 'inconsistency' &&
+      r.kind !== 'weaken' &&
+      !r.needsManualReview &&
+      r.action.args.subjectIri &&
+      r.action.args.predicateIri &&
+      r.action.args.objectIri,
+  );
+
+  if (deletionRepairs.length === 0) {
+    return { minimalDeletionSet: [], minimalityVerified: false, bound: options.bound ?? 4, checksPerformed: 0 };
+  }
+
+  const removals = deletionRepairs.map(repairToDeletionRemoval);
+  const result = await verifyDeletionSetMinimality(removals, check, options);
+
+  // Annotate the deletion repairs with the shared verdict so the UI/agent can
+  // distinguish a reasoner-verified-minimal set from an irredundant fallback.
+  for (const r of deletionRepairs) r.minimalityVerified = result.minimalityVerified;
+
+  return result;
 }

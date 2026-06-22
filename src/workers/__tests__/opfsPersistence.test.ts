@@ -9,7 +9,7 @@
 //   - clear() deletes the file; restore after clear → empty
 //   - corrupt / partial file → restore fails SAFELY (no throw, store unchanged)
 //   - debounce is testable via an injected timer + flush()
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import * as N3 from "n3";
 import type { Quad } from "@rdfjs/types";
 import {
@@ -20,8 +20,10 @@ import {
   frameSlot,
   unframeSlot,
   PERSISTED_GRAPHS,
+  DEFAULT_LOCK_NAME,
   type PersistenceBackend,
   type TimerLike,
+  type LockConflictSignal,
 } from "../opfsPersistence";
 
 const df = N3.DataFactory;
@@ -430,5 +432,253 @@ describe("OpfsPersistence crash-safety (double-buffer + pointer)", () => {
     expect(
       restored.getQuads(df.namedNode(S), df.namedNode(P), df.namedNode("http://example.org/v2a"), df.namedNode("urn:vg:data")),
     ).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Web Locks API guard tests
+// ---------------------------------------------------------------------------
+
+describe("Web Locks API guard", () => {
+  // Each test restores navigator after it runs.
+  afterEach(() => {
+    // Remove any navigator.locks mock injected via globalThis.
+    if ("navigator" in globalThis) {
+      const nav = globalThis.navigator as unknown as Record<string, unknown>;
+      delete nav["locks"];
+    }
+  });
+
+  /**
+   * Build a mock `navigator.locks` LockManager. `available` controls whether
+   * `ifAvailable` requests grant the lock (true) or return null (false,
+   * simulating another tab holding it). All granted-lock calls invoke the
+   * callback immediately with a fake Lock.
+   */
+  function makeMockLocks(available: boolean) {
+    const calls: { name: string; opts: Record<string, unknown> }[] = [];
+    const lockManager = {
+      request: vi.fn(
+        async (
+          name: string,
+          opts: Record<string, unknown>,
+          callback: (lock: { name: string; mode: string } | null) => Promise<void>,
+        ) => {
+          calls.push({ name, opts });
+          const lock = available ? { name, mode: "exclusive" } : null;
+          await callback(lock);
+        },
+      ),
+      _calls: calls,
+    };
+    return lockManager;
+  }
+
+  function injectLocks(locks: unknown): void {
+    // navigator is read-only in some environments; use Object.defineProperty.
+    if (!("navigator" in globalThis)) {
+      Object.defineProperty(globalThis, "navigator", { value: {}, configurable: true, writable: true });
+    }
+    Object.defineProperty(globalThis.navigator, "locks", {
+      value: locks,
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  it("DEFAULT_LOCK_NAME is exported and non-empty", () => {
+    expect(typeof DEFAULT_LOCK_NAME).toBe("string");
+    expect(DEFAULT_LOCK_NAME.length).toBeGreaterThan(0);
+  });
+
+  it("when navigator.locks is available, lock is acquired around the write", async () => {
+    const mockLocks = makeMockLocks(true);
+    injectLocks(mockLocks);
+
+    const backend = new FakeBackend();
+    const timer = new ManualTimer();
+    const persistence = new OpfsPersistence({ backend, enabled: true, timer });
+
+    const source = makeStore();
+    add(source, S, P, "http://example.org/data", "urn:vg:data");
+    persistence.scheduleSnapshot(source);
+    await persistence.flush();
+
+    // The lock was requested with the default lock name.
+    expect(mockLocks.request).toHaveBeenCalledTimes(1);
+    expect(mockLocks.request.mock.calls[0][0]).toBe(DEFAULT_LOCK_NAME);
+    // The write actually completed and content was persisted.
+    expect(backend.content).toContain("urn:vg:data");
+  });
+
+  it("lock uses ifAvailable mode so concurrent writers do not deadlock", async () => {
+    const mockLocks = makeMockLocks(true);
+    injectLocks(mockLocks);
+
+    const backend = new FakeBackend();
+    const persistence = new OpfsPersistence({ backend, enabled: true });
+    const source = makeStore();
+    add(source, S, P, "http://example.org/data", "urn:vg:data");
+    persistence.scheduleSnapshot(source);
+    await persistence.flush();
+
+    const opts = mockLocks.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(opts.ifAvailable).toBe(true);
+    expect(opts.mode).toBe("exclusive");
+  });
+
+  it("when lock is held (another tab), onLockConflict is called and write is deferred", async () => {
+    const mockLocks = makeMockLocks(false); // lock unavailable → null callback
+    injectLocks(mockLocks);
+
+    const backend = new FakeBackend();
+    const timer = new ManualTimer();
+    const conflicts: LockConflictSignal[] = [];
+    const persistence = new OpfsPersistence({
+      backend,
+      enabled: true,
+      timer,
+      onLockConflict: (s) => conflicts.push(s),
+    });
+
+    const source = makeStore();
+    add(source, S, P, "http://example.org/data", "urn:vg:data");
+    persistence.scheduleSnapshot(source);
+    await persistence.flush();
+
+    // Conflict was reported.
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].lockName).toBe(DEFAULT_LOCK_NAME);
+    expect(typeof conflicts[0].at).toBe("string");
+    // Content was NOT written (lock held by other tab).
+    expect(backend.content).toBeNull();
+  });
+
+  it("two sequential writes (simulating two tabs) serialize: second waits for first to release", async () => {
+    // Simulate serialization: build a lock manager that processes requests in
+    // sequence with a real exclusive gate. We test the serial ordering by
+    // having two OpfsPersistence instances share one mock that grants the lock
+    // one at a time.
+    let lockHeld = false;
+    const requestOrder: string[] = [];
+
+    const serialLocks = {
+      request: vi.fn(
+        async (
+          name: string,
+          opts: Record<string, unknown>,
+          callback: (lock: { name: string; mode: string } | null) => Promise<void>,
+        ) => {
+          if (lockHeld && opts.ifAvailable) {
+            // Another tab holds the lock → return null (conflict) immediately.
+            await callback(null);
+            return;
+          }
+          lockHeld = true;
+          requestOrder.push(name);
+          try {
+            await callback({ name, mode: "exclusive" });
+          } finally {
+            lockHeld = false;
+          }
+        },
+      ),
+    };
+    injectLocks(serialLocks);
+
+    const backend1 = new FakeBackend();
+    const backend2 = new FakeBackend();
+    const conflicts: string[] = [];
+
+    const p1 = new OpfsPersistence({ backend: backend1, enabled: true, onLockConflict: () => conflicts.push("tab2") });
+    const p2 = new OpfsPersistence({ backend: backend2, enabled: true, onLockConflict: () => conflicts.push("tab2") });
+
+    const s1 = makeStore();
+    add(s1, S, P, "http://example.org/v1", "urn:vg:data");
+    const s2 = makeStore();
+    add(s2, S, P, "http://example.org/v2", "urn:vg:data");
+
+    p1.scheduleSnapshot(s1);
+    p2.scheduleSnapshot(s2);
+
+    // Flush sequentially — p2 gets a conflict because p1 holds the lock.
+    const [, ] = await Promise.all([p1.flush(), p2.flush()]);
+
+    // p1 succeeded; p2 got a conflict.
+    expect(backend1.content).toContain("v1");
+    expect(conflicts.length).toBeGreaterThan(0); // p2 was blocked
+  });
+
+  it("when navigator.locks is missing, write proceeds normally (graceful fallback)", async () => {
+    // Ensure no locks API is present (default jsdom/Node environment has none).
+    // Do not inject anything — locks remain absent.
+    const backend = new FakeBackend();
+    const timer = new ManualTimer();
+    const conflicts: LockConflictSignal[] = [];
+    const persistence = new OpfsPersistence({
+      backend,
+      enabled: true,
+      timer,
+      onLockConflict: (s) => conflicts.push(s),
+    });
+
+    const source = makeStore();
+    add(source, S, P, "http://example.org/data", "urn:vg:data");
+    persistence.scheduleSnapshot(source);
+    await persistence.flush();
+
+    // Write succeeded without a lock (degraded gracefully).
+    expect(backend.content).toContain("urn:vg:data");
+    // No conflict was emitted (no locks to conflict on).
+    expect(conflicts).toHaveLength(0);
+  });
+
+  it("lockName:null disables locking even when navigator.locks is present", async () => {
+    const mockLocks = makeMockLocks(true);
+    injectLocks(mockLocks);
+
+    const backend = new FakeBackend();
+    const persistence = new OpfsPersistence({ backend, enabled: true, lockName: null });
+    const source = makeStore();
+    add(source, S, P, "http://example.org/data", "urn:vg:data");
+    persistence.scheduleSnapshot(source);
+    await persistence.flush();
+
+    // Lock was never requested.
+    expect(mockLocks.request).not.toHaveBeenCalled();
+    // Write still completed normally.
+    expect(backend.content).toContain("urn:vg:data");
+  });
+
+  it("custom lockName is passed through to navigator.locks.request", async () => {
+    const mockLocks = makeMockLocks(true);
+    injectLocks(mockLocks);
+
+    const backend = new FakeBackend();
+    const persistence = new OpfsPersistence({ backend, enabled: true, lockName: "my-custom-lock" });
+    const source = makeStore();
+    add(source, S, P, "http://example.org/data", "urn:vg:data");
+    persistence.scheduleSnapshot(source);
+    await persistence.flush();
+
+    expect(mockLocks.request.mock.calls[0][0]).toBe("my-custom-lock");
+  });
+
+  it("double-buffer + pointer invariant is preserved when a lock is held: no content written", async () => {
+    // Lock unavailable → no write must occur; backend remains pristine.
+    const mockLocks = makeMockLocks(false);
+    injectLocks(mockLocks);
+
+    const backend = new FakeBackend();
+    const persistence = new OpfsPersistence({ backend, enabled: true });
+    const source = makeStore();
+    add(source, S, P, "http://example.org/data", "urn:vg:data");
+    persistence.scheduleSnapshot(source);
+    await persistence.flush();
+
+    // No slot was written (the atomic-write invariant was not violated).
+    expect(backend.slotA).toBeNull();
+    expect(backend.slotB).toBeNull();
+    expect(backend.ptr).toBeNull();
   });
 });

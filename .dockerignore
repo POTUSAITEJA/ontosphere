@@ -1,0 +1,38 @@
+# Dependencies — reinstalled inside the image via npm ci
+node_modules/
+
+# Previous builds — rebuilt inside the image
+dist/
+
+# Version control — not needed at build time
+.git/
+.gitignore
+
+# Research workspace and study data — not part of the app
+_research_workspace/
+
+# Logs — never bake into the image
+logs/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Editor / OS artefacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Test outputs and playwright state
+test-results/
+playwright-report/
+playwright/.auth/
+
+# Docker files themselves (avoid accidental recursion in COPY . .)
+Dockerfile
+.dockerignore
+
+# CI/CD local config
+.omc/
