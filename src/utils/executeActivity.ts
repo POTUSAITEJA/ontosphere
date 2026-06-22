@@ -104,20 +104,35 @@ export async function executeActivity(
   for (const quad of activityUsedQuads) {
     const resourceIri = quad.object.value;
 
-    const locationQuads: any[] = await worker.call('getQuads', {
+    // Search both workflows and data graphs for resource metadata
+    let locationQuads: any[] = await worker.call('getQuads', {
       subject: resourceIri,
       predicate: `${PROV_NS}atLocation`,
       graphName: WORKFLOWS_GRAPH,
     }) ?? [];
+    if (locationQuads.length === 0) {
+      locationQuads = await worker.call('getQuads', {
+        subject: resourceIri,
+        predicate: `${PROV_NS}atLocation`,
+        graphName: DATA_GRAPH,
+      }) ?? [];
+    }
 
     if (locationQuads.length === 0) continue;
     const location = locationQuads[0].object.value;
 
-    const typeQuads: any[] = await worker.call('getQuads', {
+    let typeQuads: any[] = await worker.call('getQuads', {
       subject: resourceIri,
       predicate: `${RDF_NS}type`,
       graphName: WORKFLOWS_GRAPH,
     }) ?? [];
+    if (typeQuads.length === 0) {
+      typeQuads = await worker.call('getQuads', {
+        subject: resourceIri,
+        predicate: `${RDF_NS}type`,
+        graphName: DATA_GRAPH,
+      }) ?? [];
+    }
 
     const types: string[] = typeQuads.map((q: any) => q.object.value);
     const isCode = types.some(t => t.includes('SoftwareSourceCode') || t.includes('Code'));
@@ -125,11 +140,18 @@ export async function executeActivity(
     if (isCode) {
       codeUrl = location;
     } else {
-      const labelQuads: any[] = await worker.call('getQuads', {
+      let labelQuads: any[] = await worker.call('getQuads', {
         subject: resourceIri,
         predicate: `${RDFS_NS}label`,
         graphName: WORKFLOWS_GRAPH,
       }) ?? [];
+      if (labelQuads.length === 0) {
+        labelQuads = await worker.call('getQuads', {
+          subject: resourceIri,
+          predicate: `${RDFS_NS}label`,
+          graphName: DATA_GRAPH,
+        }) ?? [];
+      }
       const labelText = labelQuads[0]?.object?.value?.toLowerCase() ?? resourceIri.toLowerCase();
       if (labelText.includes('requirement')) {
         requirementsUrl = location;
@@ -139,7 +161,14 @@ export async function executeActivity(
     }
   }
 
-  if (!codeUrl) throw new Error(`No Python code URL found for activity ${activityIri}`);
+  if (!codeUrl) {
+    const usedIris = activityUsedQuads.map((q: any) => q.object.value).join(', ');
+    throw new Error(
+      `No Python code URL found for activity ${activityIri}. ` +
+      `Used resources: [${usedIris}]. ` +
+      `Ensure the workflow catalog is loaded (code resources need prov:atLocation).`
+    );
+  }
 
   // 2. Remove stale output from any previous run of this activity.
   //    Find all entities with prov:wasGeneratedBy activityIri, remove their data
