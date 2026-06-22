@@ -5,6 +5,17 @@ import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { useWorkflowExecutionStore } from '@/stores/workflowExecutionStore';
 import { getPyodideClient } from '@/utils/pyodideManager.workerClient';
+import type { InputOption } from '@/workers/pyodide.workerProtocol';
+
+/** Extract the underlying value from an InputOption (string or {label, value} object). */
+function getOptionValue(opt: InputOption): string {
+  return typeof opt === 'string' ? opt : opt.value;
+}
+
+/** Extract the display label from an InputOption. */
+function getOptionLabel(opt: InputOption): string {
+  return typeof opt === 'string' ? opt : opt.label;
+}
 
 export function WorkflowExecutionDialog() {
   const {
@@ -26,7 +37,11 @@ export function WorkflowExecutionDialog() {
 
   useEffect(() => {
     if (pendingInput) {
-      setInputValue(pendingInput.defaultValue ?? '');
+      let initial = pendingInput.defaultValue ?? '';
+      if (!initial && pendingInput.inputType === 'select' && pendingInput.options?.length) {
+        initial = getOptionValue(pendingInput.options[0]);
+      }
+      setInputValue(initial);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [pendingInput]);
@@ -61,10 +76,34 @@ export function WorkflowExecutionDialog() {
     }
   }, [handleSubmitInput]);
 
+  // Cancel pending input when dialog closes (prevents worker hang)
+  const pendingInputRef = useRef(pendingInput);
+  pendingInputRef.current = pendingInput;
+  useEffect(() => {
+    if (isOpen) return;
+    // Dialog just closed — if there was a pending input, cancel it
+    if (pendingInputRef.current) {
+      try {
+        getPyodideClient().respondToInput('', true);
+      } catch {
+        // Ignore if buffers not initialized (e.g., worker never started)
+      }
+      useWorkflowExecutionStore.getState().setPendingInput(null);
+    }
+  }, [isOpen]);
+
+  const handleClose = useCallback(() => {
+    close();
+  }, [close]);
+
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
+      // Block Escape close while input is pending — user must use X button
+      if (e.key === 'Escape') {
+        if (pendingInputRef.current) return;
+        close();
+      }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
@@ -81,7 +120,7 @@ export function WorkflowExecutionDialog() {
   return (
     <div
       className="absolute inset-0 z-50 flex items-start justify-center bg-black/60 pt-4"
-      onMouseDown={e => { if (e.target === e.currentTarget) close(); }}
+      onMouseDown={e => { if (e.target === e.currentTarget && !pendingInputRef.current) close(); }}
     >
       <div className="w-full max-w-[min(90%,48rem)] max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden rounded-lg border bg-background shadow-lg animate-in fade-in-0 zoom-in-95 duration-200">
         {/* Header */}
@@ -96,7 +135,7 @@ export function WorkflowExecutionDialog() {
             )}
           </div>
           <button
-            onClick={close}
+            onClick={handleClose}
             className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent transition-colors ml-2 flex-shrink-0"
             aria-label="Close"
           >
@@ -153,10 +192,13 @@ export function WorkflowExecutionDialog() {
                   ref={inputRef as React.RefObject<HTMLSelectElement>}
                   value={inputValue}
                   onChange={e => setInputValue(e.target.value)}
+                  onKeyDown={handleKeyDown}
                   className="flex-1 min-h-[44px] rounded-md border bg-background px-3 py-2 text-sm"
                 >
                   {pendingInput.options.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
+                    <option key={getOptionValue(opt)} value={getOptionValue(opt)}>
+                      {getOptionLabel(opt)}
+                    </option>
                   ))}
                 </select>
               ) : (

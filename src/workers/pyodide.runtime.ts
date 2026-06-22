@@ -27,7 +27,7 @@ export function createPyodideWorkerRuntime(
   let textBuffer: SharedArrayBuffer | null = null;
   let signalView: Int32Array | null = null;
   let textView: Uint8Array | null = null;
-  const INPUT_TIMEOUT_MS = 30_000;
+  const INPUT_TIMEOUT_MS = 300_000;
   const TEXT_BUFFER_SIZE = 8192;
 
   function post(message: any) {

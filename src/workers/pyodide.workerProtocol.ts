@@ -89,11 +89,18 @@ export interface StderrPayload {
   timestamp: number;
 }
 
+export interface InputOptionObject {
+  label: string;
+  value: string;
+}
+
+export type InputOption = string | InputOptionObject;
+
 export interface InputRequestPayload {
   requestId: string;
   prompt: string;
   inputType?: 'text' | 'number' | 'select';
-  options?: string[];
+  options?: InputOption[];
   defaultValue?: string;
 }
 

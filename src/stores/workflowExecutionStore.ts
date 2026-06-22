@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { InputOption } from '@/workers/pyodide.workerProtocol';
 
 export type LogEntryType = 'stdout' | 'stderr' | 'error' | 'info' | 'progress';
 
@@ -12,7 +13,7 @@ export interface PendingInput {
   requestId: string;
   prompt: string;
   inputType: 'text' | 'number' | 'select';
-  options?: string[];
+  options?: InputOption[];
   defaultValue?: string;
 }
 

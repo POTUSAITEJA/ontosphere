@@ -1,6 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { useWorkflowExecutionStore } from '../../stores/workflowExecutionStore';
 import type { LogEntry } from '../../stores/workflowExecutionStore';
+
+describe('INPUT_TIMEOUT_MS in pyodide.runtime', () => {
+  it('INPUT_TIMEOUT_MS is 300000 (5 minutes)', () => {
+    // Read the source file and verify the constant value
+    const source = readFileSync(
+      resolve(__dirname, '../../workers/pyodide.runtime.ts'),
+      'utf-8'
+    );
+    const match = source.match(/const\s+INPUT_TIMEOUT_MS\s*=\s*([\d_]+)/);
+    expect(match).toBeTruthy();
+    const value = Number(match![1].replace(/_/g, ''));
+    expect(value).toBe(300_000);
+  });
+});
 
 describe('workflowExecutionStore', () => {
   beforeEach(() => {
