@@ -263,6 +263,22 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
               </TooltipPrimitive.Portal>
             </TooltipPrimitive.Root>
 
+            {workflowCatalogEnabled && (
+              <TooltipPrimitive.Root>
+                <TooltipPrimitive.Trigger asChild>
+                  <button className="rail-btn" onClick={() => { setOpenAccordions(['workflows']); onToggle(); }} aria-label="Workflows">
+                    <Sparkles className="h-[18px] w-[18px]" />
+                    <span>Flows</span>
+                  </button>
+                </TooltipPrimitive.Trigger>
+                <TooltipPrimitive.Portal>
+                  <TooltipPrimitive.Content className="z-[99999] rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md" sideOffset={5} side="right">
+                    Workflows<TooltipPrimitive.Arrow className="fill-popover" />
+                  </TooltipPrimitive.Content>
+                </TooltipPrimitive.Portal>
+              </TooltipPrimitive.Root>
+            )}
+
             <TooltipPrimitive.Root>
                 <TooltipPrimitive.Trigger asChild>
                   <button className="rail-btn relative" onClick={() => { setOpenAccordions(['ai-relay']); onToggle(); }} aria-label="AI Relay">
