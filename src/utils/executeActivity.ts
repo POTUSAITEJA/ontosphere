@@ -7,7 +7,8 @@
 import * as Reactodia from '@reactodia/workspace';
 import { useOntologyStore } from '../stores/ontologyStore';
 import { getPyodideClient } from './pyodideManager.workerClient';
-import type { ExecuteResult } from '../workers/pyodide.workerProtocol';
+import type { ExecuteResult, StdoutPayload, StderrPayload, InputRequestPayload } from '../workers/pyodide.workerProtocol';
+import { useWorkflowExecutionStore } from '../stores/workflowExecutionStore';
 import { DataFactory, Parser as N3Parser } from 'n3';
 
 const PPLAN_NS = 'http://purl.org/net/p-plan#';
@@ -213,12 +214,60 @@ export async function executeActivity(
   const inputTurtle: string = exportResult?.content ?? '';
 
   const pyodideClient = getPyodideClient();
-  const result = await pyodideClient.call<'execute', ExecuteResult>('execute', {
-    activityIri,
-    codeUrl,
-    requirementsUrl: requirementsUrl || undefined,
-    inputTurtle,
+  const store = useWorkflowExecutionStore.getState();
+
+  // Resolve activity label for log separator
+  const labelQuads: any[] = await worker.call('getQuads', {
+    subject: activityIri,
+    predicate: `${RDFS_NS}label`,
+    graphName: DATA_GRAPH,
+  }) ?? [];
+  const activityLabel = labelQuads[0]?.object?.value ?? extractLocalName(activityIri);
+
+  store.appendLog({ type: 'info', text: `▸ Step: ${activityLabel}`, timestamp: Date.now() });
+  store.setExecuting(true);
+
+  const unsubProgress = pyodideClient.on('progress', (p: { stage: string; percent: number }) => {
+    useWorkflowExecutionStore.getState().setProgress(p.percent, p.stage);
+    useWorkflowExecutionStore.getState().appendLog({ type: 'progress', text: p.stage, timestamp: Date.now() });
   });
+  const unsubStdout = pyodideClient.on('stdout', (p: StdoutPayload) => {
+    useWorkflowExecutionStore.getState().appendLog({ type: 'stdout', text: p.text, timestamp: p.timestamp });
+  });
+  const unsubStderr = pyodideClient.on('stderr', (p: StderrPayload) => {
+    useWorkflowExecutionStore.getState().appendLog({ type: 'stderr', text: p.text, timestamp: p.timestamp });
+  });
+  const unsubInput = pyodideClient.on('input_request', (p: InputRequestPayload) => {
+    useWorkflowExecutionStore.getState().setPendingInput({
+      requestId: p.requestId,
+      prompt: p.prompt,
+      inputType: p.inputType ?? 'text',
+      options: p.options,
+      defaultValue: p.defaultValue,
+    });
+  });
+
+  let result: ExecuteResult;
+  try {
+    result = await pyodideClient.call<'execute', ExecuteResult>('execute', {
+      activityIri,
+      codeUrl,
+      requirementsUrl: requirementsUrl || undefined,
+      inputTurtle,
+    });
+    useWorkflowExecutionStore.getState().appendLog({ type: 'info', text: `✓ Step complete`, timestamp: Date.now() });
+    useWorkflowExecutionStore.getState().setExecutionTime(result.executionTime ?? null);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    useWorkflowExecutionStore.getState().setError(msg);
+    useWorkflowExecutionStore.getState().setExecuting(false);
+    throw err;
+  } finally {
+    unsubProgress();
+    unsubStdout();
+    unsubStderr();
+    unsubInput();
+  }
 
   // 5. Parse output Turtle and write back to data graph
   const parser = new N3Parser();
