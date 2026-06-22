@@ -15,12 +15,15 @@ export interface PyodideWorkerRuntime {
   terminate: () => void;
 }
 
+const SHARED_LIBRARIES = ['spw_input.py'];
+
 export function createPyodideWorkerRuntime(
   postMessage: (message: unknown) => void
 ): PyodideWorkerRuntime {
   let pyodide: any = null;
   let initializationPromise: Promise<any> | null = null;
   const loadedPackages = new Set<string>();
+  const loadedLibraries = new Set<string>();
 
   // SharedArrayBuffer for blocking input requests
   let signalBuffer: SharedArrayBuffer | null = null;
@@ -321,6 +324,21 @@ def request_input(prompt, input_type='text', options=None, default_value=None):
         await installRequirements(requirementsText);
       }
 
+      // Load shared Python libraries from the same base URL as the script
+      const baseUrl = payload.codeUrl.substring(0, payload.codeUrl.lastIndexOf('/'));
+      for (const libName of SHARED_LIBRARIES) {
+        if (loadedLibraries.has(libName)) continue;
+        try {
+          emitProgress('Loading shared libraries', 50);
+          const libText = await fetchText(`${baseUrl}/${libName}`);
+          pyodide.FS.writeFile(`/tmp/${libName}`, libText);
+          loadedLibraries.add(libName);
+          console.log(`[pyodide.runtime] Loaded shared library: ${libName}`);
+        } catch (err) {
+          console.warn(`[pyodide.runtime] Shared library ${libName} not available, skipping`, err);
+        }
+      }
+
       emitProgress('Executing Python code', 60);
 
       // Set up a virtual filesystem for the Python code to use
@@ -340,11 +358,12 @@ def request_input(prompt, input_type='text', options=None, default_value=None):
           // Directory might already exist, ignore
         }
         
-        // Set HOME environment variable
         pyodide.runPython(`
-import os
+import os, sys
 os.environ['HOME'] = '/home/pyodide'
 os.chdir('/tmp')
+if '/tmp' not in sys.path:
+    sys.path.insert(0, '/tmp')
 `);
         
         console.log('[pyodide.runtime] Virtual filesystem set up successfully');
