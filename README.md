@@ -55,6 +55,7 @@
     - [AI Relay Bridge (ChatGPT, Gemini, Claude.ai)](#chatgpt-gemini-claudeai--ai-relay-bridge)
 - [Recording demo videos](#recording-demo-videos)
 - [Contributing](#contributing--development-notes)
+- [Acknowledgements](#acknowledgements)
 - [License & authors](#license--authors)
 - [Reproducibility and data availability](#reproducibility-and-data-availability)
 
@@ -728,6 +729,39 @@ Contributing / Development notes
 - RDF worker and protocol: [src/workers/](src/workers/)
 - MCP server and tools: [src/mcp/](src/mcp/)
 - Tests: [src/__tests__/](src/__tests__/) — run with `npm test`.
+
+Acknowledgements
+----------------
+
+Ontosphere builds on several open-source projects whose authors we gratefully acknowledge.
+
+**Core components:**
+[Konclude](https://github.com/konclude/Konclude) ([Andreas Steigmiller](https://github.com/andreas-steigmiller), Thorsten Liebig, Birte Glimm; University of Ulm) — OWL 2 DL tableau reasoner, compiled to WebAssembly via [rdf-reasoner-konclude](https://github.com/ThHanke/rdf-reasoner-konclude);
+[Reactodia](https://github.com/reactodia/reactodia-workspace) (Dmitry Mouromtsev et al.) — visual graph editor;
+[N3.js](https://github.com/rdfjs/N3.js) (Ruben Verborgh, Ruben Taelman) — in-memory RDF store and parser;
+[shacl-engine](https://github.com/zazuko/shacl-engine) (Thomas Bergwinkl) — SHACL constraint validation.
+
+**Layout & graph algorithms:**
+[ELK](https://github.com/kieler/elkjs),
+[Dagre](https://github.com/dagrejs/dagre),
+[ngraph.louvain](https://github.com/nickolay/ngraph.louvain) / [ngraph.slpa](https://github.com/nickolay/ngraph.slpa),
+[ml-kmeans](https://github.com/mljs/kmeans).
+
+**RDF & SPARQL:**
+[@rdfjs/data-model](https://github.com/rdfjs-base/data-model) / [@rdfjs/dataset](https://github.com/rdfjs-base/dataset),
+[rdf-parse](https://github.com/rubensworks/rdf-parse.js),
+[sparqljs](https://github.com/RubenVerborgh/SPARQL.js),
+[Comunica](https://github.com/comunica/comunica).
+
+**UI framework:**
+[React](https://react.dev),
+[Radix UI](https://www.radix-ui.com),
+[Tailwind CSS](https://tailwindcss.com),
+[Vite](https://vite.dev),
+[Lucide](https://lucide.dev),
+[shadcn/ui](https://ui.shadcn.com).
+
+This work was supported by the [Fraunhofer Institute for Mechanics of Materials IWM](https://www.iwm.fraunhofer.de/).
 
 License & authors
 -----------------

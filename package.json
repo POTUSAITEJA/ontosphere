@@ -60,7 +60,9 @@
     "callgraph:merge": "node scripts/merge_call_graphs.js",
     "callgraph:regen": "npm run callgraph:generate && npm run callgraph:merge",
     "startupDebug": "node scripts/playwright-startup-debug.cjs",
-    "startupDebug:start": "node scripts/playwright-startup-debug.cjs --start-server"
+    "startupDebug:start": "node scripts/playwright-startup-debug.cjs --start-server",
+    "ui-overview": "node scripts/generate-ui-overview.mjs",
+    "ui-overview:full": "bash -c 'npm run dev & DEV_PID=$!; sleep 5; node scripts/generate-ui-overview.mjs; kill $DEV_PID'"
   },
   "overrides": {
     "esbuild": "0.25.0"
