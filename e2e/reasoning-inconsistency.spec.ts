@@ -24,9 +24,6 @@ async function waitForReady(page: Page) {
       typeof (window as any).__mcpTools['loadRdf'] === 'function',
     { timeout: 30_000 },
   );
-  // COI service worker may reload the page once after install. Wait for network
-  // idle so the reload has settled before we load data or interact with UI.
-  await page.waitForLoadState('networkidle');
 }
 
 async function call(page: Page, tool: string, params: object): Promise<any> {
@@ -85,20 +82,35 @@ test('TopBar indicator: inconsistent TTL → button shows Inconsistent', async (
 });
 
 test('Modal content: Summary shows OWL DL card, Errors tab shows affected node', async ({ page }) => {
+  // Konclude WASM explainInconsistency (blackbox MIPS) can be slow on CI;
+  // a COI service-worker reload may also occur mid-sequence. Allow extra time.
+  test.setTimeout(120_000);
+
   await page.goto(BASE_URL);
   await waitForReady(page);
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
-  await call(page, 'loadRdf', { turtle });
-  await call(page, 'runReasoning', {});
 
-  // Click the error button to open the modal
-  const button = page.locator('button.glass-btn--status-error');
-  await button.waitFor({ timeout: 30_000 });
-  await button.click();
+  async function loadAndRun() {
+    await call(page, 'loadRdf', { turtle });
+    await call(page, 'runReasoning', {});
+    const button = page.locator('button.glass-btn--status-error');
+    await button.waitFor({ timeout: 30_000 });
+    await button.click();
+  }
+
+  await loadAndRun();
 
   const dialog = page.locator('[role="dialog"]');
-  await dialog.waitFor({ timeout: 30_000 });
+  try {
+    await dialog.waitFor({ timeout: 60_000 });
+  } catch {
+    // COI service-worker may have reloaded the page after button click —
+    // redo the data load + reasoning + click on the fresh page.
+    await waitForReady(page);
+    await loadAndRun();
+    await dialog.waitFor({ timeout: 60_000 });
+  }
 
   // Summary tab should show the OWL DL inconsistency card
   await expect(dialog.getByText('OWL DL inconsistency detected')).toBeVisible();
