@@ -55,10 +55,15 @@ export function WorkflowExecutionDialog() {
 
   const handleSubmitInput = useCallback(() => {
     if (!pendingInput) return;
-    const client = getPyodideClient();
-    client.respondToInput(inputValue);
-    useWorkflowExecutionStore.getState().setPendingInput(null);
-    setInputValue('');
+    try {
+      const client = getPyodideClient();
+      console.debug('[WorkflowExecutionDialog] respondToInput', { inputValue, pendingInput: pendingInput.requestId });
+      client.respondToInput(inputValue);
+      useWorkflowExecutionStore.getState().setPendingInput(null);
+      setInputValue('');
+    } catch (err) {
+      console.error('[WorkflowExecutionDialog] submit failed', err);
+    }
   }, [pendingInput, inputValue]);
 
   const handleCancelInput = useCallback(() => {

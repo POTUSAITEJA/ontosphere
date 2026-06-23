@@ -161,10 +161,11 @@ export class PyodideManagerWorkerClient {
       Atomics.store(this.signalView, 0, -1);
       Atomics.store(this.signalView, 1, 0);
     } else {
-      const encoder = new TextEncoder();
-      const { written } = encoder.encodeInto(value, this.textView);
+      const encoded = new TextEncoder().encode(value);
+      const written = Math.min(encoded.byteLength, this.textView.byteLength);
+      this.textView.set(encoded.subarray(0, written));
       Atomics.store(this.signalView, 0, 1);
-      Atomics.store(this.signalView, 1, written ?? 0);
+      Atomics.store(this.signalView, 1, written);
     }
     Atomics.notify(this.signalView, 0);
   }
