@@ -293,8 +293,11 @@ export class N3DataProvider implements DataProvider {
         if (subjTypes) {
           if ([...subjTypes].some(t => ALL_TBOX_TYPES.has(t as ElementTypeIri))) view = 'tbox';
           else if ([...subjTypes].some(t => ABOX_TYPES.has(t))) view = 'abox';
+          else view = 'abox';
         } else if (subjIri.startsWith(SKOLEM_PREFIX)) {
           view = this.bNodeViewMap.get(subjIri);
+        } else {
+          view = 'abox';
         }
         if (view) { this.bNodeViewMap.set(objIri, view); changed = true; }
       }
@@ -766,7 +769,7 @@ export class N3DataProvider implements DataProvider {
   private _matchesIriToMode(iri: string, mode: ViewMode): boolean {
     const types = this.typeMap.get(iri);
     if (!types && iri.startsWith(SKOLEM_PREFIX)) {
-      const view = this.bNodeViewMap.get(iri) ?? 'tbox';
+      const view = this.bNodeViewMap.get(iri) ?? 'abox';
       return view === mode;
     }
     return this._matchesMode(types ? [...types] as ElementTypeIri[] : [], mode);
