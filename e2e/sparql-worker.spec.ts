@@ -19,8 +19,9 @@ const BASE_URL = process.env.VG_URL ?? "http://localhost:8080";
 async function waitForTools(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const tools = (window as any).__mcpTools;
-    return tools && typeof tools.queryGraph === "function";
-  }, { timeout: 10_000 });
+    return window.crossOriginIsolated !== false &&
+      tools && typeof tools.queryGraph === "function";
+  }, { timeout: 30_000 });
 }
 
 async function qg(page: Page, sparql: string, limit?: number) {

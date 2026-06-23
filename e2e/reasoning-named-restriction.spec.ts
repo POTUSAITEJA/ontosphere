@@ -20,8 +20,11 @@ const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 
 async function waitForMcpTools(page: Page) {
   await page.waitForFunction(
-    () => !!(window as any).__mcpTools && typeof (window as any).__mcpTools['addNode'] === 'function',
-    { timeout: 20_000 },
+    () =>
+      window.crossOriginIsolated !== false &&
+      !!(window as any).__mcpTools &&
+      typeof (window as any).__mcpTools['addNode'] === 'function',
+    { timeout: 30_000 },
   );
 }
 

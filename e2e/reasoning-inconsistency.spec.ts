@@ -17,9 +17,15 @@ import * as path from 'path';
 const BASE_URL = (process.env.VG_URL ?? 'http://localhost:8080') + '?ontologies=';
 
 async function waitForMcpTools(page: Page) {
+  // COI service worker may reload the page once to inject COOP/COEP headers.
+  // Require crossOriginIsolated so we wait through any reload before
+  // returning — prevents "Execution context was destroyed" in callers.
   await page.waitForFunction(
-    () => !!(window as any).__mcpTools && typeof (window as any).__mcpTools['loadRdf'] === 'function',
-    { timeout: 20_000 },
+    () =>
+      window.crossOriginIsolated !== false &&
+      !!(window as any).__mcpTools &&
+      typeof (window as any).__mcpTools['loadRdf'] === 'function',
+    { timeout: 30_000 },
   );
 }
 
