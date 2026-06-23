@@ -16,10 +16,7 @@ import * as path from 'path';
 
 const BASE_URL = (process.env.VG_URL ?? 'http://localhost:8080') + '?ontologies=';
 
-async function waitForMcpTools(page: Page) {
-  // COI service worker may reload the page once to inject COOP/COEP headers.
-  // Require crossOriginIsolated so we wait through any reload before
-  // returning — prevents "Execution context was destroyed" in callers.
+async function waitForReady(page: Page) {
   await page.waitForFunction(
     () =>
       window.crossOriginIsolated !== false &&
@@ -29,16 +26,29 @@ async function waitForMcpTools(page: Page) {
   );
 }
 
-async function call(page: Page, tool: string, params: object) {
-  return page.evaluate(
-    ([t, p]) => (window as any).__mcpTools[t](p),
-    [tool, params] as const,
-  );
+async function call(page: Page, tool: string, params: object): Promise<any> {
+  // CI: Vite HMR or COI service worker can reload the page after the initial
+  // load. page.evaluate fails with "Execution context was destroyed" when this
+  // happens mid-call. Retry once after waiting for the new page to be ready.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await page.evaluate(
+        ([t, p]) => (window as any).__mcpTools[t](p),
+        [tool, params] as const,
+      );
+    } catch (err: any) {
+      if (attempt === 0 && /context was destroyed|navigat/i.test(err.message)) {
+        await waitForReady(page);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 test('MCP runReasoning: inconsistent TTL → isConsistent=false, errors with frank nodeId, inferredTriples=0', async ({ page }) => {
   await page.goto(BASE_URL);
-  await waitForMcpTools(page);
+  await waitForReady(page);
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
   await call(page, 'loadRdf', { turtle });
@@ -58,7 +68,7 @@ test('MCP runReasoning: inconsistent TTL → isConsistent=false, errors with fra
 
 test('TopBar indicator: inconsistent TTL → button shows Inconsistent', async ({ page }) => {
   await page.goto(BASE_URL);
-  await waitForMcpTools(page);
+  await waitForReady(page);
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
   await call(page, 'loadRdf', { turtle });
@@ -73,7 +83,7 @@ test('TopBar indicator: inconsistent TTL → button shows Inconsistent', async (
 
 test('Modal content: Summary shows OWL DL card, Errors tab shows affected node', async ({ page }) => {
   await page.goto(BASE_URL);
-  await waitForMcpTools(page);
+  await waitForReady(page);
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
   await call(page, 'loadRdf', { turtle });
@@ -100,7 +110,7 @@ test('Modal content: Summary shows OWL DL card, Errors tab shows affected node',
 
 test('Consistent sanity: reasoning-demo.ttl → isConsistent=true, errors=0, inferredTriples>0, TopBar Valid', async ({ page }) => {
   await page.goto(BASE_URL);
-  await waitForMcpTools(page);
+  await waitForReady(page);
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo.ttl'), 'utf-8');
   await call(page, 'loadRdf', { turtle });

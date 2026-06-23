@@ -18,7 +18,7 @@ const EX = 'http://example.org/collapse-test#';
 const OWL = 'http://www.w3.org/2002/07/owl#';
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 
-async function waitForMcpTools(page: Page) {
+async function waitForReady(page: Page) {
   await page.waitForFunction(
     () =>
       window.crossOriginIsolated !== false &&
@@ -28,16 +28,26 @@ async function waitForMcpTools(page: Page) {
   );
 }
 
-async function call(page: Page, tool: string, params: object) {
-  return page.evaluate(
-    ([t, p]) => (window as any).__mcpTools[t](p),
-    [tool, params] as const,
-  );
+async function call(page: Page, tool: string, params: object): Promise<any> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await page.evaluate(
+        ([t, p]) => (window as any).__mcpTools[t](p),
+        [tool, params] as const,
+      );
+    } catch (err: any) {
+      if (attempt === 0 && /context was destroyed|navigat/i.test(err.message)) {
+        await waitForReady(page);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 test('loadRdf blank-node restrictions: skolemized on canvas, reasoning classifies correctly', async ({ page }) => {
   await page.goto(BASE_URL);
-  await waitForMcpTools(page);
+  await waitForReady(page);
 
   // NB: use the `ct:` prefix, not `ex:` — the app reserves `ex:` for
   // http://example.org/ (iriUtils built-in), which would override this
@@ -103,7 +113,7 @@ ct:p1 rdf:type ct:FillerA .
 
 test('named restriction nodes: MCP seeds correct triples and reasoning classifies correctly', async ({ page }) => {
   await page.goto(BASE_URL);
-  await waitForMcpTools(page);
+  await waitForReady(page);
 
   // ── Seed TBox: named restriction nodes ─────────────────────────────────
 
