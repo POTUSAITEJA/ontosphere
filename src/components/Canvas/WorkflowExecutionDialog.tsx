@@ -3,7 +3,7 @@ import { X, Clock } from 'lucide-react';
 import { Progress } from '../ui/progress';
 import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
-import { useWorkflowExecutionStore } from '@/stores/workflowExecutionStore';
+import { useWorkflowExecutionStore, type PendingInput } from '@/stores/workflowExecutionStore';
 import { getPyodideClient } from '@/utils/pyodideManager.workerClient';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import type { InputOption } from '@/workers/pyodide.workerProtocol';
@@ -18,6 +18,15 @@ function getOptionLabel(opt: InputOption): string {
   return typeof opt === 'string' ? opt : opt.label;
 }
 
+function computeInitialInput(pi: PendingInput | null): string {
+  if (!pi) return '';
+  let v = pi.defaultValue ?? '';
+  if (!v && pi.inputType === 'select' && pi.options?.length) {
+    v = getOptionValue(pi.options[0]);
+  }
+  return v;
+}
+
 export function WorkflowExecutionDialog() {
   const {
     isOpen, isExecuting, activityLabel, progress, progressStage,
@@ -27,8 +36,13 @@ export function WorkflowExecutionDialog() {
   const logEndRef = useRef<HTMLDivElement>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [inputValue, setInputValue] = useState('');
+  const [inputValue, setInputValue] = useState(() => computeInitialInput(pendingInput));
   const inputRef = useRef<HTMLInputElement | HTMLSelectElement>(null);
+  const [prevPendingInput, setPrevPendingInput] = useState(pendingInput);
+  if (pendingInput !== prevPendingInput) {
+    setPrevPendingInput(pendingInput);
+    setInputValue(computeInitialInput(pendingInput));
+  }
 
   useEffect(() => {
     if (autoScroll && logEndRef.current) {
@@ -38,11 +52,6 @@ export function WorkflowExecutionDialog() {
 
   useEffect(() => {
     if (pendingInput) {
-      let initial = pendingInput.defaultValue ?? '';
-      if (!initial && pendingInput.inputType === 'select' && pendingInput.options?.length) {
-        initial = getOptionValue(pendingInput.options[0]);
-      }
-      setInputValue(initial);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [pendingInput]);
@@ -84,7 +93,9 @@ export function WorkflowExecutionDialog() {
 
   // Cancel pending input when dialog closes (prevents worker hang)
   const pendingInputRef = useRef(pendingInput);
-  pendingInputRef.current = pendingInput;
+  useEffect(() => {
+    pendingInputRef.current = pendingInput;
+  }, [pendingInput]);
   useEffect(() => {
     if (isOpen) return;
     // Dialog just closed — if there was a pending input, cancel it

@@ -22,7 +22,7 @@ describe('workflow-input-resolution-fixture.ttl', () => {
   let ttl: string;
 
   beforeEach(() => {
-    ttl = readFileSync(fixturePath, 'utf-8');
+    ttl = readFileSync(fixturePath, 'utf-8').replace(/\r\n/g, '\n');
   });
 
   it('file exists and is non-empty', () => {
