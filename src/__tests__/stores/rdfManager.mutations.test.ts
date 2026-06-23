@@ -39,6 +39,41 @@ describe("RDFManager mutation APIs", () => {
     expect(quads.some((q: any) => q.subject === subj && q.predicate === pred && q.object === obj)).toBeTruthy();
   });
 
+  test("BUG C: applyBatch re-adding an existing triple returns added:0 (honest store delta)", async () => {
+    const subj = "http://example.com/dup";
+    const pred = "http://example.com/p";
+    const obj = "http://example.com/o";
+
+    // First add genuinely changes the store → added:1.
+    const first = await rdfManager.applyBatch(
+      { adds: [{ subject: subj, predicate: pred, object: obj }] },
+      "urn:vg:data",
+    );
+    expect(first.added).toBe(1);
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Re-adding the SAME triple is a no-op (N3 de-dupes) → added MUST be 0, not 1.
+    // This is what makes revertBatch's partial-revert reporting honest.
+    const second = await rdfManager.applyBatch(
+      { adds: [{ subject: subj, predicate: pred, object: obj }] },
+      "urn:vg:data",
+    );
+    expect(second.added).toBe(0);
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Removing it once genuinely removes it → removed:1; a second remove → 0.
+    const rem1 = await rdfManager.applyBatch(
+      { removes: [{ subject: subj, predicate: pred, object: obj }] },
+      "urn:vg:data",
+    );
+    expect(rem1.removed).toBe(1);
+    const rem2 = await rdfManager.applyBatch(
+      { removes: [{ subject: subj, predicate: pred, object: obj }] },
+      "urn:vg:data",
+    );
+    expect(rem2.removed).toBe(0);
+  });
+
   test("removeTriple removes triples added previously", async () => {
     const subj = "http://example.com/s2";
     const pred = "http://example.com/p2";

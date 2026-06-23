@@ -5,6 +5,13 @@ export interface ReasoningError {
   rule: string;
   severity: "critical" | "error";
   sourceShape?: string;
+  /**
+   * Complete justification axiom set for an inconsistency clash (the MIPS):
+   * every axiom whose conjunction causes the contradiction. Present on OWL DL
+   * inconsistency errors so the UI and MCP agents can inspect the full clash,
+   * not just the truncated summary in `message`.
+   */
+  justification?: { subject: string; predicate: string; object: string }[];
 }
 
 export interface ReasoningWarning {

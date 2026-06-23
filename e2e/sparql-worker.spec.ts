@@ -19,18 +19,29 @@ const BASE_URL = process.env.VG_URL ?? "http://localhost:8080";
 async function waitForTools(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const tools = (window as any).__mcpTools;
-    return tools && typeof tools.queryGraph === "function";
-  }, { timeout: 10_000 });
+    return window.crossOriginIsolated !== false &&
+      tools && typeof tools.queryGraph === "function";
+  }, { timeout: 30_000 });
 }
 
-async function qg(page: Page, sparql: string, limit?: number) {
-  return page.evaluate(
-    async ({ sparql, limit }: { sparql: string; limit?: number }) => {
-      const queryGraph = (window as any).__mcpTools.queryGraph;
-      return queryGraph({ sparql, ...(limit !== undefined ? { limit } : {}) });
-    },
-    { sparql, limit },
-  );
+async function qg(page: Page, sparql: string, limit?: number): Promise<any> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await page.evaluate(
+        async ({ sparql, limit }: { sparql: string; limit?: number }) => {
+          const queryGraph = (window as any).__mcpTools.queryGraph;
+          return queryGraph({ sparql, ...(limit !== undefined ? { limit } : {}) });
+        },
+        { sparql, limit },
+      );
+    } catch (err: any) {
+      if (attempt === 0 && /context was destroyed|navigat/i.test(err.message)) {
+        await waitForTools(page);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 test.describe("queryGraph browser worker", () => {

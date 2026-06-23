@@ -20,7 +20,7 @@ import type { NamespaceEntry } from '../constants/namespaces';
 import { generateEntityIri } from '../utils/iriUtils';
 
 interface RdfManagerLike {
-  applyBatch(changes: { adds?: any[]; removes?: any[] }, graph?: string): Promise<void>;
+  applyBatch(changes: { adds?: any[]; removes?: any[] }, graph?: string): Promise<{ added: number; removed: number } | void>;
   getNamespaces(): NamespaceEntry[];
 }
 

@@ -16,10 +16,20 @@ interface RdfLinkBodyProps extends Reactodia.LinkTemplateProps {
   inferred: boolean;
 }
 
+// This file's public exports are the RdfLinkTemplate descriptor and its resolver
+// function, not a component; the body component is intentionally co-located here.
+// eslint-disable-next-line react-refresh/only-export-components
 function RdfLinkBody({ inferred, ...rest }: RdfLinkBodyProps) {
   const typeId = String(rest.link.typeId);
   const prefixed = toPrefixed(typeId);
-  const hoverTitle = prefixed !== typeId ? `${prefixed} <${typeId}>` : typeId;
+  const baseTitle = prefixed !== typeId ? `${prefixed} <${typeId}>` : typeId;
+  // Inferred links render as SVG labels (no room for an interactive HTML
+  // popover), so we surface the "inferred" status via the hover title. The
+  // interactive "why was this inferred?" explanation lives on the HTML element
+  // template for inferred types and inferred data properties.
+  const hoverTitle = inferred
+    ? `${baseTitle} — inferred (entailed, not asserted)`
+    : baseTitle;
 
   return (
     <Reactodia.StandardRelation

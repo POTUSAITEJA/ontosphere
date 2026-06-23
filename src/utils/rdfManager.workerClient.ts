@@ -10,7 +10,13 @@ import type {
   RDFWorkerUnsubscribeRequest,
 } from "./rdfManager.workerProtocol";
 
-type EventName = "change" | "subjects" | "reasoningStage" | "reasoningResult" | "reasoningError";
+type EventName =
+  | "change"
+  | "subjects"
+  | "reasoningStage"
+  | "reasoningResult"
+  | "reasoningError"
+  | "importProgress";
 
 type EventHandlerMap = {
   change: Set<(payload: any) => void>;
@@ -18,6 +24,7 @@ type EventHandlerMap = {
   reasoningStage: Set<(payload: any) => void>;
   reasoningResult: Set<(payload: any) => void>;
   reasoningError: Set<(payload: any) => void>;
+  importProgress: Set<(payload: any) => void>;
 };
 
 export interface RdfManagerWorkerClientOptions {
@@ -53,6 +60,7 @@ export class RdfManagerWorkerClient {
     reasoningStage: new Set(),
     reasoningResult: new Set(),
     reasoningError: new Set(),
+    importProgress: new Set(),
   };
   private executor: RdfManagerWorkerClientOptions["executor"] | null;
   private subscribedEvents: Set<keyof EventHandlerMap> = new Set();

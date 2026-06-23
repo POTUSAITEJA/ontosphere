@@ -254,7 +254,6 @@ function SearchMatchCounterInner() {
   const ctx = useSearchIndexContext();
   const ctxWithNavigate = React.useMemo(
     () => ({ ...ctx, onSelectEntity: navigate }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [ctx, navigate]
   );
 

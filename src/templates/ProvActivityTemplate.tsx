@@ -10,6 +10,9 @@ import { executeActivity } from '../utils/executeActivity';
 import { useWorkflowExecutionStore } from '../stores/workflowExecutionStore';
 import { toast } from 'sonner';
 
+// This file's public export is the ProvActivityTemplate descriptor object, not a
+// component; the body component is intentionally co-located with its template.
+// eslint-disable-next-line react-refresh/only-export-components
 function ProvActivityBody({ props }: { props: Reactodia.TemplateProps }) {
   const { element } = props;
   const { model } = Reactodia.useWorkspace();

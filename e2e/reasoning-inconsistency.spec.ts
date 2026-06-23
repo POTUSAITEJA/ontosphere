@@ -16,23 +16,39 @@ import * as path from 'path';
 
 const BASE_URL = (process.env.VG_URL ?? 'http://localhost:8080') + '?ontologies=';
 
-async function waitForMcpTools(page: Page) {
+async function waitForReady(page: Page) {
   await page.waitForFunction(
-    () => !!(window as any).__mcpTools && typeof (window as any).__mcpTools['loadRdf'] === 'function',
-    { timeout: 20_000 },
+    () =>
+      window.crossOriginIsolated !== false &&
+      !!(window as any).__mcpTools &&
+      typeof (window as any).__mcpTools['loadRdf'] === 'function',
+    { timeout: 30_000 },
   );
 }
 
-async function call(page: Page, tool: string, params: object) {
-  return page.evaluate(
-    ([t, p]) => (window as any).__mcpTools[t](p),
-    [tool, params] as const,
-  );
+async function call(page: Page, tool: string, params: object): Promise<any> {
+  // CI: Vite HMR or COI service worker can reload the page after the initial
+  // load. page.evaluate fails with "Execution context was destroyed" when this
+  // happens mid-call. Retry once after waiting for the new page to be ready.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await page.evaluate(
+        ([t, p]) => (window as any).__mcpTools[t](p),
+        [tool, params] as const,
+      );
+    } catch (err: any) {
+      if (attempt === 0 && /context was destroyed|navigat/i.test(err.message)) {
+        await waitForReady(page);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 test('MCP runReasoning: inconsistent TTL → isConsistent=false, errors with frank nodeId, inferredTriples=0', async ({ page }) => {
   await page.goto(BASE_URL);
-  await waitForMcpTools(page);
+  await waitForReady(page);
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
   await call(page, 'loadRdf', { turtle });
@@ -52,14 +68,14 @@ test('MCP runReasoning: inconsistent TTL → isConsistent=false, errors with fra
 
 test('TopBar indicator: inconsistent TTL → button shows Inconsistent', async ({ page }) => {
   await page.goto(BASE_URL);
-  await waitForMcpTools(page);
+  await waitForReady(page);
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
   await call(page, 'loadRdf', { turtle });
   await call(page, 'runReasoning', {});
 
   const button = page.locator('button.glass-btn--status-error');
-  await button.waitFor({ timeout: 10_000 });
+  await button.waitFor({ timeout: 30_000 });
   const text = await button.textContent();
   console.log('[TEST] TopBar button text:', text);
   expect(text).toMatch(/Inconsistent/i);
@@ -67,7 +83,7 @@ test('TopBar indicator: inconsistent TTL → button shows Inconsistent', async (
 
 test('Modal content: Summary shows OWL DL card, Errors tab shows affected node', async ({ page }) => {
   await page.goto(BASE_URL);
-  await waitForMcpTools(page);
+  await waitForReady(page);
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
   await call(page, 'loadRdf', { turtle });
@@ -75,11 +91,11 @@ test('Modal content: Summary shows OWL DL card, Errors tab shows affected node',
 
   // Click the error button to open the modal
   const button = page.locator('button.glass-btn--status-error');
-  await button.waitFor({ timeout: 10_000 });
+  await button.waitFor({ timeout: 30_000 });
   await button.click();
 
   const dialog = page.locator('[role="dialog"]');
-  await dialog.waitFor({ timeout: 10_000 });
+  await dialog.waitFor({ timeout: 30_000 });
 
   // Summary tab should show the OWL DL inconsistency card
   await expect(dialog.getByText('OWL DL inconsistency detected')).toBeVisible();
@@ -87,14 +103,14 @@ test('Modal content: Summary shows OWL DL card, Errors tab shows affected node',
   // Switch to Errors tab
   await dialog.getByRole('tab', { name: /errors/i }).click();
 
-  // Should show "Affected: Node" with the individual IRI
-  await expect(dialog.getByText(/Affected:/i)).toBeVisible();
+  // The Errors tab shows the affected node as a clickable local-name link
+  // (the "Affected: Edge …" prefix is only used for edge-scoped errors).
   await expect(dialog.getByText(/frank/i).first()).toBeVisible();
 });
 
 test('Consistent sanity: reasoning-demo.ttl → isConsistent=true, errors=0, inferredTriples>0, TopBar Valid', async ({ page }) => {
   await page.goto(BASE_URL);
-  await waitForMcpTools(page);
+  await waitForReady(page);
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo.ttl'), 'utf-8');
   await call(page, 'loadRdf', { turtle });
@@ -108,7 +124,9 @@ test('Consistent sanity: reasoning-demo.ttl → isConsistent=true, errors=0, inf
   expect(result?.data?.inferredTriples).toBeGreaterThan(0);
 
   const okButton = page.locator('button.glass-btn--status-ok');
-  await okButton.waitFor({ timeout: 10_000 });
+  await okButton.waitFor({ timeout: 30_000 });
   const text = await okButton.textContent();
-  expect(text).toMatch(/Valid/i);
+  // The OK status button reads "Consistent" (optionally with a SHACL warnings
+  // count), mirroring the "Inconsistent" label asserted in the error-status test.
+  expect(text).toMatch(/Consistent/i);
 });

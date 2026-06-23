@@ -19,6 +19,9 @@ import {
   Bot,
   HelpCircle,
   Shield,
+  History,
+  Search,
+  Gauge,
 } from 'lucide-react';
 import {
   Accordion,
@@ -36,6 +39,9 @@ import {
 } from '../ui/dropdown-menu';
 import { WorkflowTemplateCard } from './WorkflowTemplateCard';
 import { ShaclShapesPanel } from './ShaclShapesPanel';
+import { AgentEditsPanel } from './AgentEditsPanel';
+import { SparqlPanel } from './SparqlPanel';
+import { MetricsPanel } from './MetricsPanel';
 import { getWorkflowTemplates, type WorkflowTemplate } from '../../utils/workflowInstantiator';
 import { useAppConfigStore } from '../../stores/appConfigStore';
 import { useRelayBridge } from '../../hooks/useRelayBridge';
@@ -54,9 +60,8 @@ function parseTocLinks(markdown: string): [string, string][] {
 
 const README_TOC = parseTocLinks(readmeSrc);
 
-export type RdfExportFormat = 'turtle' | 'json-ld' | 'rdf-xml';
+export type RdfExportFormat = 'turtle' | 'json-ld' | 'rdf-xml' | 'nquads' | 'trig';
 
-// eslint-disable-next-line no-script-url
 function buildBookmarkletHref(origin: string, pageHref: string): string {
   const relayUrl = new URL('relay.html', pageHref).href;
   const code = bookmarkletTemplate
@@ -103,12 +108,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     }
   }, [panelOpenRequest, isExpanded, onToggle]);
 
-  useEffect(() => {
-    if (isExpanded && workflowCatalogEnabled) {
-      loadTemplates();
-    }
-  }, [isExpanded, workflowCatalogEnabled]);
-
   const loadTemplates = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -125,6 +124,12 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (isExpanded && workflowCatalogEnabled) {
+      loadTemplates();
+    }
+  }, [isExpanded, workflowCatalogEnabled, loadTemplates]);
 
   // Re-load when the workflows graph changes (e.g. catalog loaded from Settings)
   useEffect(() => {
@@ -247,6 +252,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 <DropdownMenuItem onSelect={() => onExportRdf('rdf-xml')}>
                   RDF/XML (.rdf)
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => onExportRdf('nquads')}>
+                  N-Quads (dataset) (.nq)
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => onExportRdf('trig')}>
+                  TriG (dataset) (.trig)
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
 
@@ -279,6 +291,48 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 </TooltipPrimitive.Portal>
               </TooltipPrimitive.Root>
             )}
+
+            <TooltipPrimitive.Root>
+              <TooltipPrimitive.Trigger asChild>
+                <button className="rail-btn" onClick={() => { setOpenAccordions(['agent-edits']); onToggle(); }} aria-label="Agent Edits">
+                  <History className="h-[18px] w-[18px]" />
+                  <span>Edits</span>
+                </button>
+              </TooltipPrimitive.Trigger>
+              <TooltipPrimitive.Portal>
+                <TooltipPrimitive.Content className="z-[99999] rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md" sideOffset={5} side="right">
+                  Agent Edits<TooltipPrimitive.Arrow className="fill-popover" />
+                </TooltipPrimitive.Content>
+              </TooltipPrimitive.Portal>
+            </TooltipPrimitive.Root>
+
+            <TooltipPrimitive.Root>
+              <TooltipPrimitive.Trigger asChild>
+                <button className="rail-btn" onClick={() => { setOpenAccordions(['sparql']); onToggle(); }} aria-label="SPARQL Query">
+                  <Search className="h-[18px] w-[18px]" />
+                  <span>SPARQL</span>
+                </button>
+              </TooltipPrimitive.Trigger>
+              <TooltipPrimitive.Portal>
+                <TooltipPrimitive.Content className="z-[99999] rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md" sideOffset={5} side="right">
+                  SPARQL Query<TooltipPrimitive.Arrow className="fill-popover" />
+                </TooltipPrimitive.Content>
+              </TooltipPrimitive.Portal>
+            </TooltipPrimitive.Root>
+
+            <TooltipPrimitive.Root>
+              <TooltipPrimitive.Trigger asChild>
+                <button className="rail-btn" onClick={() => { setOpenAccordions(['metrics']); onToggle(); }} aria-label="Ontology Metrics">
+                  <Gauge className="h-[18px] w-[18px]" />
+                  <span>Metrics</span>
+                </button>
+              </TooltipPrimitive.Trigger>
+              <TooltipPrimitive.Portal>
+                <TooltipPrimitive.Content className="z-[99999] rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md" sideOffset={5} side="right">
+                  Ontology Metrics<TooltipPrimitive.Arrow className="fill-popover" />
+                </TooltipPrimitive.Content>
+              </TooltipPrimitive.Portal>
+            </TooltipPrimitive.Root>
 
             <TooltipPrimitive.Root>
                 <TooltipPrimitive.Trigger asChild>
@@ -442,6 +496,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                   <DropdownMenuItem onSelect={() => onExportRdf('rdf-xml')}>
                     RDF/XML (.rdf)
                   </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => onExportRdf('nquads')}>
+                    N-Quads (dataset) (.nq)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => onExportRdf('trig')}>
+                    TriG (dataset) (.trig)
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
 
@@ -525,6 +586,42 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 </AccordionTrigger>
                 <AccordionContent className="pb-2">
                   <ShaclShapesPanel />
+                </AccordionContent>
+              </AccordionItem>
+
+              <AccordionItem value="agent-edits" className="border-none">
+                <AccordionTrigger className="px-3 py-2 hover:bg-accent/5">
+                  <div className="flex items-center gap-2 text-foreground">
+                    <History className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">Agent Edits</span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="pb-2">
+                  <AgentEditsPanel />
+                </AccordionContent>
+              </AccordionItem>
+
+              <AccordionItem value="sparql" className="border-none">
+                <AccordionTrigger className="px-3 py-2 hover:bg-accent/5">
+                  <div className="flex items-center gap-2 text-foreground">
+                    <Search className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">SPARQL</span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="pb-2">
+                  <SparqlPanel />
+                </AccordionContent>
+              </AccordionItem>
+
+              <AccordionItem value="metrics" className="border-none">
+                <AccordionTrigger className="px-3 py-2 hover:bg-accent/5">
+                  <div className="flex items-center gap-2 text-foreground">
+                    <Gauge className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">Metrics</span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="pb-2">
+                  <MetricsPanel />
                 </AccordionContent>
               </AccordionItem>
 

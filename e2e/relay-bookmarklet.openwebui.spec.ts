@@ -97,8 +97,8 @@ async function injectFakeAiMessage(chatPage: Page, text: string) {
   // OpenWebUI renders messages in a scrollable list; we add a div that looks
   // enough like a real AI message for the bookmarklet's observer to pick it up.
   await chatPage.evaluate((msg) => {
-    var container = document.querySelector('[id^="messages-"]') || document.querySelector('.messages') || document.body;
-    var div = document.createElement('div');
+    const container = document.querySelector('[id^="messages-"]') || document.querySelector('.messages') || document.body;
+    const div = document.createElement('div');
     div.setAttribute('data-vg-test-message', 'ai');
     div.style.cssText = 'padding:8px;margin:8px 0;border:1px solid #ccc;white-space:pre-wrap;font-family:monospace';
     div.textContent = msg;
@@ -148,22 +148,22 @@ test.describe('relay — OpenWebUI TipTap inject (local)', () => {
     // Before submit fires (within the 500 ms window), the editor should have text
     // and the send button should be enabled
     await page.waitForFunction(() => {
-      var editor = document.getElementById('chat-input');
-      var text = editor ? (editor.innerText || '').trim() : '';
+      const editor = document.getElementById('chat-input');
+      const text = editor ? (editor.innerText || '').trim() : '';
       return text.includes('[Ontosphere');
     }, { timeout: 10_000 });
 
     const editorText = await page.evaluate(() => {
-      var el = document.getElementById('chat-input');
+      const el = document.getElementById('chat-input');
       return el ? el.innerText : '';
     });
     expect(editorText).toContain('[Ontosphere');
 
     // Send button should be enabled (TipTap state updated via PM dispatch)
     const sendEnabled = await page.evaluate(() => {
-      var btns = Array.from(document.querySelectorAll('button'));
-      var send = btns.find(function(b) {
-        var lbl = (b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
+      const btns = Array.from(document.querySelectorAll('button'));
+      const send = btns.find(function(b) {
+        const lbl = (b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
         return lbl.includes('send') || lbl.includes('senden');
       });
       return send ? !send.disabled : null;

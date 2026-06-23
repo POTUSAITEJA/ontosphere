@@ -45,15 +45,12 @@ export function ShaclShapesPanel() {
     }
   }, [activeMessageKey]);
 
-  // Auto-expand shapes that have validation results
-  useEffect(() => {
-    if (!hasResults) return;
-    setExpanded(prev => {
-      const next = new Set(prev);
-      next.add('urn:vg:shapes');
-      return next;
-    });
-  }, [hasResults]);
+  // Derive an effective expanded set: when there are validation results, always expand
+  // 'urn:vg:shapes' so findings are immediately visible without an extra click.
+  // We compute this during render instead of syncing via an effect+setState.
+  const effectiveExpanded = hasResults
+    ? new Set([...expanded, 'urn:vg:shapes'])
+    : expanded;
 
   const loadShapeInfo = useCallback(async () => {
     try {
@@ -114,12 +111,16 @@ export function ShaclShapesPanel() {
     }
   }, []);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- loadShapeInfo is async; all setState calls
+     inside it occur after "await rdfManager.fetchQuadsPage()", not synchronously in the effect
+     body. The linter cannot infer async control flow statically. */
   useEffect(() => {
     loadShapeInfo();
     const handler = () => { loadShapeInfo(); };
     rdfManager.onChange(handler);
     return () => { rdfManager.offChange(handler); };
   }, [loadShapeInfo]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const toggleGroup = (source: string) => {
     setExpanded(prev => {
@@ -224,7 +225,7 @@ export function ShaclShapesPanel() {
             className="w-full flex items-center gap-1.5 px-2 py-1.5 text-xs hover:bg-accent/50 transition-colors"
             onClick={() => toggleGroup(group.source)}
           >
-            {expanded.has(group.source) ? (
+            {effectiveExpanded.has(group.source) ? (
               <ChevronDown className="w-3 h-3 shrink-0" />
             ) : (
               <ChevronRight className="w-3 h-3 shrink-0" />
@@ -234,7 +235,7 @@ export function ShaclShapesPanel() {
               {group.shapes.length}
             </Badge>
           </button>
-          {expanded.has(group.source) && (
+          {effectiveExpanded.has(group.source) && (
             <div className="border-t divide-y">
               {group.shapes.map(shape => {
                 const shapeMessages = getShapeMessages(shape.iri, shape.constraints.map(c => c.message));

@@ -22,12 +22,17 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['src/test-setup.ts'],
+    pool: 'forks',
+    maxWorkers: 4,
     exclude: [
       '.trunk/**',
       '.worktrees/**',
       '.claude/worktrees/**',
       'node_modules/**',
       'e2e/**',
+      // The study harness ships its own `node:test` suites (run via `node --test`),
+      // not vitest specs — vitest otherwise reports "No test suite found".
+      '_research_workspace/**',
       ...(process.env.NETWORK_TESTS ? [] : ['**/*.network.test.ts']),
     ],
     server: {

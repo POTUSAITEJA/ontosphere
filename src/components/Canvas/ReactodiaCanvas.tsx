@@ -61,7 +61,9 @@ const Layouts = Reactodia.defineLayoutWorker(() =>
   new Worker(new URL('@reactodia/workspace/layout.worker', import.meta.url), { type: 'module' })
 );
 
-// Singletons — one per app lifetime
+// Singletons — one per app lifetime. dataProvider is an exported app-lifetime
+// singleton (not a component); it must live alongside the canvas that wires it up.
+// eslint-disable-next-line react-refresh/only-export-components
 export const dataProvider = new N3DataProvider();
 const metadataProvider = new RdfMetadataProvider(rdfManager, dataProvider);
 const validationProvider = new RdfValidationProvider();
@@ -183,7 +185,9 @@ async function flushAuthoringState(
 
   // Write to RDF store — deleteIris go via removeAllQuadsForIri (hits all graphs),
   // add/change/relationDelete triples go via syncBatch on urn:vg:data.
-  const rdfOps: Promise<void>[] = [];
+  // applyBatch now resolves to the actual store delta ({added, removed}); we
+  // only await completion here, so widen the op list to ignore the value.
+  const rdfOps: Promise<unknown>[] = [];
   if (removes.length > 0 || adds.length > 0) {
     rdfOps.push(rdfManager.applyBatch({ removes, adds }, 'urn:vg:data'));
   }
@@ -558,6 +562,9 @@ export default function ReactodiaCanvas() {
   const [ontologyListOpen, setOntologyListOpen] = React.useState(false);
   const [layoutPanelOpen, setLayoutPanelOpen] = React.useState(false);
   const [isReasoning, setIsReasoning] = React.useState(false);
+  // Ref mirror of isReasoning so closure callbacks (onSubjectsChange handler) can
+  // read the latest value without capturing stale state.
+  const isReasoningRef = React.useRef(false);
   const [isInconsistentDetected, setIsInconsistentDetected] = React.useState(false);
   const [isClustered, setIsClustered] = React.useState(false);
   const levelSnapshot = React.useSyncExternalStore(
@@ -961,6 +968,11 @@ export default function ReactodiaCanvas() {
 
     rdfManager.onSubjectsChange(handler as any);
     return () => rdfManager.offSubjectsChange(handler as any);
+    // Mount-only: this registers a single rdfManager subscription for the component's
+    // lifetime. `actions` (stable Zustand setters) and `defaultLayout` (stable prop) are
+    // read inside the handler; adding them would re-subscribe on every render and churn
+    // the incremental-sync handler. Live config is read via getState(), not via deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Clustering is manual-only (top bar Cluster button). No auto-trigger on algo/threshold change.
@@ -1068,6 +1080,11 @@ export default function ReactodiaCanvas() {
         ctx.editor.revalidateEntities(affected as ReadonlySet<Reactodia.ElementIri>);
       }
     });
+    // Keyed to view-mode transitions only. `actions` (stable Zustand setters) and
+    // `defaultLayout` (stable worker handle from module-scope Layouts) never change for
+    // the component lifetime, so omitting them cannot cause a stale closure; including
+    // them would only obscure that this effect models an ABox/TBox switch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasState.viewMode]);
 
   // Startup initialization: ontology autoload + rdfUrl parameter load
@@ -1391,7 +1408,9 @@ export default function ReactodiaCanvas() {
         ctx.model.removeElement(el.id);
       }
     });
-  }, []);
+    // `actions` is a stable reference (memoized in useCanvasState), so listing it keeps
+    // this callback's identity stable while satisfying the dependency check.
+  }, [actions]);
 
   const handleClearInferred = React.useCallback(() => {
     dataProvider.clearInferred();
@@ -1450,6 +1469,7 @@ export default function ReactodiaCanvas() {
 
   const handleRunReasoning = React.useCallback(async (reasonerBackend?: 'konclude' | 'n3') => {
     setIsReasoning(true);
+    isReasoningRef.current = true;
     setIsInconsistentDetected(false);
     try {
       const cfg = useAppConfigStore.getState().config;
@@ -1491,6 +1511,7 @@ export default function ReactodiaCanvas() {
       return result;
     } finally {
       setIsReasoning(false);
+      isReasoningRef.current = false;
       setIsInconsistentDetected(false);
     }
   }, [handleApplyInferred]);
@@ -1514,6 +1535,194 @@ export default function ReactodiaCanvas() {
   React.useEffect(() => {
     registerSetViewMode(actions.setViewMode);
   }, [actions.setViewMode]);
+
+  // ─── Auto-reasoning: AUTO-INCREMENTAL reclassification on urn:vg:data edits ──
+  // Read autoReasoning from settings store. Using getState() inside the handler
+  // avoids re-registering the subscription on every settings change.
+  const autoReasoningDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Accumulate the subjects touched by edits between debounced runs so the
+  // incremental step can derive Σ_Δ from exactly what changed.
+  const pendingChangedSubjectsRef = React.useRef<Set<string>>(new Set());
+  // C2: accumulate the FULL changed signature (subject + predicate + object IRIs
+  // of every added/removed triple) the worker emits, so predicate/object-position
+  // edits are visible to Σ_Δ — not just the subjects.
+  const pendingChangedSignatureRef = React.useRef<Set<string>>(new Set());
+  // BUG C: a stable scheduler the run-completion path can call to flush edits that
+  // accumulated WHILE a reasoning run was in flight. Assigned by the auto-reasoning
+  // effect; read by handleIncrementalReasoning's finally block.
+  const scheduleAutoReasoningRef = React.useRef<(() => void) | null>(null);
+
+  // Module-scoped incremental reasoning: re-classify only the ⊤⊥*-module induced
+  // by the changed subjects and splice the delta into urn:vg:inferred. The worker
+  // falls back to a full run (and re-establishes the baseline) automatically when
+  // no consistent baseline exists; we then refresh the canvas from the inferred
+  // graph either way. Separate from the manual `handleRunReasoning` (full run +
+  // full report) so live editing stays fast at scale.
+  const handleIncrementalReasoning = React.useCallback(
+    async (changedSubjects: string[], changedSignature: string[]) => {
+      setIsReasoning(true);
+      isReasoningRef.current = true;
+      try {
+        const outcome = await rdfManager.reasonIncremental({ changedSubjects, changedSignature });
+        setIsInconsistentDetected(outcome.isConsistent === false);
+        // Refresh the canvas from the (possibly spliced) inferred graph.
+        await handleApplyInferred();
+        return outcome;
+      } finally {
+        setIsReasoning(false);
+        isReasoningRef.current = false;
+        // BUG C: if edits accumulated WHILE this run was in flight, flush them now
+        // by scheduling another debounced incremental run. Without this, pending
+        // edits would only be reasoned over on the next unrelated edit (staleness).
+        if (
+          (pendingChangedSubjectsRef.current.size > 0 ||
+            pendingChangedSignatureRef.current.size > 0) &&
+          useSettingsStore.getState().settings.autoReasoning
+        ) {
+          scheduleAutoReasoningRef.current?.();
+        }
+      }
+    },
+    [handleApplyInferred],
+  );
+
+  React.useEffect(() => {
+    const AUTO_REASONING_DEBOUNCE_MS = 1500;
+
+    // (Re)schedule the debounced incremental run. Factored out so BOTH a fresh edit
+    // AND a self-reschedule (when the debounce fires mid-run) AND the run-completion
+    // flush use the IDENTICAL scheduling path.
+    const schedule = () => {
+      if (autoReasoningDebounceRef.current) clearTimeout(autoReasoningDebounceRef.current);
+      autoReasoningDebounceRef.current = setTimeout(() => {
+        autoReasoningDebounceRef.current = null;
+        // Re-check guards inside the timeout in case state changed while waiting.
+        if (!useSettingsStore.getState().settings.autoReasoning) return;
+        // BUG C: if a run is in flight when the debounce fires, do NOT drop the
+        // pending edits — RE-SCHEDULE so they are reasoned over once the current run
+        // completes (the run-completion flush also re-schedules; whichever fires
+        // first wins, the other is a harmless no-op once pending is drained).
+        if (isReasoningRef.current) {
+          schedule();
+          return;
+        }
+        // Nothing accumulated (already flushed) ⇒ no-op.
+        if (
+          pendingChangedSubjectsRef.current.size === 0 &&
+          pendingChangedSignatureRef.current.size === 0
+        ) {
+          return;
+        }
+        const changed = [...pendingChangedSubjectsRef.current];
+        const changedSig = [...pendingChangedSignatureRef.current];
+        pendingChangedSubjectsRef.current = new Set();
+        pendingChangedSignatureRef.current = new Set();
+        void handleIncrementalReasoning(changed, changedSig);
+      }, AUTO_REASONING_DEBOUNCE_MS);
+    };
+    scheduleAutoReasoningRef.current = schedule;
+
+    const handler = (
+      subjects: string[],
+      _quads?: unknown,
+      _snapshot?: unknown,
+      meta?: Record<string, unknown> | null,
+    ) => {
+      // Guard 1: only react to explicit urn:vg:data writes — NOT to inferred-graph
+      // writes that the reasoner itself makes. This is the primary infinite-loop
+      // break: every emitSubjects call from the (full OR incremental) reasoner
+      // carries graphName=urn:vg:inferred, so it is unconditionally ignored here.
+      //
+      // BUG FIX: a missing graphName (graphName === null) must NOT be treated as a
+      // urn:vg:data write. Only an EXPLICIT urn:vg:data graphName triggers
+      // reasoning; an emission with no graphName is ambiguous (it could be an
+      // inferred/internal emission that simply omitted the tag) and must not
+      // spuriously fire reasoning. This closes a latent re-entrancy / false-trigger
+      // hole in the previous `graphName === null` allowance.
+      const graphName = meta && typeof meta.graphName === 'string' ? meta.graphName : null;
+      if (graphName !== 'urn:vg:data') return;
+
+      // Guard 2: skip full-refresh (initial load / view-mode switch) — those are not
+      // user edits; firing reasoning on startup would be noisy.
+      if (meta?.reason === 'emitAllSubjects') return;
+
+      // Guard 3: only proceed when autoReasoning is enabled (read live from store).
+      if (!useSettingsStore.getState().settings.autoReasoning) return;
+
+      // BUG C: ALWAYS accumulate the changed subjects + signature into the pending
+      // refs FIRST — BEFORE any in-flight guard — so an edit landing while a run is
+      // in flight is never lost. (Previously the `if (isReasoningRef.current) return`
+      // guard sat before this accumulation, dropping such edits entirely.)
+      for (const s of subjects) {
+        if (typeof s === 'string' && s.length > 0) pendingChangedSubjectsRef.current.add(s);
+      }
+      // C2: accumulate the full changed signature the worker forwarded in meta
+      // (subject + predicate + object IRIs of every added/removed triple).
+      const sig = meta && Array.isArray((meta as { changedSignature?: unknown }).changedSignature)
+        ? ((meta as { changedSignature?: unknown }).changedSignature as unknown[])
+        : [];
+      for (const s of sig) {
+        if (typeof s === 'string' && s.length > 0) pendingChangedSignatureRef.current.add(s);
+      }
+
+      // Debounce: coalesce rapid successive edits into a single reasoning run. If a
+      // run is in flight, schedule() re-schedules itself until the run completes;
+      // the edit is safely held in the pending refs meanwhile.
+      schedule();
+    };
+
+    rdfManager.onSubjectsChange(handler as any);
+    return () => {
+      rdfManager.offSubjectsChange(handler as any);
+      scheduleAutoReasoningRef.current = null;
+      if (autoReasoningDebounceRef.current) {
+        clearTimeout(autoReasoningDebounceRef.current);
+        autoReasoningDebounceRef.current = null;
+      }
+    };
+  }, [handleIncrementalReasoning]);
+
+  // ─── Undo / Redo keyboard shortcuts (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y) ──
+  React.useEffect(() => {
+    const handleUndoRedo = (e: KeyboardEvent) => {
+      // Skip when focus is inside a text input/textarea/contenteditable so that
+      // native browser undo (for typed text) is not hijacked.
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable
+      ) return;
+
+      const modKey = /mac/i.test(navigator.userAgent) ? e.metaKey : e.ctrlKey;
+      if (!modKey) return;
+
+      const model = modelRef.current;
+      if (!model) return;
+
+      if (e.key === 'z' && !e.shiftKey && !e.altKey) {
+        // Ctrl/Cmd+Z → undo
+        e.preventDefault();
+        e.stopPropagation();
+        if (model.history.undoStack.length > 0) {
+          model.history.undo();
+        }
+      } else if (
+        (e.key === 'z' && e.shiftKey && !e.altKey) ||
+        (e.key === 'y' && !e.shiftKey && !e.altKey)
+      ) {
+        // Ctrl/Cmd+Shift+Z or Ctrl+Y → redo
+        e.preventDefault();
+        e.stopPropagation();
+        if (model.history.redoStack.length > 0) {
+          model.history.redo();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleUndoRedo, { capture: true });
+    return () => document.removeEventListener('keydown', handleUndoRedo, { capture: true });
+  }, []);
 
   const handleFileChange = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1547,12 +1756,26 @@ export default function ReactodiaCanvas() {
     setLoadOntologyOpen(true);
   }, []);
 
-  const handleExportRdf = React.useCallback(async (format: 'turtle' | 'json-ld' | 'rdf-xml') => {
+  const handleExportRdf = React.useCallback(async (format: 'turtle' | 'json-ld' | 'rdf-xml' | 'nquads' | 'trig') => {
     try {
       const { exportGraph, dataFilename } = useOntologyStore.getState();
       const content = await exportGraph(format);
-      const ext = format === 'turtle' ? 'ttl' : format === 'json-ld' ? 'jsonld' : 'rdf';
-      const mime = format === 'turtle' ? 'text/turtle' : format === 'json-ld' ? 'application/ld+json' : 'application/rdf+xml';
+      const extByFormat: Record<typeof format, string> = {
+        'turtle': 'ttl',
+        'json-ld': 'jsonld',
+        'rdf-xml': 'rdf',
+        'nquads': 'nq',
+        'trig': 'trig',
+      };
+      const mimeByFormat: Record<typeof format, string> = {
+        'turtle': 'text/turtle',
+        'json-ld': 'application/ld+json',
+        'rdf-xml': 'application/rdf+xml',
+        'nquads': 'application/n-quads',
+        'trig': 'application/trig',
+      };
+      const ext = extByFormat[format];
+      const mime = mimeByFormat[format];
       const baseName = dataFilename || 'knowledgegraph';
       const blob = new Blob([content], { type: mime });
       const url = URL.createObjectURL(blob);

@@ -1,13 +1,15 @@
 import { memo, useState, useEffect, useCallback, useRef } from 'react';
+import { toast } from 'sonner';
 import { rdfManager } from '../../utils/rdfManager';
 import { Badge } from '../ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { ScrollArea } from '../ui/scroll-area';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
-import { AlertTriangle, CheckCircle, XCircle, Lightbulb, Clock, Shield, ExternalLink, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle, XCircle, Lightbulb, Clock, Shield, ExternalLink, X, Wrench } from 'lucide-react';
 import type { ReasoningResult } from '../../utils/rdfManager';
 import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import { useShaclResultStore, makeShaclMessageKey } from '@/stores/shaclResultStore';
+import { RepairSuggestions } from './RepairSuggestions';
 
 const InferredTriplesTable = () => {
   const [page, setPage] = useState(1);
@@ -59,10 +61,9 @@ const InferredTriplesTable = () => {
         .map((k) => parseInt(k, 10))
         .filter((i) => selected[i]);
       if (selectedIndices.length === 0) {
-        window.alert("No triples selected for promotion.");
+        toast.info("No triples selected for promotion.");
         return;
       }
-      if (!window.confirm(`Promote ${selectedIndices.length} inferred triple(s) into urn:vg:data?`)) return;
 
       const adds: any[] = [];
       for (const si of selectedIndices) {
@@ -73,12 +74,30 @@ const InferredTriplesTable = () => {
 
       await rdfManager.applyBatch({ removes: [], adds }, "urn:vg:data");
       try { await rdfManager.emitAllSubjects("urn:vg:data"); } catch (_) { /* ignore */ }
-      window.alert(`Promoted ${adds.length} triples into urn:vg:data`);
+
+      const promotedAdds = [...adds];
       setSelected({});
       void fetchPage(page, pageSize);
+
+      toast.success(`Promoted ${promotedAdds.length} triple(s) into urn:vg:data`, {
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            try {
+              await rdfManager.applyBatch({ removes: promotedAdds, adds: [] }, "urn:vg:data");
+              try { await rdfManager.emitAllSubjects("urn:vg:data"); } catch (_) { /* ignore */ }
+              toast.success(`Undid promotion of ${promotedAdds.length} triple(s)`);
+            } catch (err) {
+              console.error("Undo promotion failed", err);
+              toast.error("Undo failed (see console)");
+            }
+          },
+        },
+        duration: 8000,
+      });
     } catch (e) {
       console.error("Promote failed", e);
-      window.alert("Promotion failed (see console).");
+      toast.error("Promotion failed (see console).");
     }
   };
 
@@ -87,9 +106,9 @@ const InferredTriplesTable = () => {
       const t = `${q.subject} ${q.predicate} ${q.object}`;
       if (navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(t);
-        window.alert("Copied triple to clipboard");
+        toast.success("Copied triple to clipboard");
       } else {
-        window.prompt("Copy the triple below", t);
+        toast.info("Copy the triple below", { description: t });
       }
     } catch (e) {
       console.error("copy failed", e);
@@ -181,6 +200,7 @@ interface ReasoningReportModalProps {
 
 export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning, reasoningHistory }: ReasoningReportModalProps) => {
   const [graphCounts, setGraphCounts] = useState<Record<string, number>>({});
+  const [activeTab, setActiveTab] = useState('summary');
   const panelRef = useRef<HTMLDivElement>(null);
   const reasoningId = currentReasoning?.id ?? null;
   const hasReasoning = !!currentReasoning;
@@ -248,7 +268,12 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
         className="absolute inset-0 z-50 flex items-start justify-center bg-black/60 pt-4"
         onMouseDown={e => { if (e.target === e.currentTarget) onOpenChange(false); }}
       >
-        <div className="w-full max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Reasoning report"
+          className="w-full max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200"
+        >
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-lg font-semibold">Reasoning Report</h2>
             <button onClick={() => onOpenChange(false)} className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent transition-colors">
@@ -270,8 +295,15 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
   const isShaclRule = (rule: string) => rule.startsWith('shacl:') || rule === 'sh:ValidationResult';
   const shaclErrors = errors.filter(e => isShaclRule(e.rule));
   const shaclWarnings = warnings.filter(w => isShaclRule(w.rule));
+  // F7: first OWL (non-SHACL) clash, used to preview the cause in the inconsistency summary.
+  const clashError = errors.find(e => !isShaclRule(e.rule));
+  const clashLocalName = clashError?.nodeId ? (clashError.nodeId.split(/[#/]/).pop() ?? clashError.nodeId) : null;
   const shaclTotal = shaclErrors.length + shaclWarnings.length;
   const shaclHasErrors = shaclErrors.length > 0;
+  // The graph is repairable when the reasoner found a logical contradiction or
+  // when SHACL reported any conformance failure — these are exactly the cases
+  // computeRepairs can produce executable fixes for.
+  const hasRepairableIssues = isConsistent === false || shaclTotal > 0;
 
   return (
     <div
@@ -280,6 +312,9 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
     >
       <div
         ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Reasoning report"
         className="w-full max-w-[min(90%,64rem)] max-h-[calc(100%-2rem)] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200"
       >
         {/* Header */}
@@ -306,7 +341,7 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
           </button>
         </div>
 
-        <Tabs defaultValue="summary" className="w-full">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="flex w-full overflow-x-auto">
             <TabsTrigger value="summary" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3">Summary</TabsTrigger>
             <TabsTrigger value="errors" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3 flex items-center gap-1">
@@ -317,6 +352,12 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                 </Badge>
               )}
             </TabsTrigger>
+            {hasRepairableIssues && (
+              <TabsTrigger value="repairs" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3 flex items-center gap-1">
+                <Wrench className="w-3 h-3" />
+                Repairs
+              </TabsTrigger>
+            )}
             <TabsTrigger value="warnings" className="flex-1 min-w-0 text-xs sm:text-sm px-2 sm:px-3 flex items-center gap-1">
               Warnings
               {warnings.length > 0 && (
@@ -412,9 +453,26 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
                     The ontology contains a logical contradiction.
-                    Inferred triples were not generated. See the Errors tab for the
+                    {clashError && (
+                      <>
+                        {' '}First clash:{' '}
+                        <span className="font-medium text-foreground">
+                          {clashLocalName ? `${clashLocalName} — ` : ''}{clashError.rule}
+                        </span>.
+                      </>
+                    )}
+                    {' '}Inferred triples were not generated. See the Errors tab for the
                     specific axioms involved.
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('repairs')}
+                    className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline cursor-pointer"
+                    aria-label="View suggested repairs for this inconsistency"
+                  >
+                    <Wrench className="w-3 h-3" />
+                    View suggested repairs
+                  </button>
                 </CardContent>
               </Card>
             )}
@@ -515,6 +573,21 @@ export const ReasoningReportModal = memo(({ open, onOpenChange, currentReasoning
               </div>
             </ScrollArea>
           </TabsContent>
+
+          {hasRepairableIssues && (
+            <TabsContent value="repairs">
+              <ScrollArea className="h-[400px]">
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    Reasoner-computed, verified fixes. Each suggestion is the same minimal
+                    repair the symbolic verifier would hand an agent — click “Apply fix” to
+                    apply it to your data, then re-run reasoning to confirm.
+                  </p>
+                  <RepairSuggestions reasoningId={reasoningId} isConsistent={isConsistent} />
+                </div>
+              </ScrollArea>
+            </TabsContent>
+          )}
 
           <TabsContent value="warnings">
             <ScrollArea className="h-[400px]">

@@ -57,3 +57,7 @@ docs/demo-keyframes/
 # Paper build artifacts (regenerable via scripts/build-paper-zip.sh)
 ontosphere-iswc2026-paper.zip
 public/paper/lncs-splnproc.zip
+
+# Research workspace (paper drafts, study data) and orchestration state — local only
+_research_workspace/
+.omc/

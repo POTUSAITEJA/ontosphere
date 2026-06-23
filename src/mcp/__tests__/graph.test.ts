@@ -13,6 +13,11 @@ vi.mock('@/utils/rdfManager', () => ({
     fetchQuadsPage: vi.fn().mockResolvedValue({ items: [], total: 0, offset: 0, limit: 0 }),
     sparqlQuery: vi.fn().mockResolvedValue({ type: 'select', rows: [] }),
     getNamespaces: vi.fn().mockReturnValue([]),
+    canonicalize: vi.fn().mockResolvedValue({
+      canonical: '_:c14n0 <http://ex/p> _:c14n1 .\n',
+      hash: 'a'.repeat(64),
+      quadCount: 1,
+    }),
   },
 }));
 
@@ -35,6 +40,10 @@ vi.mock('@/mcp/workspaceContext', () => ({
     },
     dataProvider: { lookupAll: mockLookupAll },
   })),
+}));
+
+vi.mock('@/mcp/provenance', () => ({
+  getProvenanceRecorder: () => ({ recordEdit: vi.fn().mockResolvedValue(null) }),
 }));
 
 import { graphTools } from '../tools/graph';
@@ -135,6 +144,10 @@ describe('queryGraph', () => {
     (rdfManager.sparqlQuery as ReturnType<typeof vi.fn>).mockResolvedValue({ type: 'update' });
   }
 
+  function mockAsk(answer: boolean) {
+    (rdfManager.sparqlQuery as ReturnType<typeof vi.fn>).mockResolvedValue({ type: 'ask', boolean: answer });
+  }
+
   it('returns rows for SELECT *', async () => {
     mockSelect([
       { s: EX + 'Alice', p: RDFS_LABEL, o: 'Alice' },
@@ -174,10 +187,20 @@ describe('queryGraph', () => {
     expect((result as any).error).toContain('SPARQL parse error');
   });
 
-  it('rejects ASK queries', async () => {
-    const result = await tool('queryGraph').handler({ sparql: `ASK { <${EX}Alice> ?p ?o }` });
-    expect(result.success).toBe(false);
-    expect((result as any).error).toContain('ASK');
+  it('ASK returns boolean true when the worker says true', async () => {
+    mockAsk(true);
+    const result = await tool('queryGraph').handler({ sparql: `ASK { <${EX}Alice> ?p ?o }` }) as any;
+    expect(result.success).toBe(true);
+    expect(result.data.type).toBe('ask');
+    expect(result.data.boolean).toBe(true);
+  });
+
+  it('ASK returns boolean false when the worker says false', async () => {
+    mockAsk(false);
+    const result = await tool('queryGraph').handler({ sparql: `ASK { <${EX}NoSuchThing> ?p ?o }` }) as any;
+    expect(result.success).toBe(true);
+    expect(result.data.type).toBe('ask');
+    expect(result.data.boolean).toBe(false);
   });
 
   it('CONSTRUCT returns triples without writing to store', async () => {
@@ -349,5 +372,41 @@ describe('suggestOntologiesForTask', () => {
         }
       }
     }
+  });
+});
+
+describe('canonicalizeGraph (RDFC-1.0)', () => {
+  it('returns canonical, hash, and quadCount from rdfManager.canonicalize', async () => {
+    const result = await tool('canonicalizeGraph').handler({});
+    expect(result.success).toBe(true);
+    const data = (result as any).data;
+    expect(typeof data.canonical).toBe('string');
+    expect(data.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(data.quadCount).toBe(1);
+  });
+
+  it('forwards graph and includeInferred options to rdfManager.canonicalize', async () => {
+    await tool('canonicalizeGraph').handler({ graph: 'urn:vg:data', includeInferred: true });
+    expect(rdfManager.canonicalize).toHaveBeenCalledWith({
+      graph: 'urn:vg:data',
+      includeInferred: true,
+    });
+  });
+
+  it('defaults includeInferred to false when omitted', async () => {
+    await tool('canonicalizeGraph').handler({});
+    expect(rdfManager.canonicalize).toHaveBeenCalledWith({
+      graph: undefined,
+      includeInferred: false,
+    });
+  });
+
+  it('returns an error result when canonicalize throws', async () => {
+    (rdfManager.canonicalize as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('boom'),
+    );
+    const result = await tool('canonicalizeGraph').handler({});
+    expect(result.success).toBe(false);
+    expect((result as any).error).toContain('boom');
   });
 });
