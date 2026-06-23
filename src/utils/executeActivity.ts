@@ -417,34 +417,6 @@ export async function executeActivity(
     graphName: WORKFLOWS_GRAPH,
   }) ?? [];
 
-  // Find variables that are output of currentStep AND input of nextStep (the "wire")
-  const currentStepOutVarQuads: any[] = await worker.call('getQuads', {
-    predicate: `${PPLAN_NS}isOutputVarOf`,
-    object: { termType: 'NamedNode', value: currentStepIri },
-    graphName: WORKFLOWS_GRAPH,
-  }) ?? [];
-  const nextStepInVarQuads: any[] = await worker.call('getQuads', {
-    predicate: `${PPLAN_NS}isInputVarOf`,
-    object: { termType: 'NamedNode', value: nextStepIri },
-    graphName: WORKFLOWS_GRAPH,
-  }) ?? [];
-  const nextStepInVarSet = new Set(nextStepInVarQuads.map((q: any) => q.subject.value));
-  const sharedVarIris = currentStepOutVarQuads
-    .map((q: any) => q.subject.value)
-    .filter((v: string) => nextStepInVarSet.has(v));
-
-  // For each shared var, find the run-level entity already in the data graph
-  // (written by the Python script via pplan:correspondsToVariable)
-  const intermediateEntityIris: string[] = [];
-  for (const varIri of sharedVarIris) {
-    const entityQuads: any[] = await worker.call('getQuads', {
-      predicate: `${PPLAN_NS}correspondsToVariable`,
-      object: { termType: 'NamedNode', value: varIri },
-      graphName: DATA_GRAPH,
-    }) ?? [];
-    for (const eq of entityQuads) intermediateEntityIris.push(eq.subject.value);
-  }
-
   // Find output vars of the next step so we can create placeholders
   const nextStepOutVarQuads: any[] = await worker.call('getQuads', {
     predicate: `${PPLAN_NS}isOutputVarOf`,
@@ -466,10 +438,6 @@ export async function executeActivity(
     ...(nextStepAgentQuads[0] ? [{
       subject: namedNode(nextActivityIri), predicate: namedNode(`${PROV_NS}wasAssociatedWith`), object: namedNode(nextStepAgentQuads[0].object.value),
     }] : []),
-    // Wire intermediate data entities as prov:used inputs of nextActivity
-    ...intermediateEntityIris.map(entityIri => ({
-      subject: namedNode(nextActivityIri), predicate: namedNode(`${PROV_NS}used`), object: namedNode(entityIri),
-    })),
   ];
 
   // Create output var instance placeholders for the next step's outputs
