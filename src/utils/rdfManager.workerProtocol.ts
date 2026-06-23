@@ -235,9 +235,6 @@ export type RDFWorkerCommandPayloads = {
    * pushes it to the worker, where the actual OPFS I/O lives. When OPFS is
    * unavailable the worker no-ops regardless of this flag.
    */
-  setPersistence: { enabled: boolean };
-  /** Delete the OPFS snapshot file (forget the persisted graph). */
-  clearPersistedStore: undefined;
 };
 
 export const RDF_WORKER_COMMANDS = [
@@ -274,8 +271,6 @@ export const RDF_WORKER_COMMANDS = [
   "explainEntailment",
   "extractModule",
   "reasonIncremental",
-  "setPersistence",
-  "clearPersistedStore",
 ] as const;
 
 export type RDFWorkerCommandName = (typeof RDF_WORKER_COMMANDS)[number];
@@ -833,16 +828,6 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
       changedSignature,
       "reasonIncremental.changedSignature must be an array of strings when provided",
     );
-  },
-  setPersistence(payload) {
-    assertPlainObject(payload, "setPersistence payload must be an object");
-    assertBoolean(
-      (payload as { enabled: unknown }).enabled,
-      "setPersistence.enabled must be a boolean",
-    );
-  },
-  clearPersistedStore(payload) {
-    invariant(typeof payload === "undefined", "clearPersistedStore payload must be undefined");
   },
 };
 

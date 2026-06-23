@@ -32,7 +32,7 @@ import {
   signatureOf,
   type LocalityTriple,
 } from "./localityModule.ts";
-import { OpfsPersistence, createOpfsBackend } from "./opfsPersistence.ts";
+
 import { QueryEngine } from "@comunica/query-sparql-rdfjs";
 // LACONIC JUSTIFICATIONS (Horridge, Parsia, Sattler, ISWC 2008). IMPORT ONLY —
 // the pure module is never edited here. `splitAxiom` is the structural weakening
@@ -1569,29 +1569,6 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     resetIncrementalDrift();
   }
 
-  // ── OPFS persistence / crash recovery ─────────────────────────────────────
-  //
-  // Client-side, zero-backend durability: the durable graphs are debounced-
-  // snapshotted to an OPFS file and restored on store init. The OPFS backend is
-  // null (→ everything no-ops) when OPFS is unavailable, e.g. jsdom/Node tests,
-  // so the existing suite is completely unaffected. The enable preference comes
-  // from the main thread (localStorage) via the setPersistence command; default
-  // is enabled, but the availability guard means tests stay no-op regardless.
-  const opfsPersistence = new OpfsPersistence({ backend: createOpfsBackend(), enabled: true });
-  // Suppresses snapshot scheduling while a restore is loading quads into the
-  // store (those addQuad calls funnel through emitChange and would otherwise
-  // schedule a redundant snapshot of what we just read back).
-  let restoreInProgress = false;
-
-  function schedulePersistenceSnapshot() {
-    if (restoreInProgress) return;
-    try {
-      if (sharedStore) opfsPersistence.scheduleSnapshot(sharedStore);
-    } catch (err) {
-      debugLog("[rdfManager.worker] schedulePersistenceSnapshot skipped", err);
-    }
-  }
-
   // ── Incremental per-named-graph triple counters ───────────────────────────
   //
   // getGraphCounts is called frequently (every reasoning report refresh, UI
@@ -1776,56 +1753,7 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     installGraphCountTracking(sharedStore);
     // Non-negotiable: always seed the store with OWL/RDFS/RDF meta-ontology axioms
     if (DataFactory) loadSchemaOntology(sharedStore, DataFactory);
-    // Crash recovery: only on the initial lazy creation of the store (NOT on an
-    // explicit `clear`, which intentionally wipes everything). Restored quads
-    // merge over the seeds — the N3 store dedups, so re-seeded ontology axioms
-    // are not double-counted. No-ops when OPFS is unavailable (jsdom/Node/tests).
-    if (options?.restore && opfsPersistence.isActive()) {
-      void restorePersistedStore();
-    }
     return sharedStore;
-  }
-
-  /**
-   * Read the OPFS snapshot and merge it into the freshly-seeded store, then emit
-   * the restored subjects so the canvas reflects the recovered graph. Guarded by
-   * restoreInProgress so the restore's addQuad calls do not schedule a redundant
-   * snapshot of what we just read back. Never throws.
-   */
-  async function restorePersistedStore(): Promise<void> {
-    const store = sharedStore;
-    if (!store) return;
-    restoreInProgress = true;
-    try {
-      const loaded = await opfsPersistence.restore(store);
-      if (loaded > 0) {
-        const { DataFactory } = resolveN3();
-        debugLog("[rdfManager.worker] restored quads from OPFS", loaded);
-        emitChange({ reason: "restorePersisted", added: loaded });
-        if (DataFactory) {
-          const subjects = new Set<string>();
-          for (const g of ["urn:vg:data", "urn:vg:ontologies", "urn:vg:shapes", "urn:vg:workflows"]) {
-            const gTerm = DataFactory.namedNode(g);
-            for (const q of store.getQuads(null, null, null, gTerm) || []) {
-              subjects.add(subjectTermToString(q.subject));
-            }
-          }
-          const emission = prepareSubjectEmissionFromSet(subjects, store, DataFactory);
-          if (emission.subjects.length > 0) {
-            emitSubjects(
-              emission.subjects,
-              emission.quadsBySubject,
-              emission.snapshot,
-              { reason: "restorePersisted" },
-            );
-          }
-        }
-      }
-    } catch (err) {
-      debugLog("[rdfManager.worker] restorePersistedStore failed", err);
-    } finally {
-      restoreInProgress = false;
-    }
   }
 
   function getSharedStore() {
@@ -1930,9 +1858,6 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         event: "change",
         payload: { changeCount: workerChangeCounter, meta: meta || null },
       });
-      // Every store mutation funnels through emitChange, so this is the single
-      // debounce trigger for OPFS persistence. No-ops when OPFS is unavailable.
-      schedulePersistenceSnapshot();
     } catch (err) {
       console.error("[rdfManager.worker] emitChange failed", err);
     }
@@ -3816,19 +3741,6 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
         case "setDebug":
           workerDebugEnabled = !!(payload && typeof payload === "object" && (payload as { enabled?: unknown }).enabled);
           result = { enabled: workerDebugEnabled };
-          break;
-        case "setPersistence": {
-          const enabled = !!(payload && typeof payload === "object" && (payload as { enabled?: unknown }).enabled);
-          opfsPersistence.setEnabled(enabled);
-          // Turning persistence ON for an already-populated store: capture the
-          // current state immediately so a reload right after enabling recovers.
-          if (enabled && sharedStore) schedulePersistenceSnapshot();
-          result = { enabled: opfsPersistence.isEnabled(), active: opfsPersistence.isActive() };
-          break;
-        }
-        case "clearPersistedStore":
-          await opfsPersistence.clear();
-          result = true;
           break;
         case "syncLoad": {
           // Bulk load — wholesale change; the incremental baseline no longer holds.

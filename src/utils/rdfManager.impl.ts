@@ -43,43 +43,6 @@ const IRI_REGEX = /^[a-z][a-z0-9+.-]*:/i;
  */
 export type VerifyRepairRemoval = RDFWorkerCommandPayloads["verifyRepair"]["removals"][number];
 
-// OPFS persistence enable preference. Stored in localStorage (same browser-
-// storage pattern the rest of the app config uses) so the user's choice
-// survives a reload. Defaults to ENABLED in the real app; in test/SSR contexts
-// (no localStorage) it reads the default and writes are silently skipped.
-const PERSISTENCE_PREF_KEY = "ontosphere.persistence.enabled";
-
-const getLocalStorage = (): Storage | null => {
-  try {
-    if (typeof localStorage !== "undefined") return localStorage;
-  } catch {
-    /* access can throw in sandboxed contexts */
-  }
-  return null;
-};
-
-const readPersistenceEnabledPreference = (): boolean => {
-  const ls = getLocalStorage();
-  if (!ls) return true; // default enabled
-  try {
-    const raw = ls.getItem(PERSISTENCE_PREF_KEY);
-    if (raw === null) return true; // unset → default enabled
-    return raw !== "false";
-  } catch {
-    return true;
-  }
-};
-
-const writePersistenceEnabledPreference = (enabled: boolean): void => {
-  const ls = getLocalStorage();
-  if (!ls) return;
-  try {
-    ls.setItem(PERSISTENCE_PREF_KEY, enabled ? "true" : "false");
-  } catch {
-    /* quota / sandbox — preference simply not persisted */
-  }
-};
-
 const DEFAULT_BLACKLIST_PREFIXES = ["owl", "rdf", "rdfs", "xml", "xsd"];
 const DEFAULT_BLACKLIST_URIS = [
   "http://www.w3.org/2002/07/owl",
@@ -557,9 +520,6 @@ export class RDFManagerImpl {
       }
       console.debug("[rdfManager] bootstrapState.getBlacklist failed", err);
     }
-    // Push the saved OPFS persistence preference to the worker. No-ops in the
-    // worker when OPFS is unavailable (jsdom/Node) so tests are unaffected.
-    this.syncPersistencePreference();
   }
 
   private handleWorkerChange = (payload: any) => {
@@ -1487,46 +1447,6 @@ export class RDFManagerImpl {
   clear(): void {
     void this.worker.call("clear").catch((err) => {
       console.error("[rdfManager] clear failed", err);
-    });
-  }
-
-  // ── OPFS persistence / crash recovery ──────────────────────────────────────
-  //
-  // Client-side, zero-backend durability. The actual OPFS I/O lives in the
-  // worker (sync access handles require a worker context); the main thread only
-  // owns the enable PREFERENCE (persisted to localStorage so the user's choice
-  // survives a reload) and forwards it to the worker. When OPFS is unavailable
-  // (jsdom/Node, or browsers without OPFS) the worker no-ops regardless, so
-  // these methods are always safe to call.
-
-  isPersistenceEnabled(): boolean {
-    return readPersistenceEnabledPreference();
-  }
-
-  setPersistenceEnabled(enabled: boolean): void {
-    writePersistenceEnabledPreference(enabled);
-    // Promise.resolve guards against test doubles whose call() returns undefined.
-    void Promise.resolve(this.worker.call("setPersistence", { enabled })).catch((err) => {
-      console.error("[rdfManager] setPersistence failed", err);
-    });
-  }
-
-  async clearPersistedStore(): Promise<void> {
-    await Promise.resolve(this.worker.call("clearPersistedStore")).catch((err) => {
-      console.error("[rdfManager] clearPersistedStore failed", err);
-    });
-  }
-
-  /**
-   * Push the persisted preference to the worker on startup so the worker's
-   * persistence enable flag matches the user's saved choice. Safe to call
-   * repeatedly; no-ops in the worker when OPFS is unavailable.
-   */
-  private syncPersistencePreference(): void {
-    const enabled = readPersistenceEnabledPreference();
-    // Promise.resolve guards against test doubles whose call() returns undefined.
-    void Promise.resolve(this.worker.call("setPersistence", { enabled })).catch(() => {
-      /* worker may not be ready yet; preference is re-pushed on next toggle */
     });
   }
 
