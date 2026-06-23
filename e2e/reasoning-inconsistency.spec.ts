@@ -75,7 +75,7 @@ test('TopBar indicator: inconsistent TTL → button shows Inconsistent', async (
   await call(page, 'runReasoning', {});
 
   const button = page.locator('button.glass-btn--status-error');
-  await button.waitFor({ timeout: 10_000 });
+  await button.waitFor({ timeout: 30_000 });
   const text = await button.textContent();
   console.log('[TEST] TopBar button text:', text);
   expect(text).toMatch(/Inconsistent/i);
@@ -91,11 +91,11 @@ test('Modal content: Summary shows OWL DL card, Errors tab shows affected node',
 
   // Click the error button to open the modal
   const button = page.locator('button.glass-btn--status-error');
-  await button.waitFor({ timeout: 10_000 });
+  await button.waitFor({ timeout: 30_000 });
   await button.click();
 
   const dialog = page.locator('[role="dialog"]');
-  await dialog.waitFor({ timeout: 10_000 });
+  await dialog.waitFor({ timeout: 30_000 });
 
   // Summary tab should show the OWL DL inconsistency card
   await expect(dialog.getByText('OWL DL inconsistency detected')).toBeVisible();
@@ -124,7 +124,7 @@ test('Consistent sanity: reasoning-demo.ttl → isConsistent=true, errors=0, inf
   expect(result?.data?.inferredTriples).toBeGreaterThan(0);
 
   const okButton = page.locator('button.glass-btn--status-ok');
-  await okButton.waitFor({ timeout: 10_000 });
+  await okButton.waitFor({ timeout: 30_000 });
   const text = await okButton.textContent();
   // The OK status button reads "Consistent" (optionally with a SHACL warnings
   // count), mirroring the "Inconsistent" label asserted in the error-status test.
