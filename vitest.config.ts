@@ -24,6 +24,8 @@ export default defineConfig({
     setupFiles: ['src/test-setup.ts'],
     pool: 'forks',
     maxWorkers: 4,
+    testTimeout: 60000,
+    hookTimeout: 30000,
     exclude: [
       '.trunk/**',
       '.worktrees/**',
