@@ -24,6 +24,9 @@ async function waitForReady(page: Page) {
       typeof (window as any).__mcpTools['loadRdf'] === 'function',
     { timeout: 30_000 },
   );
+  // COI service worker may reload the page once after install. Wait for network
+  // idle so the reload has settled before we load data or interact with UI.
+  await page.waitForLoadState('networkidle');
 }
 
 async function call(page: Page, tool: string, params: object): Promise<any> {
