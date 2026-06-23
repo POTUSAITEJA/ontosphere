@@ -497,7 +497,9 @@ export async function instantiateWorkflowOnCanvas(
   }
 
   // 10. Input var instances: metadata from template var + p-plan:Entity + correspondsToVariable
-  //     Activity prov:used each instance (not the template variable)
+  //     Activity prov:used each instance (not the template variable).
+  //     Templates that rely on runtime discovery (e.g. CSVW column picker) simply
+  //     declare no input variables, so this loop is a no-op for them.
   for (let i = 0; i < externalInputVarIris.length; i++) {
     const templateVarIri = externalInputVarIris[i];
     const instanceIri = inputVarInstanceIris[i];
@@ -580,13 +582,13 @@ export async function instantiateWorkflowOnCanvas(
     groupEls.push(placeEl(associatedAgent, meta.types.length > 0 ? meta.types : [`${PROV_NS}Agent`], meta.label));
   }
 
-  const allTemplateVarIris = [...allInputVarIris, ...allOutputVarIris];
+  const allTemplateVarIris = [...new Set([...allInputVarIris, ...allOutputVarIris])];
   for (const varIri of allTemplateVarIris) {
     const meta = await getNodeMeta(varIri);
     groupEls.push(placeEl(varIri, meta.types.length > 0 ? meta.types : [`${PPLAN_NS}Variable`], meta.label));
   }
 
-  // Input var instances (run-scoped)
+  // Input var instances (run-scoped) — empty for templates using runtime discovery
   for (let i = 0; i < inputVarInstanceIris.length; i++) {
     const varLabel = await getVarLabel(externalInputVarIris[i]);
     placeEl(inputVarInstanceIris[i], [`${PPLAN_NS}Entity`], varLabel);
