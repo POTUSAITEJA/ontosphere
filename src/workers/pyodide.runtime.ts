@@ -115,8 +115,10 @@ sys.stderr = _VGWriter('stderr', sys.stderr)
       console.warn('[pyodide.runtime] SharedArrayBuffer not available — request_input disabled');
       if (pyodide) {
         pyodide.runPython(`
+import builtins as _builtins
 def request_input(prompt, input_type='text', options=None, default_value=None):
     raise RuntimeError('request_input() requires SharedArrayBuffer (COOP/COEP headers). Not available in this environment.')
+_builtins.request_input = request_input
 `);
       }
       return;
@@ -173,10 +175,13 @@ def request_input(prompt, input_type='text', options=None, default_value=None):
 
     pyodide.runPython(`
 import json as _json
+import builtins as _builtins
 
 def request_input(prompt, input_type='text', options=None, default_value=None):
     options_json = _json.dumps(options) if options else ''
     return __vg_request_input(prompt, input_type or 'text', options_json, default_value or '')
+
+_builtins.request_input = request_input
 `);
   }
 
