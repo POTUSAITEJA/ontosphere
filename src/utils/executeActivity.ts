@@ -348,6 +348,7 @@ export async function executeActivity(
     }
   }
   console.debug('[executeActivity] new generated IRIs:', newGeneratedIris);
+  useWorkflowExecutionStore.getState().setLastOutputIris(newGeneratedIris);
   const actEl = model.elements.find(
     el => el instanceof Reactodia.EntityElement && el.data.id === activityIri
   ) as Reactodia.EntityElement | undefined;

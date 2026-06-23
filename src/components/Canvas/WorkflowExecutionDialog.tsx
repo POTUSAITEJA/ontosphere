@@ -5,6 +5,7 @@ import { Badge } from '../ui/badge';
 import { cn } from '@/lib/utils';
 import { useWorkflowExecutionStore } from '@/stores/workflowExecutionStore';
 import { getPyodideClient } from '@/utils/pyodideManager.workerClient';
+import { getWorkspaceRefs } from '@/mcp/workspaceContext';
 import type { InputOption } from '@/workers/pyodide.workerProtocol';
 
 /** Extract the underlying value from an InputOption (string or {label, value} object). */
@@ -94,6 +95,16 @@ export function WorkflowExecutionDialog() {
         // Ignore if buffers not initialized (e.g., worker never started)
       }
       useWorkflowExecutionStore.getState().setPendingInput(null);
+    }
+
+    // Navigate to last step's output entities on successful close
+    const { lastOutputIris, error: execError } = useWorkflowExecutionStore.getState();
+    if (lastOutputIris.length > 0 && !execError) {
+      const { navigateToIri } = getWorkspaceRefs();
+      if (navigateToIri) {
+        // Small delay to let dialog unmount before viewport animates
+        setTimeout(() => navigateToIri(lastOutputIris[0]), 150);
+      }
     }
   }, [isOpen]);
 

@@ -28,6 +28,7 @@ export interface WorkflowExecutionState {
   pendingInput: PendingInput | null;
   error: string | null;
   executionTime: number | null;
+  lastOutputIris: string[];
 
   open: (activityIri: string, label: string) => void;
   close: () => void;
@@ -37,6 +38,7 @@ export interface WorkflowExecutionState {
   setPendingInput: (input: PendingInput | null) => void;
   setError: (error: string | null) => void;
   setExecutionTime: (ms: number | null) => void;
+  setLastOutputIris: (iris: string[]) => void;
   reset: () => void;
 }
 
@@ -51,6 +53,7 @@ const INITIAL_STATE = {
   pendingInput: null as PendingInput | null,
   error: null as string | null,
   executionTime: null as number | null,
+  lastOutputIris: [] as string[],
 };
 
 let logBuffer: LogEntry[] = [];
@@ -97,6 +100,8 @@ export const useWorkflowExecutionStore = create<WorkflowExecutionState>((set, ge
   setError: (error) => set({ error }),
 
   setExecutionTime: (ms) => set({ executionTime: ms }),
+
+  setLastOutputIris: (iris) => set({ lastOutputIris: iris }),
 
   reset: () => {
     logBuffer = [];
