@@ -7,13 +7,15 @@
 import * as Reactodia from '@reactodia/workspace';
 import { useOntologyStore } from '../stores/ontologyStore';
 import { getPyodideClient } from './pyodideManager.workerClient';
-import type { ExecuteResult } from '../workers/pyodide.workerProtocol';
+import type { ExecuteResult, StdoutPayload, StderrPayload, InputRequestPayload } from '../workers/pyodide.workerProtocol';
+import { useWorkflowExecutionStore } from '../stores/workflowExecutionStore';
 import { DataFactory, Parser as N3Parser } from 'n3';
 
 const PPLAN_NS = 'http://purl.org/net/p-plan#';
 const PROV_NS = 'http://www.w3.org/ns/prov#';
 const RDF_NS = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const RDFS_NS = 'http://www.w3.org/2000/01/rdf-schema#';
+const OA_NS = 'http://www.w3.org/ns/oa#';
 const DATA_GRAPH = 'urn:vg:data';
 const WORKFLOWS_GRAPH = 'urn:vg:workflows';
 
@@ -103,20 +105,35 @@ export async function executeActivity(
   for (const quad of activityUsedQuads) {
     const resourceIri = quad.object.value;
 
-    const locationQuads: any[] = await worker.call('getQuads', {
+    // Search both workflows and data graphs for resource metadata
+    let locationQuads: any[] = await worker.call('getQuads', {
       subject: resourceIri,
       predicate: `${PROV_NS}atLocation`,
       graphName: WORKFLOWS_GRAPH,
     }) ?? [];
+    if (locationQuads.length === 0) {
+      locationQuads = await worker.call('getQuads', {
+        subject: resourceIri,
+        predicate: `${PROV_NS}atLocation`,
+        graphName: DATA_GRAPH,
+      }) ?? [];
+    }
 
     if (locationQuads.length === 0) continue;
     const location = locationQuads[0].object.value;
 
-    const typeQuads: any[] = await worker.call('getQuads', {
+    let typeQuads: any[] = await worker.call('getQuads', {
       subject: resourceIri,
       predicate: `${RDF_NS}type`,
       graphName: WORKFLOWS_GRAPH,
     }) ?? [];
+    if (typeQuads.length === 0) {
+      typeQuads = await worker.call('getQuads', {
+        subject: resourceIri,
+        predicate: `${RDF_NS}type`,
+        graphName: DATA_GRAPH,
+      }) ?? [];
+    }
 
     const types: string[] = typeQuads.map((q: any) => q.object.value);
     const isCode = types.some(t => t.includes('SoftwareSourceCode') || t.includes('Code'));
@@ -124,11 +141,18 @@ export async function executeActivity(
     if (isCode) {
       codeUrl = location;
     } else {
-      const labelQuads: any[] = await worker.call('getQuads', {
+      let labelQuads: any[] = await worker.call('getQuads', {
         subject: resourceIri,
         predicate: `${RDFS_NS}label`,
         graphName: WORKFLOWS_GRAPH,
       }) ?? [];
+      if (labelQuads.length === 0) {
+        labelQuads = await worker.call('getQuads', {
+          subject: resourceIri,
+          predicate: `${RDFS_NS}label`,
+          graphName: DATA_GRAPH,
+        }) ?? [];
+      }
       const labelText = labelQuads[0]?.object?.value?.toLowerCase() ?? resourceIri.toLowerCase();
       if (labelText.includes('requirement')) {
         requirementsUrl = location;
@@ -138,7 +162,14 @@ export async function executeActivity(
     }
   }
 
-  if (!codeUrl) throw new Error(`No Python code URL found for activity ${activityIri}`);
+  if (!codeUrl) {
+    const usedIris = activityUsedQuads.map((q: any) => q.object.value).join(', ');
+    throw new Error(
+      `No Python code URL found for activity ${activityIri}. ` +
+      `Used resources: [${usedIris}]. ` +
+      `Ensure the workflow catalog is loaded (code resources need prov:atLocation).`
+    );
+  }
 
   // 2. Remove stale output from any previous run of this activity.
   //    Find all entities with prov:wasGeneratedBy activityIri, remove their data
@@ -213,16 +244,87 @@ export async function executeActivity(
   const inputTurtle: string = exportResult?.content ?? '';
 
   const pyodideClient = getPyodideClient();
-  const result = await pyodideClient.call<'execute', ExecuteResult>('execute', {
-    activityIri,
-    codeUrl,
-    requirementsUrl: requirementsUrl || undefined,
-    inputTurtle,
+  const store = useWorkflowExecutionStore.getState();
+
+  // Resolve activity label for log separator
+  const labelQuads: any[] = await worker.call('getQuads', {
+    subject: activityIri,
+    predicate: `${RDFS_NS}label`,
+    graphName: DATA_GRAPH,
+  }) ?? [];
+  const activityLabel = labelQuads[0]?.object?.value ?? extractLocalName(activityIri);
+
+  store.appendLog({ type: 'info', text: `▸ Step: ${activityLabel}`, timestamp: Date.now() });
+  store.setExecuting(true);
+
+  const unsubProgress = pyodideClient.on('progress', (p: { stage: string; percent: number }) => {
+    useWorkflowExecutionStore.getState().setProgress(p.percent, p.stage);
+    useWorkflowExecutionStore.getState().appendLog({ type: 'progress', text: p.stage, timestamp: Date.now() });
   });
+  const unsubStdout = pyodideClient.on('stdout', (p: StdoutPayload) => {
+    useWorkflowExecutionStore.getState().appendLog({ type: 'stdout', text: p.text, timestamp: p.timestamp });
+  });
+  const unsubStderr = pyodideClient.on('stderr', (p: StderrPayload) => {
+    useWorkflowExecutionStore.getState().appendLog({ type: 'stderr', text: p.text, timestamp: p.timestamp });
+  });
+  const unsubInput = pyodideClient.on('input_request', (p: InputRequestPayload) => {
+    useWorkflowExecutionStore.getState().setPendingInput({
+      requestId: p.requestId,
+      prompt: p.prompt,
+      inputType: p.inputType ?? 'text',
+      options: p.options,
+      defaultValue: p.defaultValue,
+    });
+  });
+
+  let result: ExecuteResult;
+  try {
+    result = await pyodideClient.call<'execute', ExecuteResult>('execute', {
+      activityIri,
+      codeUrl,
+      requirementsUrl: requirementsUrl || undefined,
+      inputTurtle,
+    });
+    useWorkflowExecutionStore.getState().appendLog({ type: 'info', text: `✓ Step complete`, timestamp: Date.now() });
+    useWorkflowExecutionStore.getState().setExecutionTime(result.executionTime ?? null);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    useWorkflowExecutionStore.getState().setError(msg);
+    useWorkflowExecutionStore.getState().setExecuting(false);
+    throw err;
+  } finally {
+    unsubProgress();
+    unsubStdout();
+    unsubStderr();
+    unsubInput();
+  }
 
   // 5. Parse output Turtle and write back to data graph
   const parser = new N3Parser();
   const quads = parser.parse(result.outputTurtle);
+
+  // Surface error/result annotations (oa:Annotation) in dialog
+  const annotationLabels = new Map<string, string>();
+  for (const q of quads) {
+    if (q.predicate.value === `${RDF_NS}type` && q.object.value === `${OA_NS}Annotation`) {
+      annotationLabels.set(q.subject.value, '');
+    }
+  }
+  if (annotationLabels.size > 0) {
+    for (const q of quads) {
+      if (annotationLabels.has(q.subject.value) && !annotationLabels.get(q.subject.value) &&
+          q.predicate.value === `${RDFS_NS}label` && q.object.termType === 'Literal') {
+        annotationLabels.set(q.subject.value, q.object.value);
+      }
+    }
+    for (const [, msg] of annotationLabels) {
+      if (msg) {
+        useWorkflowExecutionStore.getState().appendLog({
+          type: 'stderr', text: msg, timestamp: Date.now(),
+        });
+      }
+    }
+  }
 
   const adds = quads.map((quad: any) => ({
     subject:   { termType: quad.subject.termType,   value: quad.subject.value },
@@ -246,6 +348,7 @@ export async function executeActivity(
     }
   }
   console.debug('[executeActivity] new generated IRIs:', newGeneratedIris);
+  useWorkflowExecutionStore.getState().setLastOutputIris(newGeneratedIris);
   const actEl = model.elements.find(
     el => el instanceof Reactodia.EntityElement && el.data.id === activityIri
   ) as Reactodia.EntityElement | undefined;
@@ -315,34 +418,6 @@ export async function executeActivity(
     graphName: WORKFLOWS_GRAPH,
   }) ?? [];
 
-  // Find variables that are output of currentStep AND input of nextStep (the "wire")
-  const currentStepOutVarQuads: any[] = await worker.call('getQuads', {
-    predicate: `${PPLAN_NS}isOutputVarOf`,
-    object: { termType: 'NamedNode', value: currentStepIri },
-    graphName: WORKFLOWS_GRAPH,
-  }) ?? [];
-  const nextStepInVarQuads: any[] = await worker.call('getQuads', {
-    predicate: `${PPLAN_NS}isInputVarOf`,
-    object: { termType: 'NamedNode', value: nextStepIri },
-    graphName: WORKFLOWS_GRAPH,
-  }) ?? [];
-  const nextStepInVarSet = new Set(nextStepInVarQuads.map((q: any) => q.subject.value));
-  const sharedVarIris = currentStepOutVarQuads
-    .map((q: any) => q.subject.value)
-    .filter((v: string) => nextStepInVarSet.has(v));
-
-  // For each shared var, find the run-level entity already in the data graph
-  // (written by the Python script via pplan:correspondsToVariable)
-  const intermediateEntityIris: string[] = [];
-  for (const varIri of sharedVarIris) {
-    const entityQuads: any[] = await worker.call('getQuads', {
-      predicate: `${PPLAN_NS}correspondsToVariable`,
-      object: { termType: 'NamedNode', value: varIri },
-      graphName: DATA_GRAPH,
-    }) ?? [];
-    for (const eq of entityQuads) intermediateEntityIris.push(eq.subject.value);
-  }
-
   // Find output vars of the next step so we can create placeholders
   const nextStepOutVarQuads: any[] = await worker.call('getQuads', {
     predicate: `${PPLAN_NS}isOutputVarOf`,
@@ -364,10 +439,6 @@ export async function executeActivity(
     ...(nextStepAgentQuads[0] ? [{
       subject: namedNode(nextActivityIri), predicate: namedNode(`${PROV_NS}wasAssociatedWith`), object: namedNode(nextStepAgentQuads[0].object.value),
     }] : []),
-    // Wire intermediate data entities as prov:used inputs of nextActivity
-    ...intermediateEntityIris.map(entityIri => ({
-      subject: namedNode(nextActivityIri), predicate: namedNode(`${PROV_NS}used`), object: namedNode(entityIri),
-    })),
   ];
 
   // Create output var instance placeholders for the next step's outputs

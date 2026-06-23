@@ -51,7 +51,7 @@ export interface PyodideWorkerResponse {
 
 export interface PyodideWorkerEvent {
   type: 'event';
-  event: 'progress' | 'status';
+  event: PyodideWorkerEventName;
   payload: any;
 }
 
@@ -76,4 +76,54 @@ export interface StatusResult {
   ready: boolean;
   pyodideVersion?: string;
   loadedPackages?: string[];
+}
+
+// Event payload types
+export interface StdoutPayload {
+  text: string;
+  timestamp: number;
+}
+
+export interface StderrPayload {
+  text: string;
+  timestamp: number;
+}
+
+export interface InputOptionObject {
+  label: string;
+  value: string;
+}
+
+export type InputOption = string | InputOptionObject;
+
+export interface InputRequestPayload {
+  requestId: string;
+  prompt: string;
+  inputType?: 'text' | 'number' | 'select';
+  options?: InputOption[];
+  defaultValue?: string;
+}
+
+export interface InitBuffersPayload {
+  signalBuffer: SharedArrayBuffer;
+  textBuffer: SharedArrayBuffer;
+}
+
+// Event name union
+export type PyodideWorkerEventName =
+  | 'progress'
+  | 'status'
+  | 'stdout'
+  | 'stderr'
+  | 'input_request'
+  | 'init_buffers';
+
+// Event payload map for type-safe dispatch
+export interface PyodideWorkerEventPayloads {
+  progress: { stage: string; percent: number };
+  status: { ready: boolean };
+  stdout: StdoutPayload;
+  stderr: StderrPayload;
+  input_request: InputRequestPayload;
+  init_buffers: InitBuffersPayload;
 }

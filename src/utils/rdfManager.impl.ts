@@ -137,6 +137,49 @@ const inferMediaTypeFromContent = (content?: string): string | undefined => {
   return undefined;
 };
 
+/**
+ * Resolve remote `@context` URLs in a JSON-LD document so the worker parser
+ * never needs to make network requests (avoids Firefox CORS/redirect failures).
+ *
+ * Returns the modified JSON string and the list of remote context URLs that
+ * were found (callers can feed these into ontology discovery).
+ */
+const resolveJsonLdContexts = async (
+  json: string,
+  fetchFn: (url: string, headers: Record<string, string>, signal: AbortSignal) => Promise<Response>,
+  signal: AbortSignal,
+): Promise<{ json: string; contextUrls: string[] }> => {
+  let doc: any;
+  try { doc = JSON.parse(json); } catch { return { json, contextUrls: [] }; }
+  const ctx = doc?.["@context"];
+  if (!ctx) return { json, contextUrls: [] };
+
+  const contextUrls: string[] = [];
+
+  const resolveEntry = async (entry: unknown): Promise<unknown> => {
+    if (typeof entry !== "string") return entry;
+    if (!entry.startsWith("http://") && !entry.startsWith("https://")) return entry;
+    contextUrls.push(entry);
+    // Upgrade http→https to avoid Firefox CORS failures on 301 redirects
+    const fetchUrl = entry.startsWith("http://") ? entry.replace("http://", "https://") : entry;
+    try {
+      const resp = await fetchFn(fetchUrl, { Accept: "application/ld+json, application/json" }, signal);
+      if (!resp.ok) return entry;
+      const body = await resp.json();
+      return body?.["@context"] ?? body;
+    } catch {
+      return entry;
+    }
+  };
+
+  if (Array.isArray(ctx)) {
+    doc["@context"] = await Promise.all(ctx.map(resolveEntry));
+  } else {
+    doc["@context"] = await resolveEntry(ctx);
+  }
+  return { json: JSON.stringify(doc), contextUrls };
+};
+
 const gatherCandidateNames = (source?: string): string[] => {
   const candidates: string[] = [];
   if (!source) return candidates;
@@ -1196,7 +1239,7 @@ export class RDFManagerImpl {
     url: string,
     graphName?: string,
     options?: { timeoutMs?: number; apiKey?: string; apiKeyHeader?: string; corsProxyUrl?: string },
-  ): Promise<void> {
+  ): Promise<{ contextUrls?: string[] }> {
     if (!url) throw new Error("loadRDFFromUrl requires a url");
     const timeoutMs = options?.timeoutMs ?? 120000;
     const corsProxyUrl = options?.corsProxyUrl;
@@ -1223,10 +1266,10 @@ export class RDFManagerImpl {
         const ct = sparqlResponse.headers.get("content-type");
         const inferredContentType = inferRdfMediaType(ct, sparqlUrl, text);
         await this.loadRDFIntoGraph(text, graphName || DEFAULT_GRAPH, inferredContentType, url, true);
-        return;
+        return {};
       }
 
-      const rdfAccept = "text/turtle, application/n-triples, text/n3, application/rdf+xml, */*;q=0.1";
+      const rdfAccept = "text/turtle, application/ld+json, application/n-triples, text/n3, application/rdf+xml, */*;q=0.1";
       const response = await this.fetchWithCorsFallback(url, { Accept: rdfAccept }, controller.signal, authHeader, corsProxyUrl);
       if (!response.ok) {
         throw new Error(`Failed to fetch RDF: ${response.status}`);
@@ -1251,13 +1294,26 @@ export class RDFManagerImpl {
         const inferredContentType = inferRdfMediaType(ct, sparqlUrl, text);
         await this.loadRDFIntoGraph(text, graphName || DEFAULT_GRAPH, inferredContentType, url, true);
       } else {
-        const text = await response.text();
+        let text = await response.text();
         const inferredContentType = inferRdfMediaType(contentTypeHeader, url, text);
+        // Pre-resolve remote @context URLs on main thread so the worker parser
+        // doesn't need to fetch them (Firefox blocks cross-origin redirects in workers).
+        let contextUrls: string[] | undefined;
+        if (inferredContentType === "application/ld+json") {
+          const fetchBound = this.fetchWithCorsFallback.bind(this);
+          const fetchForCtx = (ctxUrl: string, headers: Record<string, string>, sig: AbortSignal) =>
+            fetchBound(ctxUrl, headers, sig, authHeader, corsProxyUrl);
+          const resolved = await resolveJsonLdContexts(text, fetchForCtx, controller.signal);
+          text = resolved.json;
+          contextUrls = resolved.contextUrls;
+        }
         await this.loadRDFIntoGraph(text, graphName || DEFAULT_GRAPH, inferredContentType, url, true);
+        return { contextUrls };
       }
     } finally {
       clearTimeout(timeoutHandle);
     }
+    return {};
   }
 
   removeQuadsInGraphByNamespaces(graphName: string, namespaceUris?: string[] | null): void {

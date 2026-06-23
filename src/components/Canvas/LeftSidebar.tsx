@@ -15,6 +15,7 @@ import {
   Download,
   Settings,
   Sparkles,
+  Workflow,
   Bot,
   HelpCircle,
   Shield,
@@ -275,6 +276,22 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
               </TooltipPrimitive.Portal>
             </TooltipPrimitive.Root>
 
+            {workflowCatalogEnabled && (
+              <TooltipPrimitive.Root>
+                <TooltipPrimitive.Trigger asChild>
+                  <button className="rail-btn" onClick={() => { setOpenAccordions(['workflows']); onToggle(); }} aria-label="Workflows">
+                    <Workflow className="h-[18px] w-[18px]" />
+                    <span>Flows</span>
+                  </button>
+                </TooltipPrimitive.Trigger>
+                <TooltipPrimitive.Portal>
+                  <TooltipPrimitive.Content className="z-[99999] rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md" sideOffset={5} side="right">
+                    Workflows<TooltipPrimitive.Arrow className="fill-popover" />
+                  </TooltipPrimitive.Content>
+                </TooltipPrimitive.Portal>
+              </TooltipPrimitive.Root>
+            )}
+
             <TooltipPrimitive.Root>
               <TooltipPrimitive.Trigger asChild>
                 <button className="rail-btn" onClick={() => { setOpenAccordions(['agent-edits']); onToggle(); }} aria-label="Agent Edits">
@@ -516,7 +533,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 <AccordionItem value="workflows" className="border-none">
                   <AccordionTrigger className="px-3 py-2 hover:bg-accent/5">
                     <div className="flex items-center gap-2 text-foreground">
-                      <Sparkles className="h-4 w-4 text-primary" />
+                      <Workflow className="h-4 w-4 text-primary" />
                       <span className="text-sm font-medium">Workflows</span>
                     </div>
                   </AccordionTrigger>

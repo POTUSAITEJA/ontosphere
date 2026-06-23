@@ -36,6 +36,7 @@ import { ClusterLevelManager } from './core/ClusterLevelManager';
 import { LayoutPopover } from './LayoutPopover';
 import { LayoutSettingsPanel } from './LayoutSettingsPanel';
 import { OntologyListPanel } from './OntologyListPanel';
+import { WorkflowExecutionDialog } from './WorkflowExecutionDialog';
 import { RdfPropertyEditor } from './rdfPropertyEditor';
 import { toast } from 'sonner';
 import { Label } from '../ui/label';
@@ -2112,6 +2113,8 @@ export default function ReactodiaCanvas() {
           onClose={() => setLayoutPanelOpen(false)}
           onApplyLayout={() => performLayoutRef.current?.()}
         />
+
+        <WorkflowExecutionDialog />
 
         {loadOntologyOpen && (
           <div

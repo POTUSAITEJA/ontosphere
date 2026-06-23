@@ -9,14 +9,13 @@ import type {
   PyodideWorkerCommand,
   PyodideWorkerCommandPayloads,
   PyodideWorkerMessage,
+  PyodideWorkerEventName,
+  InitBuffersPayload,
 } from '../workers/pyodide.workerProtocol';
 
-type EventName = 'progress' | 'status';
+type EventName = PyodideWorkerEventName;
 
-type EventHandlerMap = {
-  progress: Set<(payload: any) => void>;
-  status: Set<(payload: any) => void>;
-};
+type EventHandlerMap = Record<EventName, Set<(payload: any) => void>>;
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -30,7 +29,13 @@ export class PyodideManagerWorkerClient {
   private events: EventHandlerMap = {
     progress: new Set(),
     status: new Set(),
+    stdout: new Set(),
+    stderr: new Set(),
+    input_request: new Set(),
+    init_buffers: new Set(),
   };
+  private signalView: Int32Array | null = null;
+  private textView: Uint8Array | null = null;
 
   constructor() {
     void this.ensureWorker();
@@ -57,7 +62,13 @@ export class PyodideManagerWorkerClient {
     }
 
     if (data.type === 'event') {
-      const handlers = this.events[data.event];
+      if (data.event === 'init_buffers') {
+        const { signalBuffer, textBuffer } = data.payload as InitBuffersPayload;
+        this.signalView = new Int32Array(signalBuffer);
+        this.textView = new Uint8Array(textBuffer);
+      }
+
+      const handlers = this.events[data.event as EventName];
       if (!handlers || handlers.size === 0) return;
       for (const handler of handlers) {
         try {
@@ -139,6 +150,24 @@ export class PyodideManagerWorkerClient {
     return () => {
       set.delete(handler);
     };
+  }
+
+  respondToInput(value: string, cancelled = false) {
+    if (!this.signalView || !this.textView) {
+      throw new Error('Input buffers not initialized — worker has not sent init_buffers event yet');
+    }
+
+    if (cancelled) {
+      Atomics.store(this.signalView, 0, -1);
+      Atomics.store(this.signalView, 1, 0);
+    } else {
+      const encoded = new TextEncoder().encode(value);
+      const written = Math.min(encoded.byteLength, this.textView.byteLength);
+      this.textView.set(encoded.subarray(0, written));
+      Atomics.store(this.signalView, 0, 1);
+      Atomics.store(this.signalView, 1, written);
+    }
+    Atomics.notify(this.signalView, 0);
   }
 
   terminate() {

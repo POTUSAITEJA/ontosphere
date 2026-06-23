@@ -7,6 +7,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import * as Reactodia from '@reactodia/workspace';
 import { RdfElementTemplate } from './RdfElementTemplate';
 import { executeActivity } from '../utils/executeActivity';
+import { useWorkflowExecutionStore } from '../stores/workflowExecutionStore';
 import { toast } from 'sonner';
 
 // This file's public export is the ProvActivityTemplate descriptor object, not a
@@ -27,14 +28,30 @@ function ProvActivityBody({ props }: { props: Reactodia.TemplateProps }) {
     e.stopPropagation();
     if (!(element instanceof Reactodia.EntityElement)) return;
 
+    const store = useWorkflowExecutionStore.getState();
+
+    // If already executing and dialog is closed, reopen it
+    if (store.isExecuting) {
+      store.open(element.data.id, element.data.id.split(/[#/]/).pop() ?? 'Activity');
+      return;
+    }
+
+    // Resolve label for display
+    const label = Object.values(element.data.properties ?? {})?.[0]?.[0]?.value
+      ?? element.data.id.split(/[#/]/).pop()
+      ?? 'Activity';
+
+    store.open(element.data.id, label);
     setIsExecuting(true);
     try {
       let nextIri: string | null = element.data.id;
       while (nextIri && mountedRef.current) {
         nextIri = await executeActivity(nextIri, model);
       }
+      useWorkflowExecutionStore.getState().setExecuting(false);
       if (mountedRef.current) toast.success('Activity executed successfully');
     } catch (err) {
+      useWorkflowExecutionStore.getState().setExecuting(false);
       if (mountedRef.current) toast.error(err instanceof Error ? err.message : 'Execution failed');
     } finally {
       if (mountedRef.current) setIsExecuting(false);

@@ -1016,11 +1016,12 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
         if (!mgrInstance) throw new Error("No RDF manager available to load URL");
 
         // Delegate fetch + parse + store insertion to rdfManager; it will handle formats and prefix merging.
-        await (mgrInstance as any).loadRDFFromUrl(source, "urn:vg:data", {
+        const loadResult = await (mgrInstance as any).loadRDFFromUrl(source, "urn:vg:data", {
           timeoutMs: timeout,
           apiKey: options?.apiKey,
           apiKeyHeader: options?.apiKeyHeader,
-        });
+        }) || {};
+        const jsonLdContextUrls: string[] = loadResult.contextUrls || [];
         // (mgrInstance as any).addNamespace(":", String(source));
 
         // Intentionally do NOT request a canvas layout here.
@@ -1061,6 +1062,7 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
                 graphName: "urn:vg:data",
                 onProgress: options?.onProgress,
                 forceDisabled: options?.disableImportDiscovery === true,
+                contextUrls: jsonLdContextUrls,
               });
             } catch (e) {
               console.debug("[VG_DEBUG] discoverReferencedOntologies (async) failed", e);
@@ -1323,6 +1325,7 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
     onProgress?: (p: number, message: string) => void;
     forceDisabled?: boolean;
     unconditional?: boolean;
+    contextUrls?: string[];
   }) => {
     const opts = options || {};
     // Session-level override (e.g. ?loadImports=false URL param).
@@ -1459,6 +1462,20 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
       }
     }
 
+    // JSON-LD @context URLs: treat as ontology candidates the same way as
+    // owl:imports. These are passed in explicitly from the JSON-LD loading
+    // path so only context URLs from the actual document are included.
+    const ctxUrls = opts.contextUrls || [];
+    for (const ctxUrl of ctxUrls) {
+      if (!ctxUrl || typeof ctxUrl !== "string") continue;
+      const url = ctxUrl.trim();
+      if (!url.startsWith("http://") && !url.startsWith("https://")) continue;
+      if (!candidateSet.has(url)) {
+        candidateSet.add(url);
+        (candidateSources[url] = candidateSources[url] || []).push("jsonld:@context");
+      }
+    }
+
     const loadedOntologies = get().loadedOntologies || [];
     const alreadyLoadedNorm = new Set(
       (loadedOntologies || []).map((o: any) => normalizeOntologyUri(String(o.url)).toLowerCase()),
@@ -1514,6 +1531,13 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
       if (!loadRes || (loadRes as any).success !== true) {
         const errMsg = loadRes && (loadRes as any).error ? String((loadRes as any).error) : `Load failed for ${url}`;
         results.push({ url, status: "fail", error: errMsg });
+        // JSON-LD @context candidates are best-effort: the context URL may not
+        // serve a parseable ontology. Only abort for owl:imports candidates.
+        const sources = candidateSources[url] || [];
+        if (sources.length > 0 && sources.every((s: string) => s === "jsonld:@context")) {
+          console.debug("[VG_DEBUG] discoverReferencedOntologies: @context candidate failed (non-fatal)", url, errMsg);
+          continue;
+        }
         // Ensure UI progress finishes on failure so callers don't remain stuck at an intermediate percent
         try {
           if (typeof onProgress === "function") {
