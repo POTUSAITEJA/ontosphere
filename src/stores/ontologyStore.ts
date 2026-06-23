@@ -501,7 +501,7 @@ interface OntologyStore {
     results?: { url: string; status: "ok" | "fail"; error?: string }[];
   }>;
   clearOntologies: () => void;
-  exportGraph: (format: "turtle" | "json-ld" | "rdf-xml") => Promise<string>;
+  exportGraph: (format: "turtle" | "json-ld" | "rdf-xml" | "nquads" | "trig") => Promise<string>;
   getRdfManager: () => RDFManager;
   removeLoadedOntology: (url: string) => void;
   // Namespace registry (joined prefix -> namespace -> color) persisted after reconcile
@@ -1285,7 +1285,7 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
       }
     }
   },
-  exportGraph: async (format: "turtle" | "json-ld" | "rdf-xml") => {
+  exportGraph: async (format: "turtle" | "json-ld" | "rdf-xml" | "nquads" | "trig") => {
     // Prefer the store-bound rdfManager, but fall back to the module-level rdfManager
     // exported from utils/rdfManager in case the store was mocked without a proper instance.
     const mgrFromState = get().rdfManager;
@@ -1304,6 +1304,12 @@ export const useOntologyStore = create<OntologyStore>((set, get) => ({
       case "rdf-xml":
         if (typeof (mgr as any).exportToRdfXml === "function") return await (mgr as any).exportToRdfXml();
         return await (mgr as any).exportToRdfXml();
+      case "nquads":
+        // Dataset-faithful: collects all urn:vg:* graphs, preserves graph IRIs.
+        return await (mgr as any).exportToNQuads();
+      case "trig":
+        // Dataset-faithful: collects all urn:vg:* graphs, preserves graph IRIs.
+        return await (mgr as any).exportToTriG();
       default:
         throw new Error(`Unsupported format: ${format}`);
     }

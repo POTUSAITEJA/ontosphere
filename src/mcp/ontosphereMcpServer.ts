@@ -8,6 +8,8 @@ import { reasoningTools } from './tools/reasoning';
 import { namespaceTools } from './tools/namespaceTools';
 import { navigationTools } from './tools/navigation';
 import { shaclTools } from './tools/shacl';
+import { provenanceTools } from './tools/provenanceTools';
+import { metadataTools } from './tools/metadataTools';
 import { setNamespaceRegistryGetter } from './tools/iriUtils';
 import { useOntologyStore } from '@/stores/ontologyStore';
 import type { McpTool } from './types';
@@ -21,6 +23,8 @@ const allTools: McpTool[] = [
   ...namespaceTools,
   ...navigationTools,
   ...shaclTools,
+  ...provenanceTools,
+  ...metadataTools,
 ];
 
 function withSchemaValidation(tool: McpTool): (params: unknown) => Promise<import('./types').McpResult> {

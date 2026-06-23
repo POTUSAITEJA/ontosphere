@@ -32,9 +32,15 @@ export const LayoutSettingsPanel: React.FC<LayoutSettingsPanelProps> = ({ open, 
 
   const [tempSpacing, setTempSpacing] = useState<number>(config.layoutSpacing ?? 120);
 
+  // Re-initialize the local slider value from the store each time the panel opens,
+  // so the slider never shows a stale value from a previous session.
   useEffect(() => {
+    if (!open) return;
     setTempSpacing(config.layoutSpacing ?? 120);
-  }, [config.layoutSpacing]);
+    // config.layoutSpacing intentionally omitted: we only want to reset when the panel opens,
+    // not on every external spacing change while the panel is visible.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;

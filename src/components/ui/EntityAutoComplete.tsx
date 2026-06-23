@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useLayoutEffect, useContext, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useLayoutEffect, useContext, useRef, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import { PrefixContext } from '../../providers/PrefixContext';
 import { prefixShorten } from '../../providers/prefixShorten';
@@ -45,7 +45,9 @@ export default function EntityAutoComplete({
 }: Props) {
   const [loadedItems, setLoadedItems] = useState<FatMapEntity[]>([]);
   const prefixes = useContext(PrefixContext);
-  const prefixedIri = (iri: string) => prefixShorten(iri, prefixes);
+  // Memoized on `prefixes` so it stays stable between renders (no memo invalidation loop)
+  // while still recomputing prefixed labels when the prefix map changes.
+  const prefixedIri = useCallback((iri: string) => prefixShorten(iri, prefixes), [prefixes]);
 
   useEffect(() => {
     if (!dataProvider || !mode) return;
@@ -114,7 +116,7 @@ export default function EntityAutoComplete({
       return p || l || String(found.iri);
     }
     return prefixedIri(value) || value;
-  }, [value, source]);
+  }, [value, source, prefixedIri]);
 
   const filtered = useMemo<FatMapEntity[]>(() => {
     const q = query.trim();
@@ -127,7 +129,7 @@ export default function EntityAutoComplete({
       rx.test(String(e?.iri || ''))
     );
     return optionsLimit > 0 ? matched.slice(0, optionsLimit) : matched;
-  }, [source, query, optionsLimit]);
+  }, [source, query, optionsLimit, prefixedIri]);
 
   useEffect(() => { setActiveIndex(-1); }, [filtered]);
 

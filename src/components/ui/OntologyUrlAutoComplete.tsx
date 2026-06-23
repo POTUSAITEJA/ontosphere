@@ -21,9 +21,16 @@ export default function OntologyUrlAutoComplete({ value, onChange, placeholder, 
 
   const filtered = useMemo(() => searchWellKnownOntologies(query), [query]);
 
+  // Reset activeIndex when the filtered list changes (i.e. when the user types).
+  // This is safe: filtered is derived from query (a local state value), so this effect
+  // resets keyboard navigation on every keystroke — it does not cause runaway cascades.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setActiveIndex(-1); }, [filtered]);
 
-  // Keep query in sync with external value when the dropdown is closed
+  // Keep query in sync with the external value prop when the dropdown is closed.
+  // This is a controlled-input sync: value is owned by the parent; when the user dismisses
+  // the dropdown without selecting, we restore the display text to the last committed value.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (!open) setQuery(value); }, [value, open]);
 
   const measurePos = () => {

@@ -3,7 +3,7 @@
  * Provides UI for managing and testing persistent app configurations
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '../ui/button';
 import { Label } from '../ui/label';
 import { Switch } from '../ui/switch';
@@ -49,13 +49,13 @@ export const ConfigurationPanel = ({
   const isControlled = controlledOpen !== undefined && onOpenChange !== undefined;
   const isOpen = isControlled ? controlledOpen : internalOpen;
   
-  const handleOpenChange = (newOpen: boolean) => {
+  const handleOpenChange = useCallback((newOpen: boolean) => {
     if (isControlled) {
       onOpenChange?.(newOpen);
     } else {
       setInternalOpen(newOpen);
     }
-  };
+  }, [isControlled, onOpenChange]);
   const [importText, setImportText] = useState('');
   const [workflowStats, setWorkflowStats] = useState({ workflowsGraphSize: 0, ontologiesGraphSize: 0 });
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);

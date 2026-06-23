@@ -10,6 +10,16 @@ import { useOntologyStore } from '@/stores/ontologyStore';
 import { LOAD_RDF_PROPAGATION_DELAY_MS } from '@/utils/canvasConstants';
 import { BUILTIN_PREFIXES } from '@/mcp/tools/iriUtils';
 import { useShaclResultStore } from '@/stores/shaclResultStore';
+import { getProvenanceRecorder, type ProvQuad } from '@/mcp/provenance';
+
+const LOADRDF_PROV_CAPTURE_CAP = 2000;
+
+/** Classify an object value as iri / bnode / literal for faithful revert. */
+function classifyProvObjectType(value: string): ProvQuad['ot'] {
+  if (value.startsWith('_:')) return 'bnode';
+  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(value)) return 'iri';
+  return 'literal';
+}
 
 /** Fix PREFIX declarations where the IRI is bare (no angle brackets): PREFIX rdf: http://... → PREFIX rdf: <http://...> */
 function normalizePrefixIris(sparql: string): string {
@@ -164,10 +174,56 @@ const loadRdf: McpTool = {
         const { dataProvider } = getWorkspaceRefs();
         const allItems = await dataProvider.lookupAll();
         const canvasBeforeSet = new Set(canvasBefore);
-        const newEntities = allItems
-          .filter(item => !canvasBeforeSet.has(item.element.id))
+        const newItems = allItems.filter(item => !canvasBeforeSet.has(item.element.id));
+        const newEntities = newItems
           .slice(0, 100)
           .map(item => ({ iri: item.element.id, label: getElementLabel(item.element) || item.element.id }));
+
+        // Provenance: capture the data-graph quads of the newly-introduced
+        // subjects so the load is auditable and revertible at batch granularity.
+        // Bounded by LOADRDF_PROV_CAPTURE_CAP — huge loads are recorded but
+        // capped (the revert is then a best-effort partial, noted honestly).
+        try {
+          const provAdded: ProvQuad[] = [];
+          let truncated = false;
+          for (const item of newItems) {
+            if (provAdded.length >= LOADRDF_PROV_CAPTURE_CAP) { truncated = true; break; }
+            const page = await rdfManager.fetchQuadsPage({
+              graphName: 'urn:vg:data',
+              filter: { subject: item.element.id },
+              limit: 0,
+              serialize: true,
+            });
+            const quads = (page?.items ?? []) as Array<{
+              subject: { value: string } | string;
+              predicate: { value: string } | string;
+              object: { value: string; termType?: string } | string;
+            }>;
+            for (const q of quads) {
+              if (provAdded.length >= LOADRDF_PROV_CAPTURE_CAP) { truncated = true; break; }
+              const s = typeof q.subject === 'string' ? q.subject : q.subject.value;
+              const pr = typeof q.predicate === 'string' ? q.predicate : q.predicate.value;
+              const oVal = typeof q.object === 'string' ? q.object : q.object.value;
+              const termType = typeof q.object === 'string' ? undefined : q.object.termType;
+              const ot: ProvQuad['ot'] =
+                termType === 'Literal' ? 'literal'
+                : termType === 'BlankNode' ? 'bnode'
+                : termType === 'NamedNode' ? 'iri'
+                : classifyProvObjectType(oVal);
+              provAdded.push({ s, p: pr, o: oVal, ot });
+            }
+          }
+          if (provAdded.length > 0) {
+            await getProvenanceRecorder().recordEdit({
+              tool: 'loadRdf',
+              added: provAdded,
+              note: `inline turtle; ${newItems.length} new subject(s)${truncated ? `; capture truncated at ${LOADRDF_PROV_CAPTURE_CAP} triples` : ''}`,
+            });
+          }
+        } catch (err) {
+          console.error('[loadRdf] provenance capture failed', err);
+        }
+
         return {
           success: true,
           data: {
@@ -258,7 +314,7 @@ const loadOntology: McpTool = {
 // ---------------------------------------------------------------------------
 const queryGraph: McpTool = {
   name: 'queryGraph',
-  description: 'Run a SPARQL query or update against asserted data (urn:vg:data). Namespace prefixes are injected automatically. Supported: SELECT (return bindings), CONSTRUCT (return triples, read-only), INSERT DATA, DELETE DATA, DELETE WHERE, DELETE...INSERT...WHERE. Inferred triples are in GRAPH urn:vg:inferred.',
+  description: 'Run a SPARQL query or update against asserted data (urn:vg:data). Namespace prefixes are injected automatically. Supported: SELECT (return bindings), CONSTRUCT (return triples, read-only), ASK (return boolean), INSERT DATA, DELETE DATA, DELETE WHERE, DELETE...INSERT...WHERE. Inferred triples are in GRAPH urn:vg:inferred.',
   inputSchema: {
     type: 'object',
     required: ['sparql'],
@@ -284,14 +340,11 @@ const queryGraph: McpTool = {
       } catch (e) {
         return { success: false, error: `SPARQL parse error: ${String(e)}` };
       }
-      if (parsed.type === 'query' && parsed.queryType === 'ASK') {
-        return { success: false, error: 'ASK queries are not supported. Use SELECT or CONSTRUCT.' };
-      }
-
       // Inject LIMIT into the query planner if the query has none — avoids streaming
       // the full result set through Comunica before the worker breaks the stream.
+      // ASK queries don't need a limit injected.
       let sparql = sparqlWithPrefixes;
-      if (parsed.type === 'query' && parsed.limit == null) {
+      if (parsed.type === 'query' && parsed.queryType !== 'ASK' && parsed.limit == null) {
         parsed.limit = effectiveLimit;
         try { sparql = new SparqlGenerator().stringify(parsed); } catch (_) { /* keep original */ }
       }
@@ -325,6 +378,10 @@ const queryGraph: McpTool = {
         return { success: true, data: { updated: true } };
       }
 
+      if (workerResult.type === 'ask') {
+        return { success: true, data: { type: 'ask', boolean: (workerResult as any).boolean } };
+      }
+
       return { success: false, error: `Unexpected result type from worker: ${(workerResult as any)?.type}` };
     } catch (e) {
       return { success: false, error: String(e) };
@@ -337,15 +394,22 @@ const queryGraph: McpTool = {
 // ---------------------------------------------------------------------------
 const exportGraph: McpTool = {
   name: 'exportGraph',
-  description: 'Export the current RDF graph in the requested serialisation format.',
+  description:
+    'Export the current RDF graph in the requested serialisation format. ' +
+    'turtle | jsonld | rdfxml flatten the store into a single default graph (named-graph ' +
+    'structure is lost). nquads | trig are DATASET-FAITHFUL: they collect quads from every ' +
+    'urn:vg:* graph (data, inferred, shapes, ontologies, workflows) and preserve each graph ' +
+    'IRI, so the multi-graph partition round-trips on re-import.',
   inputSchema: {
     type: 'object',
     required: ['format'],
     properties: {
       format: {
         type: 'string',
-        enum: ['turtle', 'jsonld', 'rdfxml'],
-        description: 'Serialisation format: turtle | jsonld | rdfxml',
+        enum: ['turtle', 'jsonld', 'rdfxml', 'nquads', 'trig'],
+        description:
+          'Serialisation format: turtle | jsonld | rdfxml (single-graph) | ' +
+          'nquads | trig (dataset-faithful, preserve named graphs)',
       },
     },
   },
@@ -359,6 +423,10 @@ const exportGraph: McpTool = {
         content = await rdfManager.exportToJsonLD();
       } else if (format === 'rdfxml') {
         content = await rdfManager.exportToRdfXml();
+      } else if (format === 'nquads') {
+        content = await rdfManager.exportToNQuads();
+      } else if (format === 'trig') {
+        content = await rdfManager.exportToTriG();
       } else {
         return { success: false, error: `Unknown format: ${format}` };
       }
@@ -673,6 +741,45 @@ const help: McpTool = {
 };
 
 // ---------------------------------------------------------------------------
+// canonicalizeGraph
+// ---------------------------------------------------------------------------
+const canonicalizeGraph: McpTool = {
+  name: 'canonicalizeGraph',
+  description:
+    'Produce the W3C RDFC-1.0 canonical N-Quads form + a content hash of the graph — ' +
+    'for reproducible snapshots, deterministic diffing, and standards-compliant dataset identity.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      graph: {
+        type: 'string',
+        description:
+          'Restrict canonicalization to a single named graph (e.g. "urn:vg:data", "urn:vg:ontologies"). Omit to canonicalize the whole dataset.',
+      },
+      includeInferred: {
+        type: 'boolean',
+        default: false,
+        description:
+          'When no specific graph is given, fold the urn:vg:inferred graph into the canonical form (default false: asserted triples only).',
+      },
+    },
+  },
+  async handler(params): Promise<McpResult> {
+    try {
+      const { graph, includeInferred = false } =
+        (params ?? {}) as { graph?: string; includeInferred?: boolean };
+      const { canonical, hash, quadCount } = await rdfManager.canonicalize({
+        graph,
+        includeInferred,
+      });
+      return { success: true, data: { canonical, hash, quadCount } };
+    } catch (e) {
+      return { success: false, error: String(e) };
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // suggestOntologiesForTask
 // ---------------------------------------------------------------------------
 const suggestOntologiesForTask: McpTool = {
@@ -710,6 +817,7 @@ export const graphTools: McpTool[] = [
   suggestOntologiesForTask,
   queryGraph,
   exportGraph,
+  canonicalizeGraph,
   exportImage,
   setViewMode,
   getGraphState,

@@ -59,6 +59,13 @@ vi.mock('@/mcp/workspaceContext', () => ({
   getWorkspaceRefs: mockGetWorkspaceRefs,
 }));
 
+// Provenance recording is exercised in provenance.test.ts; here a no-op recorder
+// keeps the rdfManager mock assertions (applyBatch call counts) free of the
+// extra urn:vg:provenance writes the real recorder would make.
+vi.mock('@/mcp/provenance', () => ({
+  getProvenanceRecorder: () => ({ recordEdit: vi.fn().mockResolvedValue(null) }),
+}));
+
 vi.mock('@/mcp/tools/layout', () => ({
   focusElementOnCanvas: mockFocusElementOnCanvas,
 }));

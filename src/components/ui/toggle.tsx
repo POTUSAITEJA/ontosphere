@@ -20,4 +20,7 @@ const Toggle = React.forwardRef<
 
 Toggle.displayName = TogglePrimitive.Root.displayName
 
+// toggleVariants is a re-exported cva() const (not declared here, so allowConstantExport
+// does not cover it); the co-export with Toggle is the shadcn-ui convention.
+// eslint-disable-next-line react-refresh/only-export-components
 export { Toggle, toggleVariants }

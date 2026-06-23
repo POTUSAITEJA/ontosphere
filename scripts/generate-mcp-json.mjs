@@ -3,7 +3,7 @@
 // Run: node scripts/generate-mcp-json.mjs
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -24,7 +24,8 @@ wfs(tmp, code);
 
 let manifest, serverName, serverDescription;
 try {
-  const mod = await import(tmp + '?t=' + Date.now());
+  // Use a file:// URL — Node's ESM loader rejects raw Windows paths (e.g. "E:\\...").
+  const mod = await import(pathToFileURL(tmp).href + '?t=' + Date.now());
   manifest = mod.mcpManifest;
   serverName = mod.mcpServerName;
   serverDescription = mod.mcpServerDescription;

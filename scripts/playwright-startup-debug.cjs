@@ -614,7 +614,6 @@ async function run() {
       await page.waitForFunction(() => {
         try {
           // Access window in the page context
-          // eslint-disable-next-line no-undef
           return (typeof window !== 'undefined') && !!window.__VG_KNOWLEDGE_CANVAS_READY && (typeof window.__VG_EXPORT_SVG_FULL === 'function' || typeof window.__VG_EXPORT_PNG_FULL === 'function');
         } catch (e) { return false; }
       }, { timeout: 10000 }).catch(() => null);

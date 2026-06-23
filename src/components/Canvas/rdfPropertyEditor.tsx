@@ -313,8 +313,11 @@ function RelationEditor({ options }: { options: RuntimeRelationOptions }) {
 
   useEffect(() => {
     const id = String(options.target?.data?.linkTypeId ?? '');
+    // Reset the editor's predicate field when a different relation/link is opened.
+    // This is a deliberate "sync local state to the incoming target" effect, gated on
+    // the target link-type id changing, so it does not cause cascading re-renders.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPredIri(id.startsWith('urn:vg:bnode:') ? '' : id);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options.target?.data?.linkTypeId]);
 
   return (

@@ -8,9 +8,17 @@ import { expandIri } from './iriUtils';
 import { abbreviateIri } from './graph';
 import { ADD_NODE_PIPELINE_DELAY_MS } from '@/utils/canvasConstants';
 import { useShaclResultStore } from '@/stores/shaclResultStore';
+import { getProvenanceRecorder, type ProvQuad } from '@/mcp/provenance';
 
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 const RDFS_LABEL = 'http://www.w3.org/2000/01/rdf-schema#label';
+
+/** Classify an object value as iri / bnode / literal for faithful revert. */
+function classifyObjectType(value: string): ProvQuad['ot'] {
+  if (value.startsWith('_:')) return 'bnode';
+  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(value)) return 'iri';
+  return 'literal';
+}
 
 function getLabel(data: Reactodia.ElementModel | undefined): string {
   return (data?.properties?.[RDFS_LABEL]?.[0] as { value?: string } | undefined)?.value ?? '';
@@ -71,7 +79,23 @@ const addNode: McpTool = {
       const adds: Array<{ s: string; p: string; o: string }> = [];
       for (const t of typeIris) adds.push({ s: iri, p: RDF_TYPE, o: t });
       if (label) adds.push({ s: iri, p: RDFS_LABEL, o: label });
-      if (adds.length > 0) await rdfManager.applyBatch({ adds });
+      if (adds.length > 0) {
+        await rdfManager.applyBatch({ adds });
+        // Provenance must NEVER flip a successful mutation to success:false.
+        try {
+          await getProvenanceRecorder().recordEdit({
+            tool: 'addNode',
+            added: adds.map((a) => ({
+              s: a.s,
+              p: a.p,
+              o: a.o,
+              ot: a.p === RDFS_LABEL ? 'literal' : classifyObjectType(a.o),
+            })),
+          });
+        } catch (provErr) {
+          console.warn('[addNode] provenance recordEdit failed (mutation still applied)', provErr);
+        }
+      }
 
       // Wait for the RDF→canvas pipeline before navigating; navigateToIri handles view-switching.
       await new Promise(r => setTimeout(r, ADD_NODE_PIPELINE_DELAY_MS));
@@ -99,11 +123,76 @@ const removeNode: McpTool = {
     try {
       const { iri } = params as { iri: string };
       const { ctx } = getWorkspaceRefs();
+
+      // Capture the node's quads BEFORE deletion so the batch can be reverted.
+      // BUG E: removeAllQuadsForIri deletes BOTH outgoing (subject-position) AND
+      // incoming (object-position) edges, so we must capture both — otherwise an
+      // incoming edge is unrevertable and the removed count under-reports.
+      // BUG D: also preserve each literal object's datatype/language so revert
+      // restores the exact typed/lang literal, not a plain xsd:string.
+      const removedQuads: ProvQuad[] = [];
+      try {
+        const toProvQuad = (q: {
+          subject: { value: string } | string;
+          predicate: { value: string } | string;
+          object: { value: string; termType?: string; datatype?: string; language?: string } | string;
+        }): ProvQuad => {
+          const s = typeof q.subject === 'string' ? q.subject : q.subject.value;
+          const p = typeof q.predicate === 'string' ? q.predicate : q.predicate.value;
+          const oVal = typeof q.object === 'string' ? q.object : q.object.value;
+          const termType = typeof q.object === 'string' ? undefined : q.object.termType;
+          const datatype = typeof q.object === 'string' ? undefined : q.object.datatype;
+          const language = typeof q.object === 'string' ? undefined : q.object.language;
+          const ot: ProvQuad['ot'] =
+            termType === 'Literal' ? 'literal'
+            : termType === 'BlankNode' ? 'bnode'
+            : termType === 'NamedNode' ? 'iri'
+            : classifyObjectType(oVal);
+          return {
+            s, p, o: oVal, ot,
+            ...(ot === 'literal' && datatype ? { dt: datatype } : {}),
+            ...(ot === 'literal' && language ? { lang: language } : {}),
+          };
+        };
+        // BUG A: capture with serialize:false so the worker returns STRUCTURED
+        // terms ({value, termType, datatype, language}) via serializeQuad. With
+        // serialize:true the object is a flat lexical string (termToString), so
+        // termType/datatype/language are always undefined — making the typed/lang
+        // capture dead code and mis-tagging colon/IRI-like literals (e.g.
+        // "a:b", "2026-..."^^xsd:dateTime) as 'iri' on revert (data corruption).
+        const [outgoing, incoming] = await Promise.all([
+          rdfManager.fetchQuadsPage({ graphName: 'urn:vg:data', filter: { subject: iri }, limit: 0, serialize: false }),
+          rdfManager.fetchQuadsPage({ graphName: 'urn:vg:data', filter: { object: iri }, limit: 0, serialize: false }),
+        ]);
+        type RawQuad = Parameters<typeof toProvQuad>[0];
+        const seen = new Set<string>();
+        for (const q of [...(outgoing?.items ?? []), ...(incoming?.items ?? [])] as RawQuad[]) {
+          const pq = toProvQuad(q);
+          // De-dupe a self-loop (node is both subject and object of one triple).
+          const k = `${pq.s} ${pq.p} ${pq.o} ${pq.ot ?? ''}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          removedQuads.push(pq);
+        }
+      } catch (err) {
+        console.error('[removeNode] capture-before-delete failed', err);
+      }
+
       const el = findEntityElement(iri, ctx.model);
       if (el) {
         ctx.model.removeElement(el.id);
       }
       await rdfManager.removeAllQuadsForIri(iri);
+
+      if (removedQuads.length > 0) {
+        // Provenance is best-effort; a fault must not flip the successful removal.
+        try {
+          await getProvenanceRecorder().recordEdit({ tool: 'removeNode', removed: removedQuads });
+        } catch (provErr) {
+          console.warn('[removeNode] provenance recordEdit failed (mutation still applied)', provErr);
+        }
+      }
+
       return { success: true, data: { removed: iri } };
     } catch (e) {
       return { success: false, error: String(e) };
@@ -380,6 +469,49 @@ const updateNode: McpTool = {
         if (!changes.has(pred)) changes.set(pred, null);
       }
 
+      // Capture existing concrete values for the touched predicates BEFORE the
+      // batch, so provenance records the real removed triples (enabling a
+      // faithful revert that restores prior values rather than only deleting).
+      const touchedPredicates = new Set(changes.keys());
+      const provRemoved: ProvQuad[] = [];
+      try {
+        // BUG A: serialize:false → structured terms so the datatype/language and
+        // real termType (literal vs iri vs bnode) are populated. With serialize:true
+        // the object is a flat lexical string and the prior-value revert would lose
+        // the datatype/language and mis-classify colon-bearing literals as IRIs.
+        const page = await rdfManager.fetchQuadsPage({
+          graphName: 'urn:vg:data',
+          filter: { subject: iri },
+          limit: 0,
+          serialize: false,
+        });
+        const items = (page?.items ?? []) as Array<{
+          predicate: { value: string } | string;
+          object: { value: string; termType?: string; datatype?: string; language?: string } | string;
+        }>;
+        for (const q of items) {
+          const p = typeof q.predicate === 'string' ? q.predicate : q.predicate.value;
+          if (!touchedPredicates.has(p)) continue;
+          const oVal = typeof q.object === 'string' ? q.object : q.object.value;
+          const termType = typeof q.object === 'string' ? undefined : q.object.termType;
+          const datatype = typeof q.object === 'string' ? undefined : q.object.datatype;
+          const language = typeof q.object === 'string' ? undefined : q.object.language;
+          const ot: ProvQuad['ot'] =
+            termType === 'Literal' ? 'literal'
+            : termType === 'BlankNode' ? 'bnode'
+            : termType === 'NamedNode' ? 'iri'
+            : classifyObjectType(oVal);
+          // BUG D: preserve datatype/language so revert restores the exact literal.
+          provRemoved.push({
+            s: iri, p, o: oVal, ot,
+            ...(ot === 'literal' && datatype ? { dt: datatype } : {}),
+            ...(ot === 'literal' && language ? { lang: language } : {}),
+          });
+        }
+      } catch (err) {
+        console.error('[updateNode] capture-before-update failed', err);
+      }
+
       // Build batch: remove existing values for each touched predicate, then add new ones
       const removes: Array<{ s: string; p: string }> = [];
       const adds: Array<{ s: string; p: string; o: string }> = [];
@@ -390,6 +522,26 @@ const updateNode: McpTool = {
       }
 
       await rdfManager.applyBatch({ removes, adds }, 'urn:vg:data');
+
+      // Provenance: the added quads are the new values; the removed quads are the
+      // concrete prior values captured above (object-type aware for revert).
+      // Wrapped in its own guard (incl. the classification arg-prep, which could
+      // throw) so a provenance fault never flips the successful mutation.
+      try {
+        const provAdded: ProvQuad[] = adds.map((a) => ({
+          s: a.s,
+          p: a.p,
+          o: a.o,
+          ot: a.p === RDFS_LABEL_IRI ? 'literal' : classifyObjectType(a.o),
+        }));
+        await getProvenanceRecorder().recordEdit({
+          tool: 'updateNode',
+          added: provAdded,
+          removed: provRemoved,
+        });
+      } catch (provErr) {
+        console.warn('[updateNode] provenance recordEdit failed (mutation still applied)', provErr);
+      }
 
       // Refresh canvas node card
       const { ctx } = getWorkspaceRefs();
@@ -403,4 +555,62 @@ const updateNode: McpTool = {
   },
 };
 
-export const nodeTools: McpTool[] = [addNode, removeNode, expandNode, getNodes, getNodeDetails, updateNode];
+const SEARCH_KINDS = ['class', 'objectProperty', 'datatypeProperty', 'property', 'individual'] as const;
+type SearchKind = (typeof SEARCH_KINDS)[number];
+
+const searchTerms: McpTool = {
+  name: 'searchTerms',
+  description:
+    'Search existing ontology terms (classes / properties / individuals) by label or local name across all loaded ontologies (urn:vg:ontologies) and the asserted graph, so you can REUSE an existing IRI instead of minting a new ex: one. ALWAYS call this before creating a new class or property — if a pmdco:/bfo:/iof:/qudt: (etc.) term already exists, reuse it. Results are ranked (exact label > label prefix > label substring > local-name match) and include the resolved prefix when known. Covers terms already loaded into the store; it does not query remote registries (LOV/BioPortal). To pull in more vocabularies first, use loadOntology.',
+  inputSchema: {
+    type: 'object',
+    required: ['query'],
+    properties: {
+      query: { type: 'string', description: 'Label or local-name substring to search for (case-insensitive), e.g. "process" or "Specimen".' },
+      kinds: {
+        type: 'array',
+        items: { type: 'string', enum: [...SEARCH_KINDS] },
+        description: 'Optional filter. Omit for classes + properties. "property" matches object, datatype and annotation properties.',
+      },
+      limit: { type: 'integer', default: 25, description: 'Maximum results to return.' },
+    },
+  },
+  handler: async (params) => {
+    try {
+      const raw = (params ?? {}) as { query?: string; kinds?: string[]; limit?: number };
+      const query = typeof raw.query === 'string' ? raw.query.trim() : '';
+      if (!query) return { success: false, error: 'query is required' };
+
+      let kinds: SearchKind[] | undefined;
+      if (Array.isArray(raw.kinds) && raw.kinds.length > 0) {
+        const valid: SearchKind[] = [];
+        for (const k of raw.kinds) {
+          if ((SEARCH_KINDS as readonly string[]).includes(k)) valid.push(k as SearchKind);
+          else return { success: false, error: `Invalid kind "${k}". Allowed: ${SEARCH_KINDS.join(', ')}.` };
+        }
+        kinds = valid;
+      }
+
+      const limit = typeof raw.limit === 'number' && raw.limit > 0 ? raw.limit : 25;
+      const matches = await rdfManager.searchTerms(query, { kinds, limit });
+
+      const results = matches.map((m) => ({
+        iri: abbreviateIri(m.iri),
+        label: m.label,
+        kind: m.kind,
+        ...(m.prefix ? { prefix: m.prefix } : {}),
+      }));
+
+      const note =
+        results.length > 0
+          ? 'Reuse one of these IRIs instead of minting a new ex: term.'
+          : 'No existing term matched. If a domain ontology likely defines it, load it via loadOntology before minting a new ex: IRI.';
+
+      return { success: true, data: { results, note } };
+    } catch (e) {
+      return { success: false, error: String(e) };
+    }
+  },
+};
+
+export const nodeTools: McpTool[] = [addNode, removeNode, expandNode, getNodes, getNodeDetails, updateNode, searchTerms];

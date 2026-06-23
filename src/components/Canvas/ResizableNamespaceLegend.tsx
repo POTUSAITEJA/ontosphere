@@ -60,7 +60,7 @@ export const ResizableNamespaceLegend = ({ onClose: _onClose }: ResizableNamespa
     e.stopPropagation();
     const el = containerRef.current;
     if (el) {
-      try { el.setPointerCapture(e.pointerId); } catch (_) {}
+      try { el.setPointerCapture(e.pointerId); } catch (_) { /* pointer capture unavailable — ignore */ }
     }
     setIsDragging(true);
     setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
@@ -74,7 +74,7 @@ export const ResizableNamespaceLegend = ({ onClose: _onClose }: ResizableNamespa
     };
     const handlePointerUp = (e: PointerEvent) => {
       if (el) {
-        try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+        try { el.releasePointerCapture(e.pointerId); } catch (_) { /* pointer capture unavailable — ignore */ }
       }
       setIsDragging(false);
     };
