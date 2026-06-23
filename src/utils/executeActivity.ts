@@ -15,6 +15,7 @@ const PPLAN_NS = 'http://purl.org/net/p-plan#';
 const PROV_NS = 'http://www.w3.org/ns/prov#';
 const RDF_NS = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const RDFS_NS = 'http://www.w3.org/2000/01/rdf-schema#';
+const OA_NS = 'http://www.w3.org/ns/oa#';
 const DATA_GRAPH = 'urn:vg:data';
 const WORKFLOWS_GRAPH = 'urn:vg:workflows';
 
@@ -301,6 +302,29 @@ export async function executeActivity(
   // 5. Parse output Turtle and write back to data graph
   const parser = new N3Parser();
   const quads = parser.parse(result.outputTurtle);
+
+  // Surface error/result annotations (oa:Annotation) in dialog
+  const annotationLabels = new Map<string, string>();
+  for (const q of quads) {
+    if (q.predicate.value === `${RDF_NS}type` && q.object.value === `${OA_NS}Annotation`) {
+      annotationLabels.set(q.subject.value, '');
+    }
+  }
+  if (annotationLabels.size > 0) {
+    for (const q of quads) {
+      if (annotationLabels.has(q.subject.value) && !annotationLabels.get(q.subject.value) &&
+          q.predicate.value === `${RDFS_NS}label` && q.object.termType === 'Literal') {
+        annotationLabels.set(q.subject.value, q.object.value);
+      }
+    }
+    for (const [, msg] of annotationLabels) {
+      if (msg) {
+        useWorkflowExecutionStore.getState().appendLog({
+          type: 'stderr', text: msg, timestamp: Date.now(),
+        });
+      }
+    }
+  }
 
   const adds = quads.map((quad: any) => ({
     subject:   { termType: quad.subject.termType,   value: quad.subject.value },
