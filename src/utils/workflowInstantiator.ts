@@ -496,20 +496,10 @@ export async function instantiateWorkflowOnCanvas(
     return (lq.items?.[0] as any)?.object ?? extractLocalName(varIri);
   }
 
-  // 10. Input var instances: metadata from template var + p-plan:Entity + correspondsToVariable
-  //     Activity prov:used each instance (not the template variable).
-  //     Templates that rely on runtime discovery (e.g. CSVW column picker) simply
-  //     declare no input variables, so this loop is a no-op for them.
-  for (let i = 0; i < externalInputVarIris.length; i++) {
-    const templateVarIri = externalInputVarIris[i];
-    const instanceIri = inputVarInstanceIris[i];
-    await copyVarMetaToInstance(templateVarIri, instanceIri);
-    triplesToAdd.push({
-      subject: namedNode(activityIri),
-      predicate: namedNode(`${PROV_NS}used`),
-      object: namedNode(instanceIri),
-    });
-  }
+  // 10. Input var instances: NOT created as placeholders.
+  //     All workflows discover their inputs at runtime via graph queries
+  //     and prompt the user to select. Input variables remain in the catalog
+  //     as documentation but do not produce run-level entities.
 
   // 11. Output var instances: only for single-step workflows (entryStep === lastStep).
   //     For multi-step workflows the output placeholder IRI depends on the next activity's IRI
@@ -586,12 +576,6 @@ export async function instantiateWorkflowOnCanvas(
   for (const varIri of allTemplateVarIris) {
     const meta = await getNodeMeta(varIri);
     groupEls.push(placeEl(varIri, meta.types.length > 0 ? meta.types : [`${PPLAN_NS}Variable`], meta.label));
-  }
-
-  // Input var instances (run-scoped) — empty for templates using runtime discovery
-  for (let i = 0; i < inputVarInstanceIris.length; i++) {
-    const varLabel = await getVarLabel(externalInputVarIris[i]);
-    placeEl(inputVarInstanceIris[i], [`${PPLAN_NS}Entity`], varLabel);
   }
 
   // Output var instances (run-scoped) — only placed on canvas for single-step workflows
