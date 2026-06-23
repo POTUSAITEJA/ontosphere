@@ -26,8 +26,6 @@ jobs:
         run: npm ci
       - name: Typecheck (ratchet — must not exceed baseline)
         run: node scripts/typecheck-ratchet.mjs
-      - name: Generate MCP manifest (gitignored build artifact)
-        run: npm run generate:mcp
       - name: MCP manifest drift check
         run: npm run check:mcp
       - name: Lint (hard gate — zero errors; warnings allowed)
