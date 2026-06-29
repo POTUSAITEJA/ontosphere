@@ -22,10 +22,26 @@ export async function gotoAndWaitForReady(
   url: string,
   requiredTool = 'addNode',
 ): Promise<void> {
-  await page.goto(url);
+  // The COI service worker may reload the page during the initial
+  // navigation, causing "interrupted by another navigation". Retry once
+  // when that happens — the second goto lands on the post-reload page.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: 'load' });
+      break;
+    } catch (err: any) {
+      if (attempt === 0 && /interrupted by another navigation/i.test(err.message)) {
+        // COI reload fired mid-goto. Wait for the reload to settle, then
+        // retry so we get a clean load event.
+        await page.waitForLoadState('load').catch(() => {});
+        continue;
+      }
+      throw err;
+    }
+  }
 
-  // Absorb a potential COI service-worker reload: wait briefly for a
-  // navigation event. If none happens within 3s, the page is stable.
+  // Absorb a potential second COI reload: wait briefly for a navigation
+  // event. If none happens within 3s, the page is stable.
   try {
     await page.waitForNavigation({ timeout: 3_000, waitUntil: 'load' });
   } catch {
