@@ -540,7 +540,7 @@ Full tool declarations with input schemas: [public/.well-known/mcp.json](public/
 Developer
 =========
 
-<details>
+<details id="quick-start-development">
 <summary><strong>Quick start (development)</strong></summary>
 
 1. Install dependencies:
@@ -614,7 +614,7 @@ node scripts/run-demo.mjs docs/mcp-demo/seeds/pizza-tutorial.md
 
 </details>
 
-<details>
+<details id="reasoning-demo-owl-2-dl-patterns">
 <summary><strong>Reasoning demo (OWL 2 DL patterns)</strong></summary>
 
 The reasoning demo showcases OWL 2 DL / SROIQ(D) inference on a small employee ontology:
@@ -648,7 +648,7 @@ A separate **inconsistency demo** (`public/reasoning-demo-inconsistent.ttl`) sho
 
 </details>
 
-<details>
+<details id="cors-and-proxies">
 <summary><strong>CORS and proxies</strong></summary>
 
 Ontosphere fetches remote RDF directly from the browser. If the remote host does not allow cross-origin requests, the fetch will be blocked.
@@ -668,7 +668,7 @@ Workarounds for development:
 
 </details>
 
-<details>
+<details id="developer-utilities-window-globals">
 <summary><strong>Developer utilities (window globals)</strong></summary>
 
 The following debug flags can be set in the browser console to enable diagnostic output. All are gated — they only activate when `window.__VG_DEBUG__` is truthy (or `config.debugAll` is enabled in Settings):
@@ -682,7 +682,7 @@ All flags are also persisted from `config.debugAll` (toggleable in Settings → 
 
 </details>
 
-<details>
+<details id="troubleshooting">
 <summary><strong>Troubleshooting</strong></summary>
 
 - **rdfUrl doesn't load on open:**
@@ -698,7 +698,7 @@ All flags are also persisted from `config.debugAll` (toggleable in Settings → 
 
 </details>
 
-<details>
+<details id="recording-demo-videos">
 <summary><strong>Recording demo videos</strong></summary>
 
 See [docs/demo-scripts/HOWTO.md](docs/demo-scripts/HOWTO.md) for the full guide. All videos are listed in [Video tutorials](#video-tutorials) above.

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const VIRTUAL_ID = "\0virtual:comunica-prebundled";
+const DIAG_STUB_ID = "\0virtual:node-diagnostics-channel-stub";
 const COMUNICA_PKG = "@comunica/query-sparql-rdfjs";
 
 /**
@@ -45,6 +46,24 @@ export const diagnosticsChannelStub: EsbuildPlugin = {
   },
 };
 
+const DIAG_CHANNEL_ESM_STUB = `
+const noop = () => {};
+const noopChannel = () => ({
+  hasSubscribers: false,
+  subscribe: noop,
+  unsubscribe: noop,
+  publish: () => false,
+  bindStore: noop,
+  unbindStore: noop,
+});
+export const channel = noopChannel;
+export const tracingChannel = noopChannel;
+export const hasSubscribers = () => false;
+export const subscribe = noop;
+export const unsubscribe = noop;
+export default { channel: noopChannel, tracingChannel: noopChannel, hasSubscribers: () => false, subscribe: noop, unsubscribe: noop };
+`;
+
 /**
  * Pre-bundles Comunica with esbuild when building the web worker.
  *
@@ -82,12 +101,17 @@ export function workerComunicaPlugin(): Plugin {
       prebundled = result.outputFiles[0].text;
     },
 
+    enforce: "pre" as const,
+
     resolveId(id: string) {
       if (id === COMUNICA_PKG) return VIRTUAL_ID;
+      if (id === "node:diagnostics_channel" || id === "diagnostics_channel")
+        return DIAG_STUB_ID;
     },
 
     load(id: string) {
       if (id === VIRTUAL_ID) return prebundled ?? "";
+      if (id === DIAG_STUB_ID) return DIAG_CHANNEL_ESM_STUB;
     },
   };
 }

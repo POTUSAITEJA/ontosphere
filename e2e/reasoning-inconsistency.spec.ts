@@ -10,50 +10,20 @@
  * Requires: npm run dev (http://localhost:8080) with SharedArrayBuffer enabled.
  */
 
-import { test, expect, Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
+import { gotoAndWaitForReady, callTool } from './e2e-helpers.js';
 
 const BASE_URL = (process.env.VG_URL ?? 'http://localhost:8080') + '?ontologies=';
 
-async function waitForReady(page: Page) {
-  await page.waitForFunction(
-    () =>
-      window.crossOriginIsolated !== false &&
-      !!(window as any).__mcpTools &&
-      typeof (window as any).__mcpTools['loadRdf'] === 'function',
-    { timeout: 30_000 },
-  );
-}
-
-async function call(page: Page, tool: string, params: object): Promise<any> {
-  // CI: Vite HMR or COI service worker can reload the page after the initial
-  // load. page.evaluate fails with "Execution context was destroyed" when this
-  // happens mid-call. Retry once after waiting for the new page to be ready.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return await page.evaluate(
-        ([t, p]) => (window as any).__mcpTools[t](p),
-        [tool, params] as const,
-      );
-    } catch (err: any) {
-      if (attempt === 0 && /context was destroyed|navigat/i.test(err.message)) {
-        await waitForReady(page);
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
 test('MCP runReasoning: inconsistent TTL → isConsistent=false, errors with frank nodeId, inferredTriples=0', async ({ page }) => {
-  await page.goto(BASE_URL);
-  await waitForReady(page);
+  await gotoAndWaitForReady(page, BASE_URL, 'loadRdf');
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
-  await call(page, 'loadRdf', { turtle });
+  await callTool(page, 'loadRdf', { turtle }, BASE_URL);
 
-  const result = await call(page, 'runReasoning', {}) as any;
+  const result = await callTool(page, 'runReasoning', {}, BASE_URL) as any;
   console.log('[TEST] runReasoning result:', JSON.stringify(result?.data));
 
   expect(result?.success).toBe(true);
@@ -67,12 +37,11 @@ test('MCP runReasoning: inconsistent TTL → isConsistent=false, errors with fra
 });
 
 test('TopBar indicator: inconsistent TTL → button shows Inconsistent', async ({ page }) => {
-  await page.goto(BASE_URL);
-  await waitForReady(page);
+  await gotoAndWaitForReady(page, BASE_URL, 'loadRdf');
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
-  await call(page, 'loadRdf', { turtle });
-  await call(page, 'runReasoning', {});
+  await callTool(page, 'loadRdf', { turtle }, BASE_URL);
+  await callTool(page, 'runReasoning', {}, BASE_URL);
 
   const button = page.locator('button.glass-btn--status-error');
   await button.waitFor({ timeout: 30_000 });
@@ -82,18 +51,16 @@ test('TopBar indicator: inconsistent TTL → button shows Inconsistent', async (
 });
 
 test('Modal content: Summary shows OWL DL card, Errors tab shows affected node', async ({ page }) => {
-  // Konclude WASM explainInconsistency (blackbox MIPS) can be slow on CI;
-  // a COI service-worker reload may also occur mid-sequence. Allow extra time.
+  // Konclude WASM explainInconsistency (blackbox MIPS) can be slow on CI.
   test.setTimeout(120_000);
 
-  await page.goto(BASE_URL);
-  await waitForReady(page);
+  await gotoAndWaitForReady(page, BASE_URL, 'loadRdf');
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo-inconsistent.ttl'), 'utf-8');
 
   async function loadAndRun() {
-    await call(page, 'loadRdf', { turtle });
-    await call(page, 'runReasoning', {});
+    await callTool(page, 'loadRdf', { turtle }, BASE_URL);
+    await callTool(page, 'runReasoning', {}, BASE_URL);
     const button = page.locator('button.glass-btn--status-error');
     await button.waitFor({ timeout: 30_000 });
     await button.click();
@@ -107,7 +74,7 @@ test('Modal content: Summary shows OWL DL card, Errors tab shows affected node',
   } catch {
     // COI service-worker may have reloaded the page after button click —
     // redo the data load + reasoning + click on the fresh page.
-    await waitForReady(page);
+    await gotoAndWaitForReady(page, BASE_URL, 'loadRdf');
     await loadAndRun();
     await dialog.waitFor({ timeout: 60_000 });
   }
@@ -124,13 +91,12 @@ test('Modal content: Summary shows OWL DL card, Errors tab shows affected node',
 });
 
 test('Consistent sanity: reasoning-demo.ttl → isConsistent=true, errors=0, inferredTriples>0, TopBar Valid', async ({ page }) => {
-  await page.goto(BASE_URL);
-  await waitForReady(page);
+  await gotoAndWaitForReady(page, BASE_URL, 'loadRdf');
 
   const turtle = fs.readFileSync(path.resolve('public/reasoning-demo.ttl'), 'utf-8');
-  await call(page, 'loadRdf', { turtle });
+  await callTool(page, 'loadRdf', { turtle }, BASE_URL);
 
-  const result = await call(page, 'runReasoning', {}) as any;
+  const result = await callTool(page, 'runReasoning', {}, BASE_URL) as any;
   console.log('[TEST] consistent runReasoning result:', JSON.stringify(result?.data));
 
   expect(result?.success).toBe(true);
