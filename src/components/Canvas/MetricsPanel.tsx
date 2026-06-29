@@ -1,11 +1,12 @@
 /**
  * @fileoverview Ontology Metrics Dashboard panel.
  *
- * Gathers structural counts from the data graph (via a handful of small SPARQL
- * COUNT queries plus rdfManager.getGraphCounts), then renders compact stat
- * cards, a per-namespace breakdown table, and a set of OQuaRE-flavored quality
- * heuristics. The pure ratio math lives in utils/ontologyMetrics so it stays
- * unit-testable; this component only does the gathering and presentation.
+ * Gathers structural counts from the data graph via rdfManager.getOntologyStats
+ * (a direct N3 store query in the worker — no Comunica / SPARQL dependency),
+ * then renders compact stat cards, a per-namespace breakdown table, and a set
+ * of OQuaRE-flavored quality heuristics. The pure ratio math lives in
+ * utils/ontologyMetrics so it stays unit-testable; this component only does
+ * the gathering and presentation.
  *
  * NOTE: the "quality" ratios are simple heuristics, NOT a certified OQuaRE
  * assessment — the UI labels them as such.
@@ -25,7 +26,6 @@ import {
   Database,
 } from 'lucide-react';
 import { rdfManager } from '../../utils/rdfManager';
-import type { NamespaceEntry } from '../../constants/namespaces';
 import {
   computeOntologyMetrics,
   formatRatio,
@@ -37,68 +37,11 @@ import { cn } from '../../lib/utils';
 const DATA_GRAPH = 'urn:vg:data';
 const INFERRED_GRAPH = 'urn:vg:inferred';
 
-/** SPARQL COUNT queries keyed by the raw-count field they populate. */
-const COUNT_QUERIES: Array<{ key: keyof OntologyRawCounts; sparql: string }> = [
-  {
-    key: 'totalTriples',
-    sparql: 'SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }',
-  },
-  {
-    key: 'subjectCount',
-    sparql: 'SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE { ?s ?p ?o }',
-  },
-  {
-    key: 'classCount',
-    sparql:
-      'SELECT (COUNT(DISTINCT ?c) AS ?n) WHERE { ' +
-      '{ ?c a <http://www.w3.org/2002/07/owl#Class> } UNION ' +
-      '{ ?c a <http://www.w3.org/2000/01/rdf-schema#Class> } }',
-  },
-  {
-    key: 'objectPropertyCount',
-    sparql:
-      'SELECT (COUNT(DISTINCT ?p) AS ?n) WHERE { ?p a <http://www.w3.org/2002/07/owl#ObjectProperty> }',
-  },
-  {
-    key: 'datatypePropertyCount',
-    sparql:
-      'SELECT (COUNT(DISTINCT ?p) AS ?n) WHERE { ?p a <http://www.w3.org/2002/07/owl#DatatypeProperty> }',
-  },
-  {
-    key: 'namedIndividualCount',
-    sparql:
-      'SELECT (COUNT(DISTINCT ?i) AS ?n) WHERE { ?i a <http://www.w3.org/2002/07/owl#NamedIndividual> }',
-  },
-  {
-    key: 'labeledClassCount',
-    sparql:
-      'SELECT (COUNT(DISTINCT ?c) AS ?n) WHERE { ' +
-      '{ { ?c a <http://www.w3.org/2002/07/owl#Class> } UNION ' +
-      '{ ?c a <http://www.w3.org/2000/01/rdf-schema#Class> } } ' +
-      '?c <http://www.w3.org/2000/01/rdf-schema#label> ?l }',
-  },
-];
-
 /** Per-prefix subject count for the namespace breakdown table. */
 interface NamespaceRow {
   prefix: string;
   uri: string;
   subjects: number;
-}
-
-interface SparqlSelectResult {
-  type?: string;
-  rows?: Array<Record<string, string>>;
-}
-
-/** Pull the single ?n binding out of a `SELECT (COUNT(...) AS ?n)` result. */
-function readCount(result: unknown): number {
-  const rows = (result as SparqlSelectResult)?.rows;
-  if (!Array.isArray(rows) || rows.length === 0) return 0;
-  const raw = rows[0]?.n;
-  // COUNT bindings may arrive as typed-literal strings; parse the leading int.
-  const n = Number.parseInt(String(raw ?? '').replace(/\D.*$/, ''), 10);
-  return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
 export function MetricsPanel() {
@@ -112,57 +55,24 @@ export function MetricsPanel() {
     setLoading(true);
     setError(null);
     try {
-      // Structural counts — small COUNT queries run in parallel.
-      const countResults = await Promise.all(
-        COUNT_QUERIES.map((q) => rdfManager.sparqlQuery(q.sparql, { graphName: DATA_GRAPH })),
-      );
-      const partial: Partial<OntologyRawCounts> = {};
-      COUNT_QUERIES.forEach((q, i) => {
-        partial[q.key] = readCount(countResults[i]);
-      });
-
-      // Asserted vs inferred triple counts from the per-graph tallies.
-      const graphCounts = await rdfManager.getGraphCounts();
-      const asserted = Number(graphCounts?.[DATA_GRAPH] ?? partial.totalTriples ?? 0) || 0;
-      const inferred = Number(graphCounts?.[INFERRED_GRAPH] ?? 0) || 0;
+      const stats = await rdfManager.getOntologyStats();
 
       const next: OntologyRawCounts = {
-        totalTriples: partial.totalTriples ?? 0,
-        classCount: partial.classCount ?? 0,
-        objectPropertyCount: partial.objectPropertyCount ?? 0,
-        datatypePropertyCount: partial.datatypePropertyCount ?? 0,
-        namedIndividualCount: partial.namedIndividualCount ?? 0,
-        subjectCount: partial.subjectCount ?? 0,
-        labeledClassCount: partial.labeledClassCount ?? 0,
-        assertedTriples: asserted,
-        inferredTriples: inferred,
+        totalTriples: stats.totalTriples,
+        classCount: stats.classCount,
+        objectPropertyCount: stats.objectPropertyCount,
+        datatypePropertyCount: stats.datatypePropertyCount,
+        namedIndividualCount: stats.namedIndividualCount,
+        subjectCount: stats.subjectCount,
+        labeledClassCount: stats.labeledClassCount,
+        assertedTriples: stats.assertedTriples,
+        inferredTriples: stats.inferredTriples,
       };
 
-      // Per-namespace subject breakdown: one COUNT query per registered prefix.
-      const namespaces: NamespaceEntry[] = rdfManager.getNamespaces();
-      const seen = new Set<string>();
-      const candidates = namespaces.filter((ns) => {
-        if (!ns?.uri) return false;
-        if (seen.has(ns.uri)) return false;
-        seen.add(ns.uri);
-        return true;
-      });
-      const nsCounts = await Promise.all(
-        candidates.map((ns) =>
-          rdfManager.sparqlQuery(
-            `SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE { ?s ?p ?o FILTER(STRSTARTS(STR(?s), "${ns.uri.replace(/"/g, '\\"')}")) }`,
-            { graphName: DATA_GRAPH },
-          ),
-        ),
-      );
-      const rows: NamespaceRow[] = candidates
-        .map((ns, i) => ({
-          prefix: ns.prefix || ':',
-          uri: ns.uri,
-          subjects: readCount(nsCounts[i]),
-        }))
+      const rows: NamespaceRow[] = stats.namespaceBreakdown
         .filter((r) => r.subjects > 0)
-        .sort((a, b) => b.subjects - a.subjects);
+        .sort((a, b) => b.subjects - a.subjects)
+        .map((r) => ({ prefix: r.prefix || ':', uri: r.uri, subjects: r.subjects }));
 
       if (mounted.current) {
         setCounts(next);

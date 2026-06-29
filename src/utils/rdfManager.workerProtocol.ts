@@ -229,6 +229,7 @@ export type RDFWorkerCommandPayloads = {
     changedSubjects?: string[];
     changedSignature?: string[];
   };
+  getOntologyStats: undefined;
   /**
    * Enable or disable OPFS crash-recovery persistence for this session. The
    * enable preference is owned by the main thread (localStorage); this command
@@ -271,6 +272,7 @@ export const RDF_WORKER_COMMANDS = [
   "explainEntailment",
   "extractModule",
   "reasonIncremental",
+  "getOntologyStats",
 ] as const;
 
 export type RDFWorkerCommandName = (typeof RDF_WORKER_COMMANDS)[number];
@@ -828,6 +830,9 @@ const COMMAND_VALIDATORS: Record<RDFWorkerCommandName, CommandValidator> = {
       changedSignature,
       "reasonIncremental.changedSignature must be an array of strings when provided",
     );
+  },
+  getOntologyStats(payload) {
+    invariant(typeof payload === "undefined", "getOntologyStats payload must be undefined");
   },
 };
 

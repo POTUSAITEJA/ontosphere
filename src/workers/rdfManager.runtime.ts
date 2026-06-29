@@ -2419,6 +2419,100 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
     return counts;
   }
 
+  function collectOntologyStats(store: any): Record<string, unknown> {
+    const DATA_GRAPH_IRI = "urn:vg:data";
+    const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    const OWL_CLASS = "http://www.w3.org/2002/07/owl#Class";
+    const RDFS_CLASS = "http://www.w3.org/2000/01/rdf-schema#Class";
+    const OWL_OBJECT_PROPERTY = "http://www.w3.org/2002/07/owl#ObjectProperty";
+    const OWL_DATATYPE_PROPERTY = "http://www.w3.org/2002/07/owl#DatatypeProperty";
+    const OWL_NAMED_INDIVIDUAL = "http://www.w3.org/2002/07/owl#NamedIndividual";
+    const RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label";
+
+    try {
+      const toSet = (quads: any[]): Set<string> => {
+        const s = new Set<string>();
+        for (const q of quads) {
+          const v = q?.subject?.value;
+          if (typeof v === "string" && v.length > 0) s.add(v);
+        }
+        return s;
+      };
+
+      const owlClasses = toSet(store.getQuads(null, RDF_TYPE, OWL_CLASS, DATA_GRAPH_IRI));
+      const rdfsClasses = toSet(store.getQuads(null, RDF_TYPE, RDFS_CLASS, DATA_GRAPH_IRI));
+      const classSubjects = new Set([...owlClasses, ...rdfsClasses]);
+
+      const objectPropertyCount = toSet(store.getQuads(null, RDF_TYPE, OWL_OBJECT_PROPERTY, DATA_GRAPH_IRI)).size;
+      const datatypePropertyCount = toSet(store.getQuads(null, RDF_TYPE, OWL_DATATYPE_PROPERTY, DATA_GRAPH_IRI)).size;
+      const namedIndividualCount = toSet(store.getQuads(null, RDF_TYPE, OWL_NAMED_INDIVIDUAL, DATA_GRAPH_IRI)).size;
+
+      const allQuads = store.getQuads(null, null, null, DATA_GRAPH_IRI);
+      const allSubjects = new Set<string>();
+      for (const q of allQuads) {
+        const v = q?.subject?.value;
+        if (typeof v === "string" && v.length > 0) allSubjects.add(v);
+      }
+
+      const labeledSubjects = toSet(store.getQuads(null, RDFS_LABEL, null, DATA_GRAPH_IRI));
+      let labeledClassCount = 0;
+      for (const cls of classSubjects) {
+        if (labeledSubjects.has(cls)) labeledClassCount++;
+      }
+
+      const gc = collectGraphCountsFromStore(store);
+      const assertedTriples = gc[DATA_GRAPH_IRI] || 0;
+      const inferredTriples = gc["urn:vg:inferred"] || 0;
+      const totalTriples = assertedTriples;
+
+      const namespacePrefixes = Object.entries(workerNamespaces);
+      const nsBuckets = new Map<string, { prefix: string; uri: string; subjects: number }>();
+      for (const subj of allSubjects) {
+        for (const [prefix, uri] of namespacePrefixes) {
+          if (subj.startsWith(uri)) {
+            const existing = nsBuckets.get(uri);
+            if (existing) {
+              existing.subjects++;
+            } else {
+              nsBuckets.set(uri, { prefix, uri, subjects: 1 });
+            }
+            break;
+          }
+        }
+      }
+      const namespaceBreakdown = Array.from(nsBuckets.values())
+        .filter((r) => r.subjects > 0)
+        .sort((a, b) => b.subjects - a.subjects);
+
+      return {
+        totalTriples,
+        classCount: classSubjects.size,
+        objectPropertyCount,
+        datatypePropertyCount,
+        namedIndividualCount,
+        subjectCount: allSubjects.size,
+        labeledClassCount,
+        assertedTriples,
+        inferredTriples,
+        namespaceBreakdown,
+      };
+    } catch (err) {
+      debugLog("[VG_REASONING_WORKER] collectOntologyStats failed", err);
+      return {
+        totalTriples: 0,
+        classCount: 0,
+        objectPropertyCount: 0,
+        datatypePropertyCount: 0,
+        namedIndividualCount: 0,
+        subjectCount: 0,
+        labeledClassCount: 0,
+        assertedTriples: 0,
+        inferredTriples: 0,
+        namespaceBreakdown: [],
+      };
+    }
+  }
+
   // ── searchTerms (grounding / retrieval) ───────────────────────────────────
   //
   // Pure store query: find existing ontology terms by label or IRI local-name
@@ -3703,6 +3797,9 @@ export function createRdfWorkerRuntime(postMessage: (message: unknown) => void):
           break;
         case "getGraphCounts":
           result = collectGraphCountsFromStore(getSharedStore());
+          break;
+        case "getOntologyStats":
+          result = collectOntologyStats(getSharedStore());
           break;
         case "getNamespaces":
           result = { ...workerNamespaces };
