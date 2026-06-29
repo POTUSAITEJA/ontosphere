@@ -1357,6 +1357,37 @@ export class RDFManagerImpl {
     return isPlainObject(counts) ? (counts as Record<string, number>) : {};
   }
 
+  async getOntologyStats(): Promise<{
+    totalTriples: number;
+    classCount: number;
+    objectPropertyCount: number;
+    datatypePropertyCount: number;
+    namedIndividualCount: number;
+    subjectCount: number;
+    labeledClassCount: number;
+    assertedTriples: number;
+    inferredTriples: number;
+    namespaceBreakdown: Array<{ prefix: string; uri: string; subjects: number }>;
+  }> {
+    const result = await this.worker.call("getOntologyStats");
+    const safe = isPlainObject(result) ? (result as Record<string, unknown>) : {};
+    const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+    return {
+      totalTriples: num(safe.totalTriples),
+      classCount: num(safe.classCount),
+      objectPropertyCount: num(safe.objectPropertyCount),
+      datatypePropertyCount: num(safe.datatypePropertyCount),
+      namedIndividualCount: num(safe.namedIndividualCount),
+      subjectCount: num(safe.subjectCount),
+      labeledClassCount: num(safe.labeledClassCount),
+      assertedTriples: num(safe.assertedTriples),
+      inferredTriples: num(safe.inferredTriples),
+      namespaceBreakdown: Array.isArray(safe.namespaceBreakdown)
+        ? (safe.namespaceBreakdown as Array<{ prefix: string; uri: string; subjects: number }>)
+        : [],
+    };
+  }
+
   async fetchQuadsPage(options: {
     graphName: string;
     offset?: number;
