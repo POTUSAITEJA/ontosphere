@@ -1,19 +1,37 @@
-Ontosphere — Browser-based RDF Knowledge Graph Editor
-====================================================
+<div align="center">
+
+# Ontosphere
+
+**Browser-based RDF knowledge-graph editor with client-side OWL 2 DL reasoning, reasoner-verified repair, and a Model Context Protocol server for AI agents.**
+
+[![Live demo](https://img.shields.io/badge/Live_demo-open_app-2ea44f?style=for-the-badge&logo=googlechrome&logoColor=white)](https://thhanke.github.io/ontosphere)
+&nbsp;[![Paper](https://img.shields.io/badge/Paper-ISWC_2026-8a2be2?style=for-the-badge&logo=readthedocs&logoColor=white)](https://thhanke.github.io/ontosphere/paper/)
+&nbsp;[![MCP](https://img.shields.io/badge/MCP-43_tools-ff6f00?style=for-the-badge&logo=robotframework&logoColor=white)](#ai--mcp-integration)
 
 [![DOI](https://zenodo.org/badge/1049705027.svg)](https://doi.org/10.5281/zenodo.19605270)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+![Version](https://img.shields.io/badge/version-1.5.0-informational)
+![Architecture](https://img.shields.io/badge/100%25-client--side-success)
+[![Built with](https://img.shields.io/badge/React_19-TypeScript_·_WebAssembly-61dafb?logo=react&logoColor=white)](#contributing--development-notes)
+
+</div>
+
+> **Author, reason over, and repair RDF/OWL knowledge graphs entirely in your browser.**
+> Ontosphere loads RDF from files, URLs, or SPARQL endpoints; lets you author nodes and edges on a live canvas; runs a *complete* OWL 2 DL reasoner (Konclude, compiled to WebAssembly) with inferred triples shown inline; proposes reasoner-verified repairs for inconsistencies; and exposes everything to AI agents through a Model Context Protocol server. No backend, no install — just a browser tab.
+
+<div align="center">
 
 | I want to… | Start here |
 |------------|------------|
-| Try the live demo | [Open Ontosphere ↗](https://thhanke.github.io/ontosphere) |
-| Watch feature tutorials | [Video tutorials](#video-tutorials) |
-| Learn the interface | [Using the UI](#using-the-ui) |
-| Connect an AI agent | [AI / MCP Integration](#ai--mcp-integration) |
-| Load my own data | [Startup / URL parameters](#startup--url-parameters) |
-| Run it locally | [Quick start (development)](#quick-start-development) |
-| Contribute code | [Contributing](#contributing--development-notes) |
-| Read the paper | [ISWC 2026 Demo Paper ↗](https://thhanke.github.io/ontosphere/paper/) |
+| 🚀 &nbsp;Try the live demo | [Open Ontosphere ↗](https://thhanke.github.io/ontosphere) |
+| 🎬 &nbsp;Watch feature tutorials | [Video tutorials](#video-tutorials) |
+| 🤖 &nbsp;Connect an AI agent | [AI / MCP integration](#ai--mcp-integration) |
+| 💻 &nbsp;Run it locally | [Quick start](#quick-start-development) |
+| 📂 &nbsp;Load my own data | [Startup / URL parameters](#startup--url-parameters) |
+| 📄 &nbsp;Read the paper | [ISWC 2026 demo paper ↗](https://thhanke.github.io/ontosphere/paper/) |
+| 🛠️ &nbsp;Contribute | [Contributing](#contributing--development-notes) |
+
+</div>
 
 ## Table of Contents
 
@@ -26,6 +44,7 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
 - [Startup / URL parameters](#startup--url-parameters)
 - [AI / MCP Integration](#ai--mcp-integration)
   - [How it works](#how-it-works)
+  - [Agent edit provenance](#agent-edit-provenance)
   - [Recommended workflow](#recommended-workflow)
   - [Using Ontosphere with any AI](#using-ontosphere-with-any-ai)
     - [Claude Code / Playwright](#claude-code--playwright-full-automation)
@@ -39,27 +58,84 @@ Ontosphere — Browser-based RDF Knowledge Graph Editor
   - [Recording demo videos](#recording-demo-videos)
   - [Contributing](#contributing--development-notes)
 - [Acknowledgements](#acknowledgements)
+- [Reproducibility and data availability](#reproducibility-and-data-availability)
 - [License & authors](#license--authors)
 
 Overview
 --------
-Ontosphere is a browser-based [RDF](https://www.w3.org/RDF/)/ontology knowledge graph editor. It loads RDF from local files, remote URLs, or SPARQL/Fuseki endpoints; lets users author nodes and edges directly on the canvas; runs [OWL 2 DL reasoning](https://www.w3.org/TR/owl2-profiles/#OWL_2_DL) (via Konclude) with visual differentiation of inferred triples; and applies multi-algorithm layout ([Dagre](https://github.com/dagrejs/dagre), [ELK](https://github.com/kieler/elkjs)) and automatic clustering for large graphs. Additional features include namespace management with live URI renaming, a drag-and-drop workflow template catalog, and a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for AI-agent integration. All computation runs entirely client-side in the browser against an in-memory RDF store backed by Web Workers — no backend required.
+Ontosphere is a browser-based [RDF](https://www.w3.org/RDF/)/ontology knowledge graph editor. It loads RDF from local files, remote URLs, or SPARQL/Fuseki endpoints; lets users author nodes and edges directly on the canvas; runs complete [OWL 2 DL reasoning](https://www.w3.org/TR/owl2-profiles/#OWL_2_DL) (via Konclude) with visual differentiation of inferred triples; and applies multi-algorithm layout ([Dagre](https://github.com/dagrejs/dagre), [ELK](https://github.com/kieler/elkjs)) and automatic clustering for large graphs. Additional features include namespace management with live URI renaming, a drag-and-drop workflow template catalog, and a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for AI-agent integration. All computation runs entirely client-side in the browser against an in-memory RDF store backed by Web Workers — no backend required.
+
+```mermaid
+flowchart LR
+  Agent["LLM agent"]
+  subgraph B["Browser tab — 100&#37; client-side, no backend"]
+    direction TB
+    UI["Reactodia canvas<br/>author · layout · cluster"]
+    Store["RDF store<br/>named graphs · Web Workers"]
+    Reason["OWL 2 DL reasoner<br/>Konclude · WebAssembly"]
+    Check["OWL 2 profile + SHACL"]
+    Repair["Repair engine<br/>deletion · weakening · laconic"]
+    Diag["Diagnosis object<br/>verdict · justifications · verified repairs"]
+    Prov["PROV-O provenance + reversal"]
+    MCP["MCP server · 43 tools"]
+  end
+  Agent -->|"author / select a verified repair"| MCP
+  MCP --> Store
+  UI <--> Store
+  Store --> Reason
+  Store --> Check
+  Reason --> Repair
+  Check --> Repair
+  Reason --> Diag
+  Check --> Diag
+  Repair --> Diag
+  Diag -->|"verified, never-hidden feedback"| MCP
+  Store --> Prov
+```
+
+<div align="center"><sub>The agent edits through the MCP tool surface; the client-side substrate verifies with a complete reasoner and returns one structured diagnosis with reasoner-verified repairs. Nothing leaves the browser.</sub></div>
 
 Key capabilities
 ----------------
-- Load RDF/Turtle/JSON-LD/RDF-XML/N-Triples from local files or remote URLs (including SPARQL endpoints and Fuseki datasets).
-- Startup URL support: auto-load an RDF file via URL query parameter (see "Startup / URL usage" below).
-- **Reactodia canvas**: pan, zoom, minimap, fit-view, with entity group (cluster) support and smooth animations.
-- **Authoring mode** (always on): add nodes via search, draw edges by dragging the halo "Establish Link" handle, edit node annotation properties and link predicates directly on the canvas. Undo/Redo support. Entity auto-complete uses scored domain/range tiers derived from loaded ontologies.
-- **Search**: type in the search box to find entities by label or IRI; press Enter to cycle through matches on the canvas.
-- **TBox / ABox views**: toggle between ontology-level classes/properties (TBox) and data-level individuals (ABox).
-- **Layout engine**: multiple algorithms — Dagre (horizontal/vertical), ELK (layered, force, stress, radial), and Reactodia-default — all running in Web Workers so the UI stays responsive. Spacing is adjustable via a slider; re-layout triggers automatically when spacing changes.
-- **Hierarchical fold levels**: graphs load with two levels of structural folding already applied — L2 (subclass chains and OWL collection axioms collapsed into representative group nodes) and L1 (per-node annotation properties hidden). A level badge in the toolbar shows the current depth (`L3`/`L2`/`∅`). Fold/Unfold buttons for each level let users progressively reveal detail. L3 (community-detection clustering — Label Propagation, Louvain, K-Means) applies automatically on load above a configurable node threshold (default 100). Each view (TBox / ABox) tracks its fold state independently.
-- **DL reasoning (Konclude)**: run OWL 2 DL inference in the browser and see inferred triples rendered as amber dashed edges; inferred types/annotations appear in amber italic. A reasoning report lists all inferred triples. Includes automatic OWL DL consistency checking — the Errors tab shows per-entity clash details when the ontology is contradictory. Clear inferred triples any time without affecting asserted data.
-- **Namespace management**: edit namespace URIs directly in the legend panel (rename propagates across all stored triples). Colour-coded namespace badges on nodes and edges.
-- Export the current graph as Turtle, RDF/XML, or JSON-LD.
-- **Workflow catalog**: drag reusable workflow template cards from the sidebar onto the canvas to instantiate connected subgraphs.
-- **MCP support**: exposes a Model Context Protocol server (via the browser's `navigator.modelContext` API) for AI-agent integration with 34 tools across seven categories: graph management (`loadRdf`, `loadOntology`, `suggestOntologiesForTask`, `queryGraph`, `exportGraph`, `exportImage`, `setViewMode`, `getCapabilities`, `getGraphState`, `help`), node operations (`addNode`, `removeNode`, `expandNode`, `getNodes`, `getNodeDetails`, `updateNode`), link operations (`addTriple`, `removeLink`, `getLinks`), layout and navigation (`runLayout`, `clusterNodes`, `layoutNodes`, `focusNode`, `fitCanvas`, `getNeighbors`, `findPath`), reasoning (`runReasoning`, `clearInferred`), namespace management (`setNamespace`, `removeNamespace`, `listNamespaces`), and SHACL validation (`loadShacl`, `validateGraph`, `loadShaclFromUrl`). MCP manifest at `/.well-known/mcp.json`.
+Everything below runs in the browser tab, against an in-memory RDF store backed by Web Workers. The capabilities group around what you do with a knowledge graph — **load**, **author**, **reason**, **repair**, **validate**, and **share** — plus first-class **AI-agent** access.
+
+#### 📥 Load & interoperate
+- Import **RDF / Turtle / JSON-LD / RDF-XML / N-Triples** from local files or remote URLs, including SPARQL endpoints and Fuseki datasets; auto-load on startup via a URL query parameter.
+- Export single-graph **Turtle / RDF-XML / JSON-LD**, or dataset-faithful **N-Quads / TriG** that preserve the named-graph partition (data, inferred, shapes, ontologies, workflows) so a dataset round-trips on re-import.
+- **W3C RDFC-1.0 canonicalization** ([RDF Dataset Canonicalization](https://www.w3.org/TR/rdf-canon/), W3C Recommendation 2024): produce the canonical N-Quads form and a SHA-256 **content hash** entirely in the browser. Deterministic blank-node labelling means two **isomorphic** graphs yield a byte-identical form and the same hash — a content-addressable identity for reproducible snapshots, deterministic diffs, and standards-compliant graph equality (`canonicalizeGraph` MCP tool).
+
+#### ✍️ Author & explore
+- **Always-on authoring** on a **Reactodia canvas** (pan, zoom, minimap, fit-view, clustering, smooth animations): add nodes via search, draw edges from the halo "Establish Link" handle, and edit annotations and predicates inline, with full **undo/redo**. Auto-complete is scored by domain/range tiers derived from the loaded ontologies.
+- **Search** entities by label or IRI (Enter cycles matches on the canvas); toggle **TBox / ABox** views between ontology-level classes/properties and data-level individuals.
+- **Layout at scale**: Dagre (horizontal/vertical) and ELK (layered, force, stress, radial) plus the Reactodia default, all in Web Workers with adjustable spacing. **Hierarchical fold levels** load with structural folding pre-applied (L2 subclass/collection collapse, L1 annotation hiding) and a depth badge; **community-detection clustering** (Label Propagation, Louvain, K-Means) applies automatically above a configurable node threshold (default 100). Each view tracks its fold state independently.
+- **Namespace management**: rename namespace URIs in the legend (propagates across all stored triples), with colour-coded badges on nodes and edges. **Workflow catalog**: drag reusable template cards onto the canvas to instantiate connected subgraphs.
+
+#### 🧠 Reason
+- **Complete OWL 2 DL inference** in the browser via **Konclude (WebAssembly)**; inferred triples render as amber dashed edges and inferred types/annotations in amber italic, with a full inference report and one-click clearing that never touches asserted data.
+- Automatic **consistency checking** with per-entity clash details in the Errors tab, **justifications** (MIPS) with laconic targeting, **OWL 2 profile** detection (EL/QL/RL/DL), and **locality-module** scoping for incremental/modular verification.
+
+#### 🔧 Repair — reasoner-verified
+- When the reasoner finds a contradiction (or SHACL reports a violation), a **Repairs** tab shows reasoner-computed, ranked, verified fixes — the same repairs the `explainDiagnostics` MCP tool hands an agent.
+- Minimal hitting-set **deletion** plus, for `rdfs:subClassOf` culprits, **axiom weakening** that replaces `A ⊑ D` with a logically weaker `A ⊑ D′` to preserve more knowledge than deletion (Troquard et al. AAAI 2018; Li & Lambrix ISWC 2024). Each suggestion shows its rationale and the exact triples it adds/removes, with a "verified consistent" badge and a bounded **minimality** check. Apply a single deletion, **Apply weakening** as one undoable remove+add batch, or **Apply all verified** in one batch — then re-run reasoning to confirm.
+
+#### ✅ Validate & track
+- **SHACL validation** with focus node / path / constraint / severity reporting.
+- **PROV-O provenance** of every agent edit, with diff and one-click **reversal** of a batch (faithful to typed and language-tagged literals), and a warning when retention truncates reversible history.
+
+#### 🤖 AI / MCP integration — 43 tools
+Exposes a [Model Context Protocol](https://modelcontextprotocol.io) server via the browser's `navigator.modelContext` API, across nine categories (manifest at `/.well-known/mcp.json`):
+
+| Category | Tools |
+|---|---|
+| Graph management | `loadRdf` · `loadOntology` · `suggestOntologiesForTask` · `queryGraph` · `exportGraph` · `canonicalizeGraph` · `exportImage` · `setViewMode` · `getCapabilities` · `getGraphState` · `help` |
+| Node operations | `addNode` · `removeNode` · `expandNode` · `getNodes` · `getNodeDetails` · `updateNode` · `searchTerms` |
+| Link operations | `addTriple` · `removeLink` · `getLinks` |
+| Layout & navigation | `runLayout` · `clusterNodes` · `layoutNodes` · `focusNode` · `fitCanvas` · `getNeighbors` · `findPath` |
+| Reasoning | `runReasoning` · `clearInferred` · `explainDiagnostics` · `explainEntailment` · `extractModule` |
+| Namespaces | `setNamespace` · `removeNamespace` · `listNamespaces` |
+| SHACL validation | `loadShacl` · `validateGraph` · `loadShaclFromUrl` |
+| Edit provenance / undo | `listAgentEdits` · `diffAgentEdits` · `revertAgentBatch` |
+| Dataset metadata | `generateDatasetMetadata` (VoID + DCAT with triple/class/property counts, partitions and vocabularies, for FAIR publishing) |
 
 Video tutorials
 ---------------
@@ -127,7 +203,7 @@ The annotated diagram below identifies the numbered UI elements described in thi
 
 **12** **Run reasoning** (▶) — triggers DL reasoning (Konclude) and optionally SHACL validation. Inferred triples appear as amber dashed edges. Idempotent.
 
-### Left sidebar
+### Left sidebar (collapsed icon rail)
 
 **13** **Onto** — open the ontology loader. Enter any HTTP(S) URL or pick from pre-configured sources in Settings.
 
@@ -135,31 +211,37 @@ The annotated diagram below identifies the numbered UI elements described in thi
 
 **15** **Clear** — remove all loaded graphs and reset the canvas.
 
-**16** **Export** — export as Turtle, JSON-LD, or RDF/XML (dropdown). Generated entirely in the browser.
+**16** **Export** — export as Turtle, JSON-LD, RDF/XML (single-graph), or N-Quads / TriG (dataset-faithful, preserves named graphs) via the dropdown. Generated entirely in the browser.
 
 **17** **SHACL** — open the SHACL shapes panel to load, inspect, and manage SHACL shapes for data validation.
 
-**18** **AI Relay** — open the AI Relay Bridge panel. Drag the bookmarklet to your browser bar to connect any AI chat (ChatGPT, Gemini, Claude.ai) to Ontosphere.
+**18** **Agent Edits** — open the provenance inspector (see [Agent edit provenance](#agent-edit-provenance)). Lists edit batches, shows diffs, and offers one-click revert.
 
-**19** **Zoom controls** — zoom in/out, fit view (reset the viewport to show all nodes), and screenshot (export the current canvas view).
+**19** **SPARQL** — open the SPARQL query editor (the same engine the `queryGraph` MCP tool uses). Prefills registered namespace `PREFIX` declarations, runs on **Run** or **Ctrl/⌘+Enter**, and renders results by type: SELECT bindings as a table, CONSTRUCT/DESCRIBE as triples, ASK as true/false, INSERT/DELETE with a success toast.
 
-**20** **Docs** — open the built-in documentation and help panel.
+**20** **Metrics** — open the ontology metrics dashboard. Structural counts (triples, subjects, classes, properties, individuals) as stat cards, subjects-by-namespace breakdown, and OQuaRE-flavoured quality heuristics (properties per class, label coverage, inferred:asserted ratio).
 
-**21** **Settings** — open the settings panel for default layout, clustering algorithm, large-graph threshold, ontology autoload URLs, workflow catalog, reasoner backend, and other preferences.
+**21** **AI Relay** — open the AI Relay Bridge panel. Drag the bookmarklet to your browser bar to connect any AI chat (ChatGPT, Gemini, Claude.ai) to Ontosphere.
+
+**22** **Zoom controls** — zoom in/out, fit view (reset the viewport to show all nodes), and screenshot (export the current canvas view).
+
+**23** **Docs** — open the built-in documentation and help panel.
+
+**24** **Settings** — open the settings panel for default layout, clustering algorithm, large-graph threshold, ontology autoload URLs, workflow catalog, reasoner backend, and other preferences.
 
 ### Sidebar content (expanded)
 
-When the sidebar is expanded (click the **›** toggle), the file operation buttons are shown in a compact grid. A **Workflows** accordion appears below when the workflow catalog is enabled in Settings. Drag a template card onto the canvas to instantiate it as a connected subgraph.
+When the sidebar is expanded (click the **›** toggle), the action buttons are shown in a compact grid. Below them the same sections appear as collapsible accordion panels with full content: **Workflows** (drag a template card onto the canvas to instantiate a connected subgraph), **SHACL Shapes**, **Agent Edits**, **SPARQL**, **Metrics**, **AI Relay**, and **Documentation**.
 
 ### Authoring toolbar (bottom left)
 
-**22** **Undo** — undo last authoring change.
+**25** **Undo** — undo last authoring change.
 
-**23** **Redo** — redo last undone change.
+**26** **Redo** — redo last undone change.
 
-**24** **Save** — commit all pending authoring edits to the RDF store in a single batch.
+**27** **Save** — commit all pending authoring edits to the RDF store in a single batch.
 
-**25** **Re-layout** — re-apply the current layout algorithm in-place.
+**28** **Re-layout** — re-apply the current layout algorithm in-place.
 
 ### Node authoring halo (visible on selected node)
 
@@ -172,11 +254,11 @@ Hover over any node to reveal the authoring halo with these controls:
 
 ### Canvas elements
 
-**26** **Individual node** — represents an RDF subject. The header shows the local name, a coloured namespace badge, and the OWL class. Properties (IRI, annotations, custom fields) are shown in an editable table on selection.
+**29** **Individual node** — represents an RDF subject. The header shows the local name, a coloured namespace badge, and the OWL class. Properties (IRI, annotations, custom fields) are shown in an editable table on selection.
 
-**27** **Edge / predicate** — labelled arrow between two nodes. Amber dashed edges are inferred triples. Double-click to open the link property editor (scored autocomplete from ontologies).
+**30** **Edge / predicate** — labelled arrow between two nodes. Amber dashed edges are inferred triples. Double-click to open the link property editor (scored autocomplete from ontologies).
 
-**28** **Minimap** — overview panel at bottom-right. Click to jump to a region, drag to pan.
+**31** **Minimap** — overview panel at bottom-right. Click to jump to a region, drag to pan.
 
 ### Canvas interactions
 - **Add a node**: type in **2** Search and press Enter to search the ontology; select a match to place it on the canvas.
@@ -185,7 +267,7 @@ Hover over any node to reveal the authoring halo with these controls:
 - Double-click an edge to open the link property editor.
 - Scroll to zoom; drag the background to pan.
 - Namespace legend panel: enable via **1** View menu → Show Legend. Click a namespace entry's pencil icon to rename its URI; renames propagate across all stored triples.
-- Use the fit-view button (**19** Zoom controls) to reset the viewport.
+- Use the fit-view button (**22** Zoom controls) to reset the viewport.
 
 Reasoning
 ---------
@@ -368,6 +450,20 @@ The app has two coupled layers:
 - **Reactodia canvas** — visual mirror. Nodes are *not* created automatically from triples; you must call `addNode` to place a subject on canvas. After adding triples, canvas links refresh automatically. Nodes start collapsed — call `expandNode` (with an IRI to expand one node, or no args to expand all) to reveal annotation property cards.
 
 DL reasoning (Konclude) writes inferred triples back to the store and refreshes the canvas.
+
+### Agent edit provenance
+
+Every mutating MCP tool call is recorded as a PROV-O edit batch. Three tools expose the journal to agents:
+
+| MCP tool | Purpose |
+|----------|---------|
+| `listAgentEdits` | List recorded edit batches (most recent first) with `batchId`, `tool`, `agent`, `timestamp`, `addedCount`, `removedCount`, `reverted` |
+| `diffAgentEdits` | Inspect the exact triples a batch added and removed |
+| `revertAgentBatch` | Undo a batch — re-removes its added triples and re-adds its removed triples; idempotent and best-effort |
+
+The sidebar **Agent Edits** panel surfaces the same journal in the UI: it lists edit batches most-recent-first (tool, timestamp, `+added`/`−removed` counts, agent, and a *reverted* badge), expands each batch to show its added (green) and removed (struck-through red) triples with abbreviated IRIs, and offers a one-click **Revert** button per batch. The panel refreshes automatically as agents make or revert edits.
+
+The `urn:vg:provenance` graph is excluded from OWL reasoning, consistency checking, SHACL validation, and data export, so provenance metadata never pollutes the ontology. The edit journal is held in memory; like the rest of the in-memory store it is volatile and cleared on page reload. To keep memory bounded during long autonomous sessions, only the most recent 5 000 edits are retained — older batches are evicted and can no longer be listed or reverted.
 
 ### Example output
 
@@ -610,7 +706,7 @@ See [docs/demo-scripts/HOWTO.md](docs/demo-scripts/HOWTO.md) for the full guide.
 Three styles of demo video are supported:
 
 **Seed-driven** — write a seed markdown file in `docs/mcp-demo/seeds/` with JSON-RPC
-tool calls and `\`\`\`action` UI action blocks. The runner parses the seed and executes each
+tool calls and `` ```action `` UI action blocks. The runner parses the seed and executes each
 step (tool calls via `window.__mcpTools`, UI actions via Playwright locators).
 
 **Chat-style (side-by-side)** — open `demo-stage.html` (mock chat left, app right),
@@ -671,6 +767,87 @@ Ontosphere builds on several open-source projects whose authors we gratefully ac
 This work was supported by the [Fraunhofer Institute for Mechanics of Materials IWM](https://www.iwm.fraunhofer.de/).
 
 See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for full details.
+
+Reproducibility and data availability
+--------------------------------------
+
+### License
+
+Ontosphere is released under the [Apache 2.0 License](LICENSE). The source code, benchmark data, and study scripts are all openly available under the same terms.
+
+### Persistent identifier and citation
+
+The software is archived on Zenodo under the concept DOI
+[10.5281/zenodo.19605270](https://doi.org/10.5281/zenodo.19605270).
+A version-specific DOI is minted automatically by Zenodo for each tagged GitHub release.
+Cite using the metadata in `CITATION.cff` (CFF 1.2.0).
+
+### Reproducible build
+
+All dependencies are pinned via `package-lock.json`. A clean, reproducible build from source:
+
+```sh
+npm ci            # install exact locked versions
+npm run build     # Vite production build → dist/
+npm test          # unit tests (Vitest)
+npm run typecheck:ratchet  # TypeScript error ratchet
+```
+
+**Docker one-liner** (no Node installation required):
+
+```sh
+# Build the image
+docker build -t ontosphere:latest .
+
+# Run the static server (opens on http://localhost:8080)
+docker run --rm -p 8080:8080 ontosphere:latest
+```
+
+The Dockerfile uses a two-stage build (Node 22 slim builder → Node 22 slim server) and pins
+the base image by tag. The production stage serves `dist/` via a minimal Express static server
+(`docker-static-server.js`) that sets the required cross-origin isolation headers (see below).
+
+### Cross-origin isolation requirement (WASM reasoner)
+
+The Konclude OWL 2 DL reasoner is compiled to WebAssembly and uses `SharedArrayBuffer`
+(pthreads). Browsers require two HTTP response headers for `SharedArrayBuffer` to be available:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: credentialless
+```
+
+Both the development server (`server.js`) and the Docker production server
+(`docker-static-server.js`) set these headers automatically. If you serve `dist/` via a
+different static file server (nginx, Caddy, GitHub Pages, etc.), configure it to emit these
+headers or the WASM reasoner will silently fall back to a non-threaded mode.
+
+### OntoAuthor-Mat benchmark and study data
+
+The **OntoAuthor-Mat** benchmark — six ontology-authoring tasks for materials science covering
+OWL 2 DL patterns (subsumption, existential/universal restrictions, disjointness, `owl:sameAs`,
+and unsatisfiability scenarios) — accompanies the [ISWC 2026 demo paper](https://thhanke.github.io/ontosphere/paper/).
+
+Each task provides:
+- A natural-language task description shown to the model
+- A gold-standard OWL 2 DL reference solution
+- SHACL shapes used for automated scoring
+- Competency questions (SPARQL) for logical verification
+
+### LLM transparency
+
+Model identifiers, prompt templates, and archived response logs for all study conditions
+are provided alongside the benchmark tasks. The model adapter records the exact model ID
+and sampling parameters used for each run. Raw model outputs (before scoring) are preserved
+so every reported result can be traced back to a specific model response.
+
+### Data Availability Statement
+
+All software, benchmark data, and study scripts necessary to reproduce the results reported
+in the paper are openly available. The source code is hosted at
+<https://github.com/ThHanke/ontosphere> and archived on Zenodo at
+<https://doi.org/10.5281/zenodo.19605270>. No proprietary or restricted data were used.
+The live application is deployed at <https://thhanke.github.io/ontosphere>.
 
 License & authors
 -----------------

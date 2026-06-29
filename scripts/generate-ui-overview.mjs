@@ -41,23 +41,20 @@ const ELEMENT_MAP = [
   [11, 'SHACLToggle',   () => document.querySelector('button[title*="SHACL validation"]')],
   [12, 'RunReasoning',  () => document.querySelector('button[title="Run reasoning"]')],
 
-  // Left sidebar
-  [13, 'Onto',          () => [...document.querySelectorAll('button')].find(b =>
-                                b.getBoundingClientRect().x < 50 && b.textContent.includes('Onto'))],
-  [14, 'File',          () => [...document.querySelectorAll('button')].find(b =>
-                                b.getBoundingClientRect().x < 50 && b.textContent.includes('File'))],
-  [15, 'Clear',         () => [...document.querySelectorAll('button')].find(b =>
-                                b.getBoundingClientRect().x < 50 && b.textContent.includes('Clear'))],
-  [16, 'Export',        () => [...document.querySelectorAll('button')].find(b =>
-                                b.getBoundingClientRect().x < 50 && b.textContent.includes('Export'))],
-  [17, 'SHACL',         () => [...document.querySelectorAll('button')].find(b =>
-                                b.getBoundingClientRect().x < 50 && b.textContent.includes('SHACL'))],
-  [18, 'Relay',         () => [...document.querySelectorAll('button')].find(b =>
-                                b.getBoundingClientRect().x < 50 && b.textContent.includes('Relay'))],
-  [19, 'ZoomControls',  () => {
+  // Left sidebar — collapsed icon rail (top to bottom)
+  [13, 'Onto',          () => document.querySelector('button[aria-label="Load Ontology"]')],
+  [14, 'File',          () => document.querySelector('button[aria-label="Load File"]')],
+  [15, 'Clear',         () => document.querySelector('button[aria-label="Clear Data"]')],
+  [16, 'Export',        () => document.querySelector('button[aria-label="Export"]')],
+  [17, 'SHACL',         () => document.querySelector('button[aria-label="SHACL Shapes"]')],
+  [18, 'AgentEdits',    () => document.querySelector('button[aria-label="Agent Edits"]')],
+  [19, 'SPARQL',        () => document.querySelector('button[aria-label="SPARQL Query"]')],
+  [20, 'Metrics',       () => document.querySelector('button[aria-label="Ontology Metrics"]')],
+  [21, 'Relay',         () => document.querySelector('button[aria-label="AI Relay"]')],
+  [22, 'ZoomControls',  () => {
                               const btns = [...document.querySelectorAll('button')].filter(b => {
                                 const r = b.getBoundingClientRect();
-                                return r.x > 40 && r.x < 110 && r.y > 300 && r.y < 600;
+                                return r.x > 40 && r.x < 110 && r.y > 300 && r.y < 700;
                               });
                               if (!btns.length) return null;
                               const first = btns[0].getBoundingClientRect();
@@ -67,23 +64,21 @@ const ELEMENT_MAP = [
                                 width: Math.max(first.width, last.width),
                                 height: last.y + last.height - first.y };
                             }],
-  [20, 'Docs',          () => [...document.querySelectorAll('button')].find(b =>
-                                b.getBoundingClientRect().x < 50 && b.textContent.includes('Docs'))],
-  [21, 'Settings',      () => [...document.querySelectorAll('button')].find(b =>
-                                b.getBoundingClientRect().x < 50 && b.textContent.includes('Settings'))],
+  [23, 'Docs',          () => document.querySelector('button[aria-label="Documentation"]')],
+  [24, 'Settings',      () => document.querySelector('button[aria-label="Settings"]')],
 
   // Bottom bar
-  [22, 'Undo',          () => document.querySelector('button[title*="Undo"]')],
-  [23, 'Redo',          () => document.querySelector('button[title*="Redo"]')],
-  [24, 'Save',          () => [...document.querySelectorAll('button')].find(b =>
+  [25, 'Undo',          () => document.querySelector('button[title*="Undo"]')],
+  [26, 'Redo',          () => document.querySelector('button[title*="Redo"]')],
+  [27, 'Save',          () => [...document.querySelectorAll('button')].find(b =>
                                 b.getBoundingClientRect().y > 900 && b.textContent.includes('Save'))],
-  [25, 'Relayout',      () => [...document.querySelectorAll('button')].find(b =>
+  [28, 'Relayout',      () => [...document.querySelectorAll('button')].find(b =>
                                 b.getBoundingClientRect().y > 900 && b.textContent.includes('Layout'))],
 
   // Canvas elements (pick first visible of each kind)
-  [26, 'Node',          () => document.querySelector('.reactodia-paper [data-element-id]')],
-  [27, 'Edge',          () => document.querySelector('.reactodia-paper [data-link-id]')],
-  [28, 'Minimap',       () => document.querySelector('.reactodia-navigator')],
+  [29, 'Node',          () => document.querySelector('.reactodia-paper [data-element-id]')],
+  [30, 'Edge',          () => document.querySelector('.reactodia-paper [data-link-id]')],
+  [31, 'Minimap',       () => document.querySelector('.reactodia-navigator')],
 ];
 
 async function measureElements(page) {
