@@ -17,6 +17,11 @@ authors:
     given-names: Thomas
     affiliation: "Fraunhofer Institute for Mechanics of Materials IWM"
     orcid: "https://orcid.org/0000-0003-1649-6832"
+  - family-names: Potu
+    given-names: Sai Teja
+    affiliation: "Fraunhofer Institute for Mechanics of Materials IWM"
+    email: "sai.teja.potu@iwm.fraunhofer.de"
+    orcid: "https://orcid.org/0009-0007-7468-3544"
 repository-code: "https://github.com/ThHanke/ontosphere"
 url: "https://thhanke.github.io/ontosphere/"
 license: Apache-2.0
