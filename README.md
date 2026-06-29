@@ -822,17 +822,76 @@ Both the development server (`server.js`) and the Docker production server
 different static file server (nginx, Caddy, GitHub Pages, etc.), configure it to emit these
 headers or the WASM reasoner will silently fall back to a non-threaded mode.
 
-### OntoAuthor-Mat benchmark and study data
+### OntoAuthor-Mat benchmark
 
 The **OntoAuthor-Mat** benchmark — six ontology-authoring tasks for materials science covering
-OWL 2 DL patterns (subsumption, existential/universal restrictions, disjointness, `owl:sameAs`,
-and unsatisfiability scenarios) — accompanies the [ISWC 2026 demo paper](https://thhanke.github.io/ontosphere/paper/).
+OWL 2 DL patterns — accompanies the [ISWC 2026 demo paper](https://thhanke.github.io/ontosphere/paper/).
+Task data lives in [`benchmarks/ontoauthor-mat/`](benchmarks/ontoauthor-mat/).
 
-Each task provides:
-- A natural-language task description shown to the model
-- A gold-standard OWL 2 DL reference solution
-- SHACL shapes used for automated scoring
-- Competency questions (SPARQL) for logical verification
+| Task | OWL 2 DL pattern | Domain scenario | SHACL shapes | CQ queries |
+|------|------------------|-----------------|:------------:|:----------:|
+| T1 | `rdfs:subClassOf` (subsumption) | Steel alloy classification hierarchy | 6 | 2 |
+| T2 | `owl:someValuesFrom` (existential) | Composite materials and constituents | 5 | 2 |
+| T3 | `owl:allValuesFrom` (universal) | Certified-only material suppliers | 5 | 2 |
+| T4 | `owl:disjointWith` | Metallic vs. ceramic categories | 5 | 2 |
+| T5 | `owl:sameAs` (identity) | Merging duplicate material entries | 4 | 2 |
+| T6 | Unsatisfiability detection | Contradictory material classification | 3 | 2 |
+
+Each task provides a natural-language brief (`task.md`), a gold-standard OWL 2 DL reference
+solution (`reference.ttl`), SHACL shapes for automated scoring (`shapes.ttl`), and competency
+questions as SPARQL ASK queries (`cq.sparql`). Scoring runs three axes per task: SHACL
+conformance, competency-question pass rate, and reasoning correctness (Konclude classification
+or consistency check).
+
+#### Reference-solution results (gold standard)
+
+| Task | OWL 2 DL Pattern | SHACL | CQ | Reasoning | Score | Load | SHACL | Reasoning | CQ | Total |
+|------|------------------|-------|----|-----------|-------|-----:|------:|----------:|---:|------:|
+| T1 | Subsumption | 6/6 | 2/2 | ✓ | 9/9 | 1 719 ms | 204 ms | 2 202 ms | 358 ms | 4 484 ms |
+| T2 | Existential (∃) | 5/5 | 2/2 | ✓ | 8/8 | 1 742 ms | 197 ms | 2 211 ms | 397 ms | 4 547 ms |
+| T3 | Universal (∀) | 5/5 | 2/2 | ✓ | 8/8 | 1 710 ms | 191 ms | 2 235 ms | 386 ms | 4 522 ms |
+| T4 | Disjointness | 5/5 | 2/2 | ✓ | 8/8 | 1 704 ms | 192 ms | 2 240 ms | 356 ms | 4 493 ms |
+| T5 | owl:sameAs | 4/4 | 2/2 | ✓ | 7/7 | 1 714 ms | 199 ms | 2 211 ms | 375 ms | 4 498 ms |
+| T6 | Unsatisfiability | 3/3 | 2/2 | ✓ | 6/6 | 1 706 ms | 191 ms | timeout¹ | 347 ms | 18 249 ms |
+| | **Total** | **28/28** | **12/12** | **6/6** | **46/46** | 10.3 s | 1.2 s | 27.1 s | 2.2 s | 40.8 s |
+
+¹ Konclude WASM hangs on the inconsistency check for T6 (disjointness clash); the 15 s timeout
+is treated as "inconsistent detected". The structural correctness of the contradiction is
+verified by SHACL + CQ independently of the reasoner. Headless Chromium, Node.js, single run.
+
+#### Reproduce
+
+```sh
+# Start the dev server, then:
+node scripts/bench-ontoauthor-mat.mjs              # all tasks
+node scripts/bench-ontoauthor-mat.mjs --task t1    # single task
+node scripts/bench-ontoauthor-mat.mjs 2>&1 | tee logs/bench-ontoauthor-mat.log
+```
+
+### Konclude WASM reasoning performance
+
+Benchmark data from [rdf-reasoner-konclude](https://github.com/ThHanke/rdf-reasoner-konclude)
+comparing native Konclude (Docker) vs the Emscripten WASM port used in Ontosphere.
+
+| Ontology | Expressivity | Triples | Native | WASM | Ratio | Inferred |
+|----------|:------------:|--------:|-------:|-----:|------:|---------:|
+| LUBM schema | SHI | 307 | 32 ms | 272 ms | ~8.5× | 44 |
+| GALEN | SHIF | 30 817 | 228 ms | 656 ms | ~2.9× | 3 287 |
+| Roberts family | SROIQ | 3 866 | 2 213 ms | 30 124 ms | ~13.6× | 269 829 |
+| LUBM + data | SHI | 100 850 | 164 ms | 1 424 ms | ~8.7× | 138 522 |
+
+Native = Konclude v0.7.0, Docker, 8 threads. WASM = Emscripten pthreads, Node.js, median of 3 runs.
+Ratio = WASM classify / native classify. For typical interactive ontologies (< 10 000 triples),
+Konclude WASM completes classification in 250 ms – 2.5 s.
+
+### Module-extraction benchmark
+
+Syntactic-locality star-module extraction for incremental reasoning
+(see [`scripts/bench-reasoning.mjs`](scripts/bench-reasoning.mjs)):
+
+```sh
+node scripts/bench-reasoning.mjs 2>&1 | tee logs/bench-reasoning.log
+```
 
 ### LLM transparency
 
