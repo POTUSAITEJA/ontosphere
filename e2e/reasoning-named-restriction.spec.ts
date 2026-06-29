@@ -11,43 +11,16 @@
  * Requires: npm run dev (http://localhost:8080)
  */
 
-import { test, expect, Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import { gotoAndWaitForReady, callTool, seedWithRetry } from './e2e-helpers.js';
 
 const BASE_URL = process.env.VG_URL ?? 'http://localhost:8080';
 const EX = 'http://example.org/collapse-test#';
 const OWL = 'http://www.w3.org/2002/07/owl#';
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 
-async function waitForReady(page: Page) {
-  await page.waitForFunction(
-    () =>
-      window.crossOriginIsolated !== false &&
-      !!(window as any).__mcpTools &&
-      typeof (window as any).__mcpTools['addNode'] === 'function',
-    { timeout: 30_000 },
-  );
-}
-
-async function call(page: Page, tool: string, params: object): Promise<any> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return await page.evaluate(
-        ([t, p]) => (window as any).__mcpTools[t](p),
-        [tool, params] as const,
-      );
-    } catch (err: any) {
-      if (attempt === 0 && /context was destroyed|navigat/i.test(err.message)) {
-        await waitForReady(page);
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
 test('loadRdf blank-node restrictions: skolemized on canvas, reasoning classifies correctly', async ({ page }) => {
-  await page.goto(BASE_URL);
-  await waitForReady(page);
+  await gotoAndWaitForReady(page, BASE_URL, 'loadRdf');
 
   // NB: use the `ct:` prefix, not `ex:` — the app reserves `ex:` for
   // http://example.org/ (iriUtils built-in), which would override this
@@ -84,9 +57,9 @@ ct:ind1 rdf:type owl:NamedIndividual ;
 ct:p1 rdf:type ct:FillerA .
 `;
 
-  await call(page, 'loadRdf', { turtle });
+  await callTool(page, 'loadRdf', { turtle }, BASE_URL);
 
-  const linksResult = await call(page, 'getLinks', { limit: 500 }) as any;
+  const linksResult = await callTool(page, 'getLinks', { limit: 500 }, BASE_URL) as any;
   const dataQuads: Array<{ subject: string; predicate: string; object: string }> =
     linksResult?.data?.links ?? [];
 
@@ -99,9 +72,9 @@ ct:p1 rdf:type ct:FillerA .
   expect(skolemNodes.length).toBeGreaterThan(0);
 
   // Run reasoning and verify ind1 → ClassA only
-  await call(page, 'runReasoning', { rulesets: ['owl-rl.n3'] });
+  await callTool(page, 'runReasoning', { rulesets: ['owl-rl.n3'] }, BASE_URL);
 
-  const details = await call(page, 'getNodeDetails', { iri: `${EX}ind1` }) as any;
+  const details = await callTool(page, 'getNodeDetails', { iri: `${EX}ind1` }, BASE_URL) as any;
   const types: string[] = details?.data?.types ?? [];
 
   // getNodeDetails returns CURIE/abbreviated forms (e.g. "ct:ClassA"), so compare
@@ -112,45 +85,45 @@ ct:p1 rdf:type ct:FillerA .
 });
 
 test('named restriction nodes: MCP seeds correct triples and reasoning classifies correctly', async ({ page }) => {
-  await page.goto(BASE_URL);
-  await waitForReady(page);
+  await gotoAndWaitForReady(page, BASE_URL);
 
-  // ── Seed TBox: named restriction nodes ─────────────────────────────────
+  // Seed via addNode/addTriple — wrapped in seedWithRetry so a COI reload
+  // mid-sequence re-navigates and re-seeds from scratch.
+  await seedWithRetry(page, BASE_URL, async (call) => {
+    // ── Seed TBox: named restriction nodes ─────────────────────────────────
 
-  // R1: someValuesFrom FillerA
-  await call(page, 'addNode', { iri: `${EX}R1`, typeIri: `${OWL}Restriction` });
-  await call(page, 'addTriple', { subjectIri: `${EX}R1`, predicateIri: `${OWL}onProperty`,      objectIri: `${EX}hasPart` });
-  await call(page, 'addTriple', { subjectIri: `${EX}R1`, predicateIri: `${OWL}someValuesFrom`,  objectIri: `${EX}FillerA` });
+    // R1: someValuesFrom FillerA
+    await call('addNode', { iri: `${EX}R1`, typeIri: `${OWL}Restriction` });
+    await call('addTriple', { subjectIri: `${EX}R1`, predicateIri: `${OWL}onProperty`,      objectIri: `${EX}hasPart` });
+    await call('addTriple', { subjectIri: `${EX}R1`, predicateIri: `${OWL}someValuesFrom`,  objectIri: `${EX}FillerA` });
 
-  // R2: someValuesFrom FillerB (same onProperty, different filler)
-  await call(page, 'addNode', { iri: `${EX}R2`, typeIri: `${OWL}Restriction` });
-  await call(page, 'addTriple', { subjectIri: `${EX}R2`, predicateIri: `${OWL}onProperty`,      objectIri: `${EX}hasPart` });
-  await call(page, 'addTriple', { subjectIri: `${EX}R2`, predicateIri: `${OWL}someValuesFrom`,  objectIri: `${EX}FillerB` });
+    // R2: someValuesFrom FillerB (same onProperty, different filler)
+    await call('addNode', { iri: `${EX}R2`, typeIri: `${OWL}Restriction` });
+    await call('addTriple', { subjectIri: `${EX}R2`, predicateIri: `${OWL}onProperty`,      objectIri: `${EX}hasPart` });
+    await call('addTriple', { subjectIri: `${EX}R2`, predicateIri: `${OWL}someValuesFrom`,  objectIri: `${EX}FillerB` });
 
-  // ClassA ≡ R1, ClassB ≡ R2
-  await call(page, 'addNode', { iri: `${EX}ClassA`, typeIri: `${OWL}Class` });
-  await call(page, 'addNode', { iri: `${EX}ClassB`, typeIri: `${OWL}Class` });
-  await call(page, 'addTriple', { subjectIri: `${EX}ClassA`, predicateIri: `${OWL}equivalentClass`, objectIri: `${EX}R1` });
-  await call(page, 'addTriple', { subjectIri: `${EX}ClassB`, predicateIri: `${OWL}equivalentClass`, objectIri: `${EX}R2` });
+    // ClassA ≡ R1, ClassB ≡ R2
+    await call('addNode', { iri: `${EX}ClassA`, typeIri: `${OWL}Class` });
+    await call('addNode', { iri: `${EX}ClassB`, typeIri: `${OWL}Class` });
+    await call('addTriple', { subjectIri: `${EX}ClassA`, predicateIri: `${OWL}equivalentClass`, objectIri: `${EX}R1` });
+    await call('addTriple', { subjectIri: `${EX}ClassB`, predicateIri: `${OWL}equivalentClass`, objectIri: `${EX}R2` });
 
-  // Declare the filler classes and the object property. Konclude only performs
-  // ABox individual classification for declared classes carrying equivalentClass
-  // restrictions; without these declarations realization fires the TBox hierarchy
-  // but skips ind1 → ClassA.
-  await call(page, 'addNode', { iri: `${EX}hasPart`, typeIri: `${OWL}ObjectProperty` });
-  await call(page, 'addNode', { iri: `${EX}FillerA`, typeIri: `${OWL}Class` });
-  await call(page, 'addNode', { iri: `${EX}FillerB`, typeIri: `${OWL}Class` });
+    // Declare the filler classes and the object property.
+    await call('addNode', { iri: `${EX}hasPart`, typeIri: `${OWL}ObjectProperty` });
+    await call('addNode', { iri: `${EX}FillerA`, typeIri: `${OWL}Class` });
+    await call('addNode', { iri: `${EX}FillerB`, typeIri: `${OWL}Class` });
 
-  // ── Seed ABox ───────────────────────────────────────────────────────────
+    // ── Seed ABox ───────────────────────────────────────────────────────────
 
-  // ind1 hasPart p1; p1 type FillerA only
-  await call(page, 'addNode', { iri: `${EX}ind1`, typeIri: `${OWL}NamedIndividual` });
-  await call(page, 'addNode', { iri: `${EX}p1`,   typeIri: `${EX}FillerA` });
-  await call(page, 'addTriple', { subjectIri: `${EX}ind1`, predicateIri: `${EX}hasPart`, objectIri: `${EX}p1` });
+    // ind1 hasPart p1; p1 type FillerA only
+    await call('addNode', { iri: `${EX}ind1`, typeIri: `${OWL}NamedIndividual` });
+    await call('addNode', { iri: `${EX}p1`,   typeIri: `${EX}FillerA` });
+    await call('addTriple', { subjectIri: `${EX}ind1`, predicateIri: `${EX}hasPart`, objectIri: `${EX}p1` });
+  });
 
   // ── Dump urn:vg:data to inspect what actually landed ───────────────────
 
-  const linksResult = await call(page, 'getLinks', { limit: 500 }) as any;
+  const linksResult = await callTool(page, 'getLinks', { limit: 500 }, BASE_URL) as any;
   const dataQuads: Array<{ subject: string; predicate: string; object: string }> =
     linksResult?.data?.links ?? [];
 
@@ -174,12 +147,12 @@ test('named restriction nodes: MCP seeds correct triples and reasoning classifie
 
   // ── Run OWL-RL reasoning ────────────────────────────────────────────────
 
-  const reasoningResult = await call(page, 'runReasoning', { rulesets: ['owl-rl.n3'] });
+  const reasoningResult = await callTool(page, 'runReasoning', { rulesets: ['owl-rl.n3'] }, BASE_URL);
   console.log('[TEST] Reasoning result:', JSON.stringify(reasoningResult));
 
   // ── Inspect ind1 after reasoning ────────────────────────────────────────
 
-  const details = await call(page, 'getNodeDetails', { iri: `${EX}ind1` }) as any;
+  const details = await callTool(page, 'getNodeDetails', { iri: `${EX}ind1` }, BASE_URL) as any;
   console.log('[TEST] ind1 details after reasoning:', JSON.stringify(details));
 
   const types: string[] = details?.data?.types ?? [];
